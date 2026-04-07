@@ -1,0 +1,23 @@
+{
+    "name": "claude-controller",
+    "private": true,
+    "workspaces": ["packages/*"],
+    "scripts": {
+        "dev:server": "bun run --filter server dev",
+        "dev:client": "bun run --filter client dev",
+        "dev": "bun run dev:server & bun run dev:client",
+        "build": "bun run --filter '*' build",
+        "build:server": "bun run --filter server build",
+        "build:client": "bun run --filter client build",
+        "lint": "biome check .",
+        "lint:fix": "biome check --write .",
+        "format": "biome format --write .",
+        "format:check": "biome format .",
+        "check": "biome check --write .",
+        "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^1.9.0",
+        "typescript": "^5.7.0"
+    }
+}
