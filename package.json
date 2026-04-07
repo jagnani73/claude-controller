@@ -14,6 +14,9 @@
         "format": "biome format --write .",
         "format:check": "biome format .",
         "check": "biome check --write .",
+        "test": "bun test",
+        "test:server": "bun test packages/server",
+        "test:common": "bun test packages/common",
         "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
     },
     "devDependencies": {

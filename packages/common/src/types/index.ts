@@ -6,6 +6,10 @@ export type WsMessageType =
     | "deny"
     | "stream"
     | "approval_needed"
+    | "tool_use"
+    | "tool_result"
+    | "thinking"
+    | "turn_complete"
     | "session_metadata"
     | "error"
     | "connected"
@@ -25,10 +29,17 @@ export type PermissionMode =
     | "acceptEdits"
     | "plan"
     | "auto"
-    | "bypassPermissions";
+    | "bypassPermissions"
+    | "dontAsk";
 
 /** Session state */
-export type SessionStatus = "running" | "paused" | "stopped" | "error";
+export type SessionStatus =
+    | "running"
+    | "idle"
+    | "waiting_for_input"
+    | "paused"
+    | "stopped"
+    | "error";
 
 /** Model options */
 export type ClaudeModel = "opus" | "sonnet" | "haiku";

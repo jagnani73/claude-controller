@@ -1,0 +1,81 @@
+import { EventEmitter } from "node:events";
+import * as pty from "node-pty";
+import type { PtyManagerEvents, PtySpawnOptions } from "../types/index.js";
+import { LoggerService } from "./logger.service.js";
+
+const log = LoggerService.scoped("pty");
+
+export class PtyService extends EventEmitter<PtyManagerEvents> {
+    private process: pty.IPty | null = null;
+
+    spawn(options: PtySpawnOptions): void {
+        if (this.process) {
+            throw new Error("PTY process already running");
+        }
+
+        const args = [
+            "--model",
+            options.model,
+            "--permission-mode",
+            options.permissionMode,
+        ];
+
+        log.info("Spawning Claude Code", {
+            cwd: options.cwd,
+            model: options.model,
+            permissionMode: options.permissionMode,
+            cols: options.cols,
+            rows: options.rows,
+        });
+
+        this.process = pty.spawn("claude", args, {
+            name: "xterm-256color",
+            cols: options.cols,
+            rows: options.rows,
+            cwd: options.cwd,
+            env: process.env as Record<string, string>,
+        });
+
+        this.process.onData((data) => {
+            this.emit("data", data);
+        });
+
+        this.process.onExit(({ exitCode, signal }) => {
+            log.info("Process exited", { exitCode, signal });
+            this.process = null;
+            this.emit("exit", { exitCode, signal });
+        });
+    }
+
+    write(data: string): void {
+        if (!this.process) {
+            throw new Error("No PTY process running");
+        }
+        this.process.write(data);
+    }
+
+    resize(cols: number, rows: number): void {
+        if (this.process) {
+            log.debug("Resizing PTY", { cols, rows });
+            this.process.resize(cols, rows);
+        }
+    }
+
+    kill(): void {
+        if (!this.process) return;
+
+        log.info("Killing PTY process");
+        this.process.write("\x03");
+
+        setTimeout(() => {
+            if (this.process) {
+                this.process.kill();
+                this.process = null;
+            }
+        }, 2000);
+    }
+
+    get running(): boolean {
+        return this.process !== null;
+    }
+}

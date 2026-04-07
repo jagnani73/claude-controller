@@ -1,0 +1,55 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What This Project Is
+
+Claude Controller is a remote control system for Claude Code CLI sessions. It spawns Claude Code in a PTY (pseudo-terminal), parses the terminal output into structured data, and serves a custom React PWA to a phone over WebSocket. This is a **terminal relay** — we never call Claude's API directly. The CLI runs locally using the user's Max plan credits.
+
+Security and transport are handled by Tailscale (WireGuard VPN) + Caddy (TLS). We do not build our own auth, crypto, or transport layer.
+
+## Commands
+
+```bash
+bun install                 # Install all workspace dependencies
+bun run dev:server          # Start server with watch mode
+bun run dev:client          # Start Vite dev server (port 3001)
+bun run lint                # Biome check (lint + imports)
+bun run lint:fix            # Biome check with auto-fix
+bun run format              # Biome format with auto-fix
+bun run check               # Lint + format in one pass (preferred)
+bun run build               # Build all packages
+bun run build:server        # Build server only
+bun run build:client        # Build client only
+```
+
+Use `bun run lint` to verify correctness — not full builds. Only run `bun run build` when explicitly asked or at the end of a major phase.
+
+## Architecture
+
+Bun monorepo with 3 packages:
+
+- **`packages/server`** — Bun runtime. Spawns Claude Code via `node-pty`, parses terminal output, serves WebSocket API. Dependencies: `node-pty`, `ws`.
+- **`packages/client`** — React 19 + Vite + Tailwind CSS 4. Mobile-first PWA that renders parsed session data (approval cards, diffs, metadata, streaming text). Connects to server via WebSocket.
+- **`packages/common`** — Shared TypeScript types used by both server and client. Defines `WsMessage`, `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`. Import as `common` or `common/types`.
+
+Data flows: `Claude Code CLI → PTY (node-pty) → Server (parser) → WebSocket → Client (React PWA)`
+
+User input flows in reverse: phone taps "Approve" → server writes `y\n` to PTY stdin.
+
+## Code Style
+
+- **Biome** handles both linting and formatting (no ESLint, no Prettier). Config is centralized at root `biome.json`.
+- 4 spaces, double quotes, semicolons, trailing commas.
+- Imports are auto-organized by Biome — `node:` builtins first.
+- Use `type` imports (`import type { Foo }`) — enforced by Biome.
+- React hooks rules enforced in `packages/client/`.
+- Path alias `@/*` maps to `packages/client/src/*` in the client.
+
+## Key Constraints
+
+- **Never use Agent SDK or call Claude's API directly** — this would incur pay-per-token billing instead of using Max plan credits. We control the CLI process via PTY.
+- **Parser must never auto-act** — all actions (approve, deny, commands) require explicit user input from the phone. The parser is read-only.
+- **No database** — state is flat JSON files in `data/` or in-memory.
+- **Shared types go in `packages/common`** — both server and client import from there.
+- Root `tsconfig.json` is the shared base — packages extend it.
