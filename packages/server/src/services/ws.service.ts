@@ -113,7 +113,7 @@ function handleMessage(
             const data = msg.data as { text: string };
             log.debug("Forwarding input to session", {
                 sessionId: session.id,
-                length: data.text.length,
+                text: data.text.slice(0, 500),
             });
             session.sendInput(data.text);
             break;

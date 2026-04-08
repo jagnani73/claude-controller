@@ -3,7 +3,6 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { useWsMessage } from "@/hooks/use-ws";
-import { wsService } from "@/services/ws.service";
 
 interface TerminalProps {
     sessionId: string;
@@ -44,16 +43,6 @@ export function Terminal({ sessionId }: TerminalProps) {
         fit.fit();
         termRef.current = term;
 
-        // Forward typed input to server
-        const inputDispose = term.onData((data) => {
-            wsService.send({
-                type: "input",
-                sessionId,
-                data: { text: data },
-                timestamp: Date.now(),
-            });
-        });
-
         // Handle resize
         const resizeObserver = new ResizeObserver(() => {
             fit.fit();
@@ -61,7 +50,6 @@ export function Terminal({ sessionId }: TerminalProps) {
         resizeObserver.observe(containerRef.current);
 
         return () => {
-            inputDispose.dispose();
             resizeObserver.disconnect();
             term.dispose();
             termRef.current = null;

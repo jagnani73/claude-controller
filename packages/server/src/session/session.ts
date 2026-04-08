@@ -31,6 +31,10 @@ export class Session extends EventEmitter<SessionEvents> {
         this.initCapture(serverConfig.dataDir);
 
         this.pty.on("data", (data) => {
+            const stripped = data.replace(/\x1b\[[^a-zA-Z]*[a-zA-Z]/g, "").trim();
+            if (stripped) {
+                log.debug("Output", { id: this.id, text: stripped.slice(0, 500) });
+            }
             this.outputBuffer.push(data);
             this.emit("output", data);
             this.capture(data);
@@ -58,7 +62,7 @@ export class Session extends EventEmitter<SessionEvents> {
     }
 
     sendInput(text: string): void {
-        log.debug("Input", { id: this.id, length: text.length });
+        log.debug("Input", { id: this.id, text: text.slice(0, 500) });
         this.pty.write(`${text}\r`);
     }
 
