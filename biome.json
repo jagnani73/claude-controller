@@ -63,6 +63,16 @@
                     }
                 }
             }
+        },
+        {
+            "include": ["**/parser.service.ts"],
+            "linter": {
+                "rules": {
+                    "suspicious": {
+                        "noControlCharactersInRegex": "off"
+                    }
+                }
+            }
         }
     ]
 }

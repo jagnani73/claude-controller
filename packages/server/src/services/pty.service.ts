@@ -53,7 +53,9 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
         });
 
         // Catch async socket errors from conpty to prevent crashes
-        const socket = (this.process as unknown as { _socket?: NodeJS.EventEmitter })._socket;
+        const socket = (
+            this.process as unknown as { _socket?: NodeJS.EventEmitter }
+        )._socket;
         if (socket) {
             socket.on("error", (err: Error) => {
                 log.warn("PTY socket error", { error: err.message });

@@ -37,6 +37,10 @@ export interface SessionEvents {
     exit: [{ exitCode: number; signal?: number }];
 }
 
+// ─── Parser Service ─────────────────────────────────────────────────
+
+export type ParsedHandler = (text: string) => void;
+
 // ─── WebSocket Service ───────────────────────────────────────────────
 
 export interface ClientState {

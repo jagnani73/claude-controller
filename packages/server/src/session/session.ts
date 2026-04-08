@@ -5,6 +5,7 @@ import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionConfig, SessionInfo, SessionStatus } from "common/types";
 import { LoggerService } from "../services/logger.service.js";
+import { ParserService } from "../services/parser.service.js";
 import { PtyService } from "../services/pty.service.js";
 import type { ServerConfig, SessionEvents } from "../types/index.js";
 import { RingBuffer } from "../utils/ring-buffer.js";
@@ -17,8 +18,10 @@ export class Session extends EventEmitter<SessionEvents> {
     readonly createdAt: number;
     private status: SessionStatus = "running";
     private pty: PtyService;
+    private parser: ParserService;
     private outputBuffer: RingBuffer<string>;
     private capturePath: string | null = null;
+    private parsedCapturePath: string | null = null;
 
     constructor(config: SessionConfig, serverConfig: ServerConfig) {
         super();
@@ -27,17 +30,21 @@ export class Session extends EventEmitter<SessionEvents> {
         this.createdAt = Date.now();
         this.outputBuffer = new RingBuffer<string>(serverConfig.ringBufferSize);
         this.pty = new PtyService();
+        this.parser = new ParserService();
 
         this.initCapture(serverConfig.dataDir);
 
+        this.parser.onParsed((text) => {
+            log.debug("Parsed", { id: this.id, text: text.slice(0, 500) });
+            this.captureParsed(text);
+        });
+
         this.pty.on("data", (data) => {
-            const stripped = data.replace(/\x1b\[[^a-zA-Z]*[a-zA-Z]/g, "").trim();
-            if (stripped) {
-                log.debug("Output", { id: this.id, text: stripped.slice(0, 500) });
-            }
+            log.debug("Raw output", { id: this.id, bytes: data.length });
             this.outputBuffer.push(data);
             this.emit("output", data);
-            this.capture(data);
+            this.captureRaw(data);
+            this.parser.feed(data);
         });
 
         this.pty.on("exit", (info) => {
@@ -122,13 +129,23 @@ export class Session extends EventEmitter<SessionEvents> {
             .replace(/[:.]/g, "-")
             .replace("T", "_")
             .replace("Z", "");
-        this.capturePath = join(dir, `${ts}_${this.id.slice(0, 8)}.raw`);
-        log.info("Capture file", { path: this.capturePath });
+        const base = `${ts}_${this.id.slice(0, 8)}`;
+        this.capturePath = join(dir, `${base}.raw`);
+        this.parsedCapturePath = join(dir, `${base}.parsed`);
+        log.info("Capture files", {
+            raw: this.capturePath,
+            parsed: this.parsedCapturePath,
+        });
     }
 
-    private capture(data: string): void {
+    private captureRaw(data: string): void {
         if (!this.capturePath) return;
         appendFile(this.capturePath, data).catch(() => {});
+    }
+
+    private captureParsed(text: string): void {
+        if (!this.parsedCapturePath) return;
+        appendFile(this.parsedCapturePath, `${text}\n`).catch(() => {});
     }
 
     private setStatus(status: SessionStatus): void {

@@ -1,5 +1,6 @@
 export type {
     ClientState,
+    ParsedHandler,
     PtyManagerEvents,
     PtySpawnOptions,
     ServerConfig,

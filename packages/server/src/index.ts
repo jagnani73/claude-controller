@@ -18,7 +18,8 @@ function shutdown() {
     log.info("Shutting down...");
     sessionManager.stopAll();
     server.close();
-    process.exit(0);
+    // Give PTY processes 3s to close gracefully before force-exiting
+    setTimeout(() => process.exit(0), 3000);
 }
 
 process.on("SIGINT", shutdown);
