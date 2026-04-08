@@ -3,8 +3,9 @@ node_modules/
 
 # Build output
 dist/
+*.tsbuildinfo
 
-# Bun
+# Lockfile (committed separately if needed)
 bun.lockb
 
 # Environment

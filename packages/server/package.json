@@ -3,11 +3,11 @@
     "version": "0.0.1",
     "private": true,
     "type": "module",
-    "main": "./src/index.ts",
+    "main": "./dist/index.js",
     "scripts": {
-        "dev": "npx kill-port 4577 && bun run --watch src/index.ts",
-        "build": "bun build src/index.ts --outdir dist --target bun",
-        "start": "bun run dist/index.js",
+        "dev": "tsc-watch --onSuccess \"node dist/index.js\"",
+        "build": "tsc",
+        "start": "node dist/index.js",
         "clean": "rm -rf dist"
     },
     "dependencies": {
@@ -16,7 +16,9 @@
         "ws": "^8.18.0"
     },
     "devDependencies": {
+        "@types/node": "^22.0.0",
         "@types/ws": "^8.5.0",
+        "tsc-watch": "^6.2.0",
         "typescript": "^5.7.0"
     }
 }

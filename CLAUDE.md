@@ -11,31 +11,31 @@ Security and transport are handled by Tailscale (WireGuard VPN) + Caddy (TLS). W
 ## Commands
 
 ```bash
-bun install                 # Install all workspace dependencies
-bun run dev:server          # Start server with watch mode
-bun run dev:client          # Start Vite dev server (port 4578)
-bun run lint                # Biome check (lint + imports)
-bun run lint:fix            # Biome check with auto-fix
-bun run format              # Biome format with auto-fix
-bun run check               # Lint + format in one pass (preferred)
-bun run build               # Build all packages
-bun run build:server        # Build server only
-bun run build:client        # Build client only
+pnpm install                # Install all workspace dependencies
+pnpm dev:server             # Build common + start server with tsc-watch
+pnpm dev:client             # Start Vite dev server (port 4578)
+pnpm lint                   # Biome check (lint + imports)
+pnpm lint:fix               # Biome check with auto-fix
+pnpm format                 # Biome format with auto-fix
+pnpm check                  # Lint + format in one pass (preferred)
+pnpm build                  # Build all packages
+pnpm build:server           # Build server only
+pnpm build:client           # Build client only
 ```
 
-Use `bun run lint` to verify correctness — not full builds. Only run `bun run build` when explicitly asked or at the end of a major phase.
+Use `pnpm lint` to verify correctness — not full builds. Only run `pnpm build` when explicitly asked or at the end of a major phase.
 
 ## Architecture
 
-Bun monorepo with 3 packages:
+pnpm monorepo with 3 packages:
 
-- **`packages/server`** — Bun runtime. Spawns Claude Code via `node-pty`, parses terminal output, serves WebSocket API. Dependencies: `node-pty`, `ws`.
+- **`packages/server`** — Node.js runtime. Spawns Claude Code via `node-pty`, parses terminal output, serves WebSocket API. Built with `tsc`, dev mode via `tsc-watch`. Dependencies: `node-pty`, `ws`.
 - **`packages/client`** — React 19 + Vite + Tailwind CSS 4. Mobile-first PWA that renders parsed session data (approval cards, diffs, metadata, streaming text). Connects to server via WebSocket.
 - **`packages/common`** — Shared TypeScript types used by both server and client. Defines `WsMessage`, `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`. Import as `common` or `common/types`.
 
 Data flows: `Claude Code CLI → PTY (node-pty) → Server (parser) → WebSocket → Client (React PWA)`
 
-User input flows in reverse: phone taps "Approve" → server writes `y\n` to PTY stdin.
+User input flows in reverse: phone taps "Approve" → server writes `y\r` to PTY stdin.
 
 ## Code Style
 
