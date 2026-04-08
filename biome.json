@@ -54,7 +54,7 @@
     },
     "overrides": [
         {
-            "include": ["packages/client/**/*.tsx", "packages/client/**/*.ts"],
+            "include": ["packages/frontend/**/*.tsx", "packages/frontend/**/*.ts"],
             "linter": {
                 "rules": {
                     "correctness": {

@@ -37,3 +37,4 @@ config/settings.json
 
 # Handoffs
 .claude/handoffs/
+claude-code-source/

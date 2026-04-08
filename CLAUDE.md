@@ -12,15 +12,15 @@ Security and transport are handled by Tailscale (WireGuard VPN) + Caddy (TLS). W
 
 ```bash
 pnpm install                # Install all workspace dependencies
-pnpm dev:server             # Build common + start server with tsc-watch
-pnpm dev:client             # Start Vite dev server (port 4578)
+pnpm dev:backend            # Build common + start server with tsc-watch
+pnpm dev:frontend           # Start Vite dev server (port 4578)
 pnpm lint                   # Biome check (lint + imports)
 pnpm lint:fix               # Biome check with auto-fix
 pnpm format                 # Biome format with auto-fix
 pnpm check                  # Lint + format in one pass (preferred)
 pnpm build                  # Build all packages
-pnpm build:server           # Build server only
-pnpm build:client           # Build client only
+pnpm build:backend          # Build server only
+pnpm build:frontend         # Build client only
 ```
 
 Use `pnpm lint` to verify correctness — not full builds. Only run `pnpm build` when explicitly asked or at the end of a major phase.
@@ -29,9 +29,9 @@ Use `pnpm lint` to verify correctness — not full builds. Only run `pnpm build`
 
 pnpm monorepo with 3 packages:
 
-- **`packages/server`** — Node.js runtime. Spawns Claude Code via `node-pty`, parses terminal output, serves WebSocket API. Built with `tsc`, dev mode via `tsc-watch`. Dependencies: `node-pty`, `ws`.
-- **`packages/client`** — React 19 + Vite + Tailwind CSS 4. Mobile-first PWA that renders parsed session data (approval cards, diffs, metadata, streaming text). Connects to server via WebSocket.
-- **`packages/common`** — Shared TypeScript types used by both server and client. Defines `WsMessage`, `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`. Import as `common` or `common/types`.
+- **`packages/backend`** — Node.js runtime. Spawns Claude Code via `node-pty`, parses terminal output, serves WebSocket API. Built with `tsc`, dev mode via `tsc-watch`. Dependencies: `node-pty`, `ws`.
+- **`packages/frontend`** — React 19 + Vite + Tailwind CSS 4. Mobile-first PWA that renders parsed session data (approval cards, diffs, metadata, streaming text). Connects to server via WebSocket.
+- **`packages/common`** — Shared TypeScript types used by both backend and frontend. Defines `WsMessage`, `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`. Import as `common` or `common/types`.
 
 Data flows: `Claude Code CLI → PTY (node-pty) → Server (parser) → WebSocket → Client (React PWA)`
 
@@ -44,7 +44,7 @@ User input flows in reverse: phone taps "Approve" → server writes `y\r` to PTY
 - Imports are auto-organized by Biome — `node:` builtins first.
 - Use `type` imports (`import type { Foo }`) — enforced by Biome.
 - React hooks rules enforced in `packages/client/`.
-- Path alias `@/*` maps to `packages/client/src/*` in the client.
+- Path alias `@/*` maps to `packages/frontend/src/*` in the frontend.
 
 ## Key Constraints
 
@@ -53,3 +53,7 @@ User input flows in reverse: phone taps "Approve" → server writes `y\r` to PTY
 - **No database** — state is flat JSON files in `data/` or in-memory.
 - **Shared types go in `packages/common`** — both server and client import from there.
 - Root `tsconfig.json` is the shared base — packages extend it.
+
+## Reference: Claude Code Source
+
+`claude-code-source/` contains a copy of the Claude Code CLI source (v2.1.87) for reference — used to understand terminal output patterns (spinner verbs, status bar format, special markers). Gitignored, not part of the build.

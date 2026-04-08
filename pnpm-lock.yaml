@@ -15,7 +15,38 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
-  packages/client:
+  packages/backend:
+    dependencies:
+      common:
+        specifier: workspace:*
+        version: link:../common
+      node-pty:
+        specifier: ^1.0.0
+        version: 1.1.0
+      ws:
+        specifier: ^8.18.0
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      tsc-watch:
+        specifier: ^6.2.0
+        version: 6.3.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/common:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/frontend:
     dependencies:
       '@xterm/addon-fit':
         specifier: ^0.11.0
@@ -60,37 +91,6 @@ importers:
       vite:
         specifier: ^6.0.0
         version: 6.4.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)
-
-  packages/common:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-
-  packages/server:
-    dependencies:
-      common:
-        specifier: workspace:*
-        version: link:../common
-      node-pty:
-        specifier: ^1.0.0
-        version: 1.1.0
-      ws:
-        specifier: ^8.18.0
-        version: 8.20.0
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.17
-      '@types/ws':
-        specifier: ^8.5.0
-        version: 8.18.1
-      tsc-watch:
-        specifier: ^6.2.0
-        version: 6.3.1(typescript@5.9.3)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
 
 packages:
 
