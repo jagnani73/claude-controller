@@ -34,7 +34,7 @@ describe("loadConfig", () => {
 
     it("returns defaults when no env vars set", () => {
         const config = loadConfig();
-        expect(config.port).toBe(3000);
+        expect(config.port).toBe(4577);
         expect(config.host).toBe("0.0.0.0");
         expect(config.dataDir).toBe("./data");
         expect(config.pty.cols).toBe(120);

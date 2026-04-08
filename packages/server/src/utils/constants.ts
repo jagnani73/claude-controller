@@ -1,5 +1,5 @@
 /** Default server port */
-export const DEFAULT_PORT = 3000;
+export const DEFAULT_PORT = 4577;
 
 /** Default server host — bind to all interfaces */
 export const DEFAULT_HOST = "0.0.0.0";

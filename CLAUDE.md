@@ -13,7 +13,7 @@ Security and transport are handled by Tailscale (WireGuard VPN) + Caddy (TLS). W
 ```bash
 bun install                 # Install all workspace dependencies
 bun run dev:server          # Start server with watch mode
-bun run dev:client          # Start Vite dev server (port 3001)
+bun run dev:client          # Start Vite dev server (port 4578)
 bun run lint                # Biome check (lint + imports)
 bun run lint:fix            # Biome check with auto-fix
 bun run format              # Biome format with auto-fix
