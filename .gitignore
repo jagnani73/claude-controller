@@ -22,8 +22,12 @@ bun.lockb
 .DS_Store
 Thumbs.db
 
+# ngrok
+ngrok.yml
+
 # Claude Controller
 data/logs/
+data/captures/
 data/sessions.json
 config/settings.json
 

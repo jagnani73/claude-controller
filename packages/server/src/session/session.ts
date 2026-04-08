@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { mkdirSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { SessionConfig, SessionInfo, SessionStatus } from "common/types";
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
@@ -15,6 +18,7 @@ export class Session extends EventEmitter<SessionEvents> {
     private status: SessionStatus = "running";
     private pty: PtyService;
     private outputBuffer: RingBuffer<string>;
+    private capturePath: string | null = null;
 
     constructor(config: SessionConfig, serverConfig: ServerConfig) {
         super();
@@ -24,9 +28,12 @@ export class Session extends EventEmitter<SessionEvents> {
         this.outputBuffer = new RingBuffer<string>(serverConfig.ringBufferSize);
         this.pty = new PtyService();
 
+        this.initCapture(serverConfig.dataDir);
+
         this.pty.on("data", (data) => {
             this.outputBuffer.push(data);
             this.emit("output", data);
+            this.capture(data);
         });
 
         this.pty.on("exit", (info) => {
@@ -96,6 +103,28 @@ export class Session extends EventEmitter<SessionEvents> {
             tags: this.config.tags ?? [],
             createdAt: this.createdAt,
         };
+    }
+
+    private initCapture(dataDir: string): void {
+        const dir = join(dataDir, "captures");
+        try {
+            mkdirSync(dir, { recursive: true });
+        } catch {
+            log.warn("Could not create captures dir", { dir });
+            return;
+        }
+        const ts = new Date()
+            .toISOString()
+            .replace(/[:.]/g, "-")
+            .replace("T", "_")
+            .replace("Z", "");
+        this.capturePath = join(dir, `${ts}_${this.id.slice(0, 8)}.raw`);
+        log.info("Capture file", { path: this.capturePath });
+    }
+
+    private capture(data: string): void {
+        if (!this.capturePath) return;
+        appendFile(this.capturePath, data).catch(() => {});
     }
 
     private setStatus(status: SessionStatus): void {
