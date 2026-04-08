@@ -13,6 +13,7 @@ export function App() {
         sessions,
         activeSession,
         activeSessionId,
+        workDir,
         createSession,
         stopSession,
         subscribe,
@@ -54,7 +55,10 @@ export function App() {
                     <div className="px-4 pt-4 text-xs font-medium uppercase tracking-wider text-neutral-600">
                         New Session
                     </div>
-                    <CreateSessionForm onSubmit={createSession} />
+                    <CreateSessionForm
+                        workDir={workDir}
+                        onSubmit={createSession}
+                    />
                 </div>
             </div>
         </div>

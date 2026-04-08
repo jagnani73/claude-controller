@@ -22,6 +22,7 @@ const serverConfig: ServerConfig = {
     port: 3000,
     host: "0.0.0.0",
     dataDir: "./data",
+    workDir: "/tmp",
     pty: { cols: 120, rows: 40 },
     ringBufferSize: 100,
 };
@@ -66,7 +67,7 @@ describe("ws.service", () => {
 
     it("sends connected message with session list on connection", () => {
         const { ws, parseSent } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         const messages = parseSent();
         expect(messages).toHaveLength(1);
@@ -85,7 +86,7 @@ describe("ws.service", () => {
         });
 
         const { ws, parseSent } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         const data = parseSent()[0].data as {
             sessions: { name: string }[];
@@ -96,7 +97,7 @@ describe("ws.service", () => {
 
     it("handles create_session command", () => {
         const { ws, simulateMessage, parseSent } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         simulateMessage({
             type: "command",
@@ -126,7 +127,7 @@ describe("ws.service", () => {
         });
 
         const { ws, simulateMessage, parseSent } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         simulateMessage({
             type: "command",
@@ -147,7 +148,7 @@ describe("ws.service", () => {
         });
 
         const { ws, simulateMessage } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         simulateMessage({
             type: "command",
@@ -166,7 +167,7 @@ describe("ws.service", () => {
         });
 
         const { ws, simulateMessage } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         simulateMessage({
             type: "input",
@@ -178,7 +179,7 @@ describe("ws.service", () => {
 
     it("sends error for input to unknown session", () => {
         const { ws, simulateMessage, parseSent } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         simulateMessage({
             type: "input",
@@ -197,7 +198,7 @@ describe("ws.service", () => {
 
     it("sends error for subscribe to unknown session", () => {
         const { ws, simulateMessage, parseSent } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         simulateMessage({
             type: "command",
@@ -224,7 +225,7 @@ describe("ws.service", () => {
             off: mock(() => {}),
         } as unknown as import("ws").WebSocket;
 
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         const cbs = listeners.get("message") ?? [];
         for (const cb of cbs) cb("not valid json{{{");
@@ -241,14 +242,14 @@ describe("ws.service", () => {
         const { ws, sent } = createMockWs();
         (ws as unknown as { readyState: number }).readyState = 3;
 
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
 
         expect(sent).toHaveLength(0);
     });
 
     it("cleans up on close", () => {
         const { ws, simulateClose } = createMockWs();
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, serverConfig);
         simulateClose();
     });
 });

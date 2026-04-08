@@ -21,6 +21,7 @@ const serverConfig: ServerConfig = {
     port: 0,
     host: "127.0.0.1",
     dataDir: "./data",
+    workDir: "/tmp",
     pty: { cols: 120, rows: 40 },
     ringBufferSize: 100,
 };

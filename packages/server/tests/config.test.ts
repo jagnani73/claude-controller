@@ -40,6 +40,7 @@ describe("loadConfig", () => {
         expect(config.pty.cols).toBe(120);
         expect(config.pty.rows).toBe(40);
         expect(config.ringBufferSize).toBe(500);
+        expect(typeof config.workDir).toBe("string");
     });
 
     it("reads PORT from env", () => {

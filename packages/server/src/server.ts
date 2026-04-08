@@ -71,7 +71,7 @@ export function startServer(
     });
 
     wss.on("connection", (ws) => {
-        handleConnection(ws, sessionManager);
+        handleConnection(ws, sessionManager, config);
     });
 
     httpServer.listen(config.port, config.host, () => {

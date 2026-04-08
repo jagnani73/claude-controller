@@ -1,7 +1,9 @@
-import type { WsMessage } from "common/types";
+import { readdirSync } from "node:fs";
+import { normalize, resolve } from "node:path";
+import type { DirListData, EffortLevel, WsMessage } from "common/types";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
-import type { ClientState } from "../types/index.js";
+import type { ClientState, ServerConfig } from "../types/index.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionManager } from "./session-manager.service.js";
 
@@ -15,18 +17,32 @@ function send(ws: WebSocket, msg: WsMessage): void {
     }
 }
 
+function listChildDirs(dirPath: string, workDir: string): string[] {
+    const resolved = resolve(dirPath);
+    const normalizedWork = normalize(workDir);
+    if (!resolved.startsWith(normalizedWork)) {
+        return [];
+    }
+    try {
+        return readdirSync(resolved, { withFileTypes: true })
+            .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+            .map((d) => d.name)
+            .sort();
+    } catch {
+        return [];
+    }
+}
+
 function subscribeToSession(ws: WebSocket, session: Session): void {
     const state = clients.get(ws);
     if (!state) return;
 
-    // Unsubscribe from previous session
     if (state.cleanup) {
         state.cleanup();
     }
 
     log.info("Client subscribing to session", { sessionId: session.id });
 
-    // Replay buffer
     const replayData = session.getReplayBuffer();
     log.debug("Replaying buffer", { chunks: replayData.length });
     for (const chunk of replayData) {
@@ -38,7 +54,6 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
         });
     }
 
-    // Subscribe to live output
     const onOutput = (data: string) => {
         send(ws, {
             type: "stream",
@@ -65,7 +80,6 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
         session.off("exit", onExit);
     };
 
-    // Send session metadata
     send(ws, {
         type: "session_metadata",
         sessionId: session.id,
@@ -78,6 +92,7 @@ function handleMessage(
     ws: WebSocket,
     msg: WsMessage,
     sessionManager: SessionManager,
+    config: ServerConfig,
 ): void {
     switch (msg.type) {
         case "input": {
@@ -108,22 +123,35 @@ function handleMessage(
             const data = msg.data as Record<string, unknown>;
 
             if (data.action === "create_session") {
-                const config = data.config as {
+                const sessionConfig = data.config as {
                     cwd: string;
                     model: string;
                     permissionMode: string;
+                    effort?: string;
                     name?: string;
                     tags?: string[];
                 };
-                log.info("Creating session", config);
+                log.info("Creating session", sessionConfig);
                 const session = sessionManager.create({
-                    cwd: config.cwd,
-                    model: config.model as "opus" | "sonnet" | "haiku",
-                    permissionMode: config.permissionMode as "default" | "plan",
-                    name: config.name,
-                    tags: config.tags,
+                    cwd: sessionConfig.cwd,
+                    model: sessionConfig.model as "opus" | "sonnet" | "haiku",
+                    permissionMode: sessionConfig.permissionMode as
+                        | "default"
+                        | "plan",
+                    effort: sessionConfig.effort as EffortLevel | undefined,
+                    name: sessionConfig.name,
+                    tags: sessionConfig.tags,
                 });
                 subscribeToSession(ws, session);
+
+                // Auto-send /effort if specified
+                if (sessionConfig.effort) {
+                    setTimeout(() => {
+                        session.sendSlashCommand(
+                            `/effort ${sessionConfig.effort}`,
+                        );
+                    }, 500);
+                }
                 return;
             }
 
@@ -139,6 +167,22 @@ function handleMessage(
                 send(ws, {
                     type: "connected",
                     data: { sessions: sessionManager.list() },
+                    timestamp: Date.now(),
+                });
+                return;
+            }
+
+            if (data.action === "list_dirs") {
+                const dirPath = (data.path as string) || config.workDir;
+                log.debug("Listing directories", { path: dirPath });
+                const dirs = listChildDirs(dirPath, config.workDir);
+                const response: DirListData = {
+                    path: resolve(dirPath),
+                    dirs,
+                };
+                send(ws, {
+                    type: "dir_list",
+                    data: response,
                     timestamp: Date.now(),
                 });
                 return;
@@ -205,22 +249,26 @@ function handleMessage(
 export function handleConnection(
     ws: WebSocket,
     sessionManager: SessionManager,
+    config: ServerConfig,
 ): void {
     clients.set(ws, { subscribedSessionId: null, cleanup: null });
 
     log.info("Client connected");
 
-    // Send session list on connect
+    // Send session list + workDir on connect
     send(ws, {
         type: "connected",
-        data: { sessions: sessionManager.list() },
+        data: {
+            sessions: sessionManager.list(),
+            workDir: config.workDir,
+        },
         timestamp: Date.now(),
     });
 
     ws.on("message", (raw) => {
         try {
             const msg = JSON.parse(raw.toString()) as WsMessage;
-            handleMessage(ws, msg, sessionManager);
+            handleMessage(ws, msg, sessionManager, config);
         } catch (err) {
             log.error("Invalid message received", { error: err });
             send(ws, {

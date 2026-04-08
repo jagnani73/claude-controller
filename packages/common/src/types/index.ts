@@ -13,7 +13,8 @@ export type WsMessageType =
     | "session_metadata"
     | "error"
     | "connected"
-    | "disconnected";
+    | "disconnected"
+    | "dir_list";
 
 /** Base WebSocket message shape */
 export interface WsMessage {
@@ -41,8 +42,11 @@ export type SessionStatus =
     | "stopped"
     | "error";
 
-/** Model options */
+/** Model options — shorthand for CLI --model flag */
 export type ClaudeModel = "opus" | "sonnet" | "haiku";
+
+/** Effort levels for /effort slash command */
+export type EffortLevel = "low" | "medium" | "high";
 
 /** Session configuration when spawning */
 export interface SessionConfig {
@@ -50,6 +54,7 @@ export interface SessionConfig {
     cwd: string;
     model: ClaudeModel;
     permissionMode: PermissionMode;
+    effort?: EffortLevel;
     tags?: string[];
 }
 
@@ -61,9 +66,21 @@ export interface SessionInfo {
     cwd: string;
     model: ClaudeModel;
     permissionMode: PermissionMode;
+    effort?: EffortLevel;
     tags: string[];
     createdAt: number;
     tokenCount?: number;
     cost?: number;
     contextUsage?: number;
+}
+
+/** Controller config file shape */
+export interface ControllerConfig {
+    workDir: string;
+}
+
+/** Directory listing response data */
+export interface DirListData {
+    path: string;
+    dirs: string[];
 }

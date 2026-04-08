@@ -28,7 +28,13 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
             rows: options.rows,
         });
 
-        this.process = pty.spawn("claude", args, {
+        const shell = process.platform === "win32" ? "cmd.exe" : "/bin/bash";
+        const shellArgs =
+            process.platform === "win32"
+                ? ["/c", "claude", ...args]
+                : ["-c", `claude ${args.join(" ")}`];
+
+        this.process = pty.spawn(shell, shellArgs, {
             name: "xterm-256color",
             cols: options.cols,
             rows: options.rows,

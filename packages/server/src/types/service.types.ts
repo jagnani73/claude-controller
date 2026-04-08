@@ -6,6 +6,7 @@ export interface ServerConfig {
     port: number;
     host: string;
     dataDir: string;
+    workDir: string;
     pty: {
         cols: number;
         rows: number;

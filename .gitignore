@@ -25,6 +25,9 @@ Thumbs.db
 # ngrok
 ngrok.yml
 
+# Controller config (local paths)
+controller.config.json
+
 # Claude Controller
 data/logs/
 data/captures/
