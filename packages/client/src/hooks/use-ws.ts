@@ -10,7 +10,6 @@ function getWsUrl(): string {
 export function useWsConnection(): void {
     useEffect(() => {
         wsService.connect(getWsUrl());
-        return () => wsService.disconnect();
     }, []);
 }
 

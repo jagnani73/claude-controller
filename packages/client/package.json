@@ -4,7 +4,7 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "vite",
+        "dev": "npx kill-port 4578 && vite",
         "build": "tsc -b && vite build",
         "preview": "vite preview",
         "clean": "rm -rf dist"

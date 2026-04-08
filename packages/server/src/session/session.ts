@@ -59,23 +59,23 @@ export class Session extends EventEmitter<SessionEvents> {
 
     sendInput(text: string): void {
         log.debug("Input", { id: this.id, length: text.length });
-        this.pty.write(`${text}\n`);
+        this.pty.write(`${text}\r`);
     }
 
     sendSlashCommand(command: string): void {
         const cmd = command.startsWith("/") ? command : `/${command}`;
         log.debug("Slash command", { id: this.id, command: cmd });
-        this.pty.write(`${cmd}\n`);
+        this.pty.write(`${cmd}\r`);
     }
 
     approve(): void {
         log.info("Approve", { id: this.id });
-        this.pty.write("y\n");
+        this.pty.write("y\r");
     }
 
     deny(): void {
         log.info("Deny", { id: this.id });
-        this.pty.write("n\n");
+        this.pty.write("n\r");
     }
 
     resize(cols: number, rows: number): void {

@@ -5,7 +5,7 @@
     "type": "module",
     "main": "./src/index.ts",
     "scripts": {
-        "dev": "bun run --watch src/index.ts",
+        "dev": "npx kill-port 4577 && bun run --watch src/index.ts",
         "build": "bun build src/index.ts --outdir dist --target bun",
         "start": "bun run dist/index.js",
         "clean": "rm -rf dist"

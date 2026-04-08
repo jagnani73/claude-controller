@@ -144,13 +144,13 @@ function handleMessage(
                 });
                 subscribeToSession(ws, session);
 
-                // Auto-send /effort if specified
+                // Auto-send /effort after PTY is ready
                 if (sessionConfig.effort) {
                     setTimeout(() => {
                         session.sendSlashCommand(
                             `/effort ${sessionConfig.effort}`,
                         );
-                    }, 500);
+                    }, 3000);
                 }
                 return;
             }

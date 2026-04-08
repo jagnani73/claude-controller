@@ -19,6 +19,7 @@ class WsService {
     state: ConnectionState = "disconnected";
 
     connect(url: string): void {
+        if (this.ws || this.state === "connecting") return;
         this.url = url;
         this.disposed = false;
         this.doConnect();

@@ -51,13 +51,28 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
             this.process = null;
             this.emit("exit", { exitCode, signal });
         });
+
+        // Catch async socket errors from conpty to prevent crashes
+        const socket = (this.process as unknown as { _socket?: NodeJS.EventEmitter })._socket;
+        if (socket) {
+            socket.on("error", (err: Error) => {
+                log.warn("PTY socket error", { error: err.message });
+            });
+        }
     }
 
-    write(data: string): void {
+    write(data: string): boolean {
         if (!this.process) {
-            throw new Error("No PTY process running");
+            log.warn("Write to dead PTY, ignoring");
+            return false;
         }
-        this.process.write(data);
+        try {
+            this.process.write(data);
+            return true;
+        } catch (err) {
+            log.warn("PTY write failed", { error: err });
+            return false;
+        }
     }
 
     resize(cols: number, rows: number): void {
