@@ -4,39 +4,31 @@ import type {
   HookPayload,
   HookResponse,
   PermissionRequestPayload,
-  SessionStartPayload,
 } from "../types/hook.types.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
-import type { TranscriptWatcher } from "./transcript.service.js";
 
 const log = LoggerService.scoped("hooks");
 
 const LOOPBACK_HOST = "127.0.0.1";
 
 type BusLookup = (sessionId: string) => SessionBus | null;
-type TranscriptWatcherFactory = (sessionId: string, transcriptPath: string) => TranscriptWatcher;
 
 /**
  * HTTP listener for Claude Code hook POSTs.
  *
- * Routes `POST /hooks/:sessionId/:event` to the right SessionBus, handling only
- * the two events we register: `SessionStart` (starts JSONL tail) and
- * `PermissionRequest` (holds the response open until the phone resolves the
- * approval via `resolveApproval()`).
+ * Claude Code only supports HTTP hooks for certain events — `SessionStart` is
+ * command-only, for example. We therefore register just `PermissionRequest`,
+ * which blocks until the phone approves or denies via `resolveApproval()`.
  *
- * Binds loopback-only — Claude Code's SSRF guard blocks private IPs and there's
- * no reason for this endpoint to be reachable over the network.
+ * Binds loopback-only — Claude Code's SSRF guard blocks private IPs.
  */
 export class HooksService {
   private server: Server | null = null;
   private port = 0;
   private pendingApprovals = new Map<string, (response: HookResponse) => void>();
 
-  constructor(
-    private readonly busLookup: BusLookup,
-    private readonly makeTranscriptWatcher: TranscriptWatcherFactory,
-  ) {}
+  constructor(private readonly busLookup: BusLookup) {}
 
   /** Start listening on an ephemeral loopback port; returns the assigned port. */
   async start(): Promise<number> {
@@ -146,17 +138,9 @@ export class HooksService {
     }
 
     switch (event) {
-      case "SessionStart":
-        return this.handleSessionStart(bus, payload as SessionStartPayload);
       case "PermissionRequest":
         return this.handlePermissionRequest(bus, payload as PermissionRequestPayload);
     }
-  }
-
-  private handleSessionStart(bus: SessionBus, payload: SessionStartPayload): HookResponse {
-    const watcher = this.makeTranscriptWatcher(bus.sessionId, payload.transcript_path);
-    void watcher.start();
-    return {};
   }
 
   private async handlePermissionRequest(

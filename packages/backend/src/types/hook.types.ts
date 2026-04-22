@@ -11,19 +11,13 @@ interface BaseHookPayload {
   permission_mode?: string;
 }
 
-export interface SessionStartPayload extends BaseHookPayload {
-  hook_event_name: "SessionStart";
-  source: "startup" | "resume" | "clear" | "compact";
-  model?: string;
-}
-
 export interface PermissionRequestPayload extends BaseHookPayload {
   hook_event_name: "PermissionRequest";
   tool_name: string;
   tool_input: unknown;
 }
 
-export type HookPayload = SessionStartPayload | PermissionRequestPayload;
+export type HookPayload = PermissionRequestPayload;
 
 export type HookEventName = HookPayload["hook_event_name"];
 

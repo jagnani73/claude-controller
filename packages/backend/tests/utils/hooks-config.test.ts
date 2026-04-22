@@ -28,18 +28,9 @@ describe("buildHooksConfig", () => {
     expect(entry.url).toBe(`${baseUrl}/hooks/${sessionId}/PermissionRequest`);
   });
 
-  it("registers SessionStart as async", () => {
+  it("registers only PermissionRequest (SessionStart is not HTTP-capable in Claude Code)", () => {
     const cfg = parsed();
-    const entry = cfg.hooks.SessionStart?.[0]?.hooks?.[0];
-    expect(entry).toBeTruthy();
-    expect(entry.async).toBe(true);
-    expect(entry.url).toBe(`${baseUrl}/hooks/${sessionId}/SessionStart`);
-    expect(entry.type).toBe("http");
-  });
-
-  it("registers only SessionStart and PermissionRequest events", () => {
-    const cfg = parsed();
-    expect(Object.keys(cfg.hooks).sort()).toEqual(["PermissionRequest", "SessionStart"]);
+    expect(Object.keys(cfg.hooks)).toEqual(["PermissionRequest"]);
   });
 
   it("embeds the session id in every hook URL", () => {

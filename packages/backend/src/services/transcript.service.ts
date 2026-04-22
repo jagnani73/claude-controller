@@ -178,8 +178,9 @@ export class TranscriptWatcher {
     const content = entry.message.content;
 
     if (typeof content === "string") {
-      // Skip command caveats and other meta-text
+      // Skip command caveats and other meta-text wrappers
       if (content.startsWith("<local-command-caveat>")) return;
+      if (content.startsWith("<local-command-stdout>")) return;
       if (content.startsWith("<command-")) return;
       this.bus.push({
         kind: "user_prompt",

@@ -1,21 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { HooksService } from "../../src/services/hooks.service.js";
 import { SessionBus } from "../../src/services/session-bus.service.js";
-import type { TranscriptWatcher } from "../../src/services/transcript.service.js";
-
-/** Minimal TranscriptWatcher stub — we don't test disk I/O here. */
-function makeWatcherFactory() {
-  const created: Array<{ sessionId: string; path: string }> = [];
-  const factory = (sessionId: string, path: string): TranscriptWatcher => {
-    created.push({ sessionId, path });
-    return {
-      start: mock(async () => {}),
-      stop: mock(() => {}),
-      path,
-    } as unknown as TranscriptWatcher;
-  };
-  return { factory, created };
-}
 
 async function post(url: string, body: unknown): Promise<{ status: number; json: unknown }> {
   const res = await fetch(url, {
@@ -38,14 +23,11 @@ async function post(url: string, body: unknown): Promise<{ status: number; json:
 describe("HooksService", () => {
   let service: HooksService;
   let baseUrl: string;
-  let watcherCreated: Array<{ sessionId: string; path: string }>;
   const buses = new Map<string, SessionBus>();
 
   beforeEach(async () => {
     buses.clear();
-    const { factory, created } = makeWatcherFactory();
-    watcherCreated = created;
-    service = new HooksService((sessionId) => buses.get(sessionId) ?? null, factory);
+    service = new HooksService((sessionId) => buses.get(sessionId) ?? null);
     await service.start();
     baseUrl = service.baseUrl();
   });
@@ -56,27 +38,6 @@ describe("HooksService", () => {
 
   it("exposes a loopback base URL after start", () => {
     expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-  });
-
-  it("SessionStart starts a transcript watcher with the payload path", async () => {
-    const bus = new SessionBus("s-2");
-    buses.set("s-2", bus);
-
-    const res = await post(`${baseUrl}/hooks/s-2/SessionStart`, {
-      hook_event_name: "SessionStart",
-      session_id: "claude-xyz",
-      transcript_path: "/tmp/xyz.jsonl",
-      cwd: "/tmp",
-      source: "startup",
-      model: "sonnet",
-    });
-
-    expect(res.status).toBe(200);
-    expect(watcherCreated).toHaveLength(1);
-    expect(watcherCreated[0]).toEqual({
-      sessionId: "s-2",
-      path: "/tmp/xyz.jsonl",
-    });
   });
 
   it("PermissionRequest blocks until resolveApproval is called", async () => {
@@ -99,7 +60,6 @@ describe("HooksService", () => {
       tool_input: { command: "ls" },
     });
 
-    // Wait for the approval_request event to land
     await new Promise<void>((resolve) => {
       const check = () => {
         if (gotToolUseId) resolve();
@@ -111,7 +71,6 @@ describe("HooksService", () => {
     const toolUseId = gotToolUseId as string | null;
     expect(toolUseId).toBeTruthy();
 
-    // Nothing resolved yet
     const resolved = service.resolveApproval(
       "s-3",
       toolUseId as string,
@@ -137,12 +96,13 @@ describe("HooksService", () => {
   });
 
   it("returns empty JSON when the session bus is unknown", async () => {
-    const res = await post(`${baseUrl}/hooks/unknown-session/SessionStart`, {
-      hook_event_name: "SessionStart",
+    const res = await post(`${baseUrl}/hooks/unknown-session/PermissionRequest`, {
+      hook_event_name: "PermissionRequest",
       session_id: "claude-xyz",
       transcript_path: "/tmp/t.jsonl",
       cwd: "/tmp",
-      source: "startup",
+      tool_name: "Bash",
+      tool_input: {},
     });
     expect(res.status).toBe(200);
     expect(res.json).toEqual({});
@@ -154,7 +114,7 @@ describe("HooksService", () => {
   });
 
   it("returns 400 for invalid JSON body", async () => {
-    const res = await fetch(`${baseUrl}/hooks/s-x/SessionStart`, {
+    const res = await fetch(`${baseUrl}/hooks/s-x/PermissionRequest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "not json{",

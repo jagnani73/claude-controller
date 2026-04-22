@@ -3,7 +3,6 @@ export type {
   HookPayload,
   HookResponse,
   PermissionRequestPayload,
-  SessionStartPayload,
 } from "./hook.types.js";
 export type {
   ClientState,

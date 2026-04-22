@@ -7,6 +7,8 @@ import type { SessionConfig, SessionInfo, SessionStatus } from "common/types";
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
 import { SessionBus } from "../services/session-bus.service.js";
+import { TranscriptWatcher } from "../services/transcript.service.js";
+import { TranscriptLocator } from "../services/transcript-locator.service.js";
 import type { ServerConfig, SessionEvents } from "../types/index.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
 
@@ -25,6 +27,8 @@ export class Session extends EventEmitter<SessionEvents> {
   private status: SessionStatus = "running";
   private pty: PtyService;
   private capturePath: string | null = null;
+  private locator: TranscriptLocator;
+  private transcript: TranscriptWatcher | null = null;
 
   constructor(config: SessionConfig, deps: SessionDeps) {
     super();
@@ -44,8 +48,15 @@ export class Session extends EventEmitter<SessionEvents> {
 
     this.pty.on("exit", (info) => {
       this.setStatus("stopped");
+      this.transcript?.stop();
       this.emit("exit", info);
     });
+
+    this.locator = new TranscriptLocator(config.cwd, (path) => {
+      this.transcript = new TranscriptWatcher(path, this.bus);
+      void this.transcript.start();
+    });
+    this.locator.start();
 
     log.info("Created", {
       id: this.id,
@@ -81,6 +92,8 @@ export class Session extends EventEmitter<SessionEvents> {
 
   stop(): void {
     log.info("Stopping", { id: this.id });
+    this.locator.stop();
+    this.transcript?.stop();
     this.pty.kill();
     this.setStatus("stopped");
     this.bus.dispose();

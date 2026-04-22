@@ -1,15 +1,15 @@
 import type { HookEventName } from "../types/hook.types.js";
 
 /**
- * We only register the two hooks we consume:
- * - `SessionStart` (async) — delivers the transcript_path we tail for content.
- * - `PermissionRequest` (sync) — Claude blocks on our response for approval gating.
+ * We only register `PermissionRequest` — a sync (blocking) HTTP hook that
+ * lets the phone approve or deny tool calls. `SessionStart` is not HTTP-capable
+ * in Claude Code (command-only), so we learn the transcript path by watching
+ * the project dir instead — see `transcript-locator.service.ts`.
  *
- * Content (user prompts, assistant text, tool calls, tool results) comes from
- * the transcript JSONL. No need to register UserPromptSubmit / PostToolUse / Stop.
+ * Assistant text, tool calls, tool results, and user prompts all come from
+ * the transcript JSONL tail.
  */
 const HOOK_SYNC: readonly HookEventName[] = ["PermissionRequest"];
-const HOOK_ASYNC: readonly HookEventName[] = ["SessionStart"];
 
 /**
  * Build the `--settings '{...}'` JSON payload for a spawned Claude Code session.
@@ -19,18 +19,19 @@ const HOOK_ASYNC: readonly HookEventName[] = ["SessionStart"];
 export function buildHooksConfig(baseUrl: string, sessionId: string): string {
   const hooks: Record<string, unknown> = {};
 
-  const mkHook = (event: HookEventName, async: boolean) => ({
-    hooks: [
+  for (const event of HOOK_SYNC) {
+    hooks[event] = [
       {
-        type: "http",
-        url: `${baseUrl}/hooks/${sessionId}/${event}`,
-        async,
+        hooks: [
+          {
+            type: "http",
+            url: `${baseUrl}/hooks/${sessionId}/${event}`,
+            async: false,
+          },
+        ],
       },
-    ],
-  });
-
-  for (const event of HOOK_SYNC) hooks[event] = [mkHook(event, false)];
-  for (const event of HOOK_ASYNC) hooks[event] = [mkHook(event, true)];
+    ];
+  }
 
   return JSON.stringify({ hooks });
 }

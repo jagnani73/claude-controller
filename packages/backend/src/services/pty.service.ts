@@ -1,4 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as pty from "node-pty";
 import type { PtyManagerEvents, PtySpawnOptions } from "../types/index.js";
 import { LoggerService } from "./logger.service.js";
@@ -15,8 +19,18 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
 
     const args = ["--model", options.model, "--permission-mode", options.permissionMode];
     if (options.settingsJson) {
-      args.push("--settings", options.settingsJson);
-      args.push("--setting-sources", "flag");
+      // Write the JSON to a temp file and pass the path. Passing inline JSON
+      // as a CLI arg gets its quotes stripped by cmd.exe on Windows; the
+      // file-path form works identically on every platform. Claude Code's
+      // own SDK does the same thing internally (main.tsx:454).
+      const settingsPath = join(tmpdir(), `claude-controller-settings-${randomUUID()}.json`);
+      writeFileSync(settingsPath, options.settingsJson, "utf8");
+      log.info("Wrote --settings file", {
+        path: settingsPath,
+        bytes: options.settingsJson.length,
+        preview: options.settingsJson.slice(0, 300),
+      });
+      args.push("--settings", settingsPath);
     }
 
     log.info("Spawning Claude Code", {

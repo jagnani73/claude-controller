@@ -3,23 +3,13 @@ import { startServer } from "./server.js";
 import { HooksService } from "./services/hooks.service.js";
 import { LoggerService } from "./services/logger.service.js";
 import { SessionManager } from "./services/session-manager.service.js";
-import { TranscriptWatcher } from "./services/transcript.service.js";
 
 const log = LoggerService.scoped("init");
 
 const config = loadConfig();
 const sessionManager = new SessionManager(config);
 
-const hooksService = new HooksService(
-  (sessionId) => sessionManager.getBus(sessionId),
-  (sessionId, transcriptPath) => {
-    const bus = sessionManager.getBus(sessionId);
-    if (!bus) {
-      throw new Error(`Cannot create transcript watcher — no bus for session ${sessionId}`);
-    }
-    return new TranscriptWatcher(transcriptPath, bus);
-  },
-);
+const hooksService = new HooksService((sessionId) => sessionManager.getBus(sessionId));
 
 const hooksPort = await hooksService.start();
 sessionManager.setHooksBaseUrl(hooksService.baseUrl());
