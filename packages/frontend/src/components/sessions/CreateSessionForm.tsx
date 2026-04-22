@@ -1,12 +1,7 @@
 import type { ClaudeModel, EffortLevel, PermissionMode, SessionConfig } from "common/types";
 import { useState } from "react";
+import { clampEffort, effortOptionsFor, MODEL_OPTIONS } from "./model-config";
 import { OptionPills } from "./OptionPills";
-
-const MODEL_OPTIONS: { value: ClaudeModel; label: string }[] = [
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
 
 const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "default", label: "Default" },
@@ -14,22 +9,6 @@ const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "plan", label: "Plan" },
   { value: "auto", label: "Auto" },
 ];
-
-function effortOptions(
-  model: ClaudeModel,
-): { value: EffortLevel; label: string; hint?: string; disabled?: boolean }[] {
-  return [
-    { value: "low", label: "Low" },
-    { value: "medium", label: "Medium" },
-    { value: "high", label: "High" },
-    {
-      value: "xhigh",
-      label: "Extreme",
-      hint: "opus only",
-      disabled: model !== "opus",
-    },
-  ];
-}
 
 interface CreateSessionFormProps {
   cwd: string;
@@ -44,7 +23,7 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
 
   const handleModelChange = (next: ClaudeModel) => {
     setModel(next);
-    if (next !== "opus" && effort === "xhigh") setEffort("high");
+    setEffort((prev) => clampEffort(next, prev));
   };
 
   const handleSubmit = () => {
@@ -83,7 +62,7 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
       <OptionPills
         label="Effort"
         value={effort}
-        options={effortOptions(model)}
+        options={effortOptionsFor(model)}
         onChange={setEffort}
       />
 

@@ -17,9 +17,13 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
       throw new Error("PTY process already running");
     }
 
-    const args = ["--model", options.model, "--permission-mode", options.permissionMode];
+    const args = ["--permission-mode", options.permissionMode];
     if (options.resumeSessionId) {
+      // Omit --model on resume so Claude Code keeps the session's last model
+      // (passing --model would force-switch, losing Opus/Sonnet[1m] etc).
       args.push("--resume", options.resumeSessionId);
+    } else {
+      args.push("--model", options.model);
     }
     if (options.settingsJson) {
       // Pass via file path, not inline — cmd.exe strips the quotes off inline JSON.

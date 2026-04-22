@@ -2,6 +2,7 @@ import type { ServerMessage } from "common/types";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
+import { Markdown } from "@/components/messages/Markdown";
 import { QuestionCard } from "@/components/messages/QuestionCard";
 import { ThinkingIndicator } from "@/components/messages/ThinkingIndicator";
 import { ToolCallCard } from "@/components/messages/ToolCallCard";
@@ -41,6 +42,13 @@ type StreamItem =
       toolName: string;
       toolInput: unknown;
       resolved?: "allow" | "deny";
+    }
+  | {
+      kind: "compact_summary";
+      id: string;
+      sessionId: string;
+      text: string;
+      timestamp: string;
     };
 
 type Action =
@@ -83,6 +91,12 @@ type Action =
       type: "approval_resolved";
       toolUseId: string;
       decision: "allow" | "deny";
+    }
+  | {
+      type: "compact_summary";
+      sessionId: string;
+      text: string;
+      timestamp: string;
     }
   | { type: "prepend"; items: StreamItem[] };
 
@@ -171,6 +185,20 @@ function reducer(state: StreamItem[], action: Action): StreamItem[] {
           ? { ...it, resolved: action.decision }
           : it,
       );
+    case "compact_summary": {
+      const id = `c-${action.timestamp}-${state.length}`;
+      if (state.some((it) => it.kind === "compact_summary" && it.id === id)) return state;
+      return [
+        ...state,
+        {
+          kind: "compact_summary",
+          id,
+          sessionId: action.sessionId,
+          text: action.text,
+          timestamp: action.timestamp,
+        },
+      ];
+    }
     case "prepend": {
       // Deduplicate by id — some older messages may already be in the
       // tail (backend's dedup is per-kind, not per-batch).
@@ -233,6 +261,15 @@ function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem
           toolInput: e.toolInput,
         });
         break;
+      case "compact_summary":
+        items.push({
+          kind: "compact_summary",
+          id: `c-${e.timestamp}-${slot}`,
+          sessionId: e.sessionId,
+          text: e.text,
+          timestamp: e.timestamp,
+        });
+        break;
       default:
         break;
     }
@@ -252,6 +289,7 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
   const [earliestIndex, setEarliestIndex] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [compacting, setCompacting] = useState(false);
 
   // Anchor tracking for scroll preservation on prepend.
   const prevScrollHeightRef = useRef(0);
@@ -264,6 +302,7 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
     setEarliestIndex(null);
     setHasMore(false);
     setLoadingHistory(false);
+    setCompacting(false);
     prevFirstIdRef.current = undefined;
     prevScrollHeightRef.current = 0;
     pendingAnchorRef.current = null;
@@ -309,6 +348,26 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
       toolUseId: msg.toolUseId,
       result: msg.result,
       isError: msg.isError,
+    });
+  });
+
+  useWsMessage("compact_start", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    setCompacting(true);
+  });
+
+  useWsMessage("compact_end", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    setCompacting(false);
+  });
+
+  useWsMessage("compact_summary", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    dispatch({
+      type: "compact_summary",
+      sessionId: msg.sessionId,
+      text: msg.text,
+      timestamp: msg.timestamp,
     });
   });
 
@@ -394,7 +453,10 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
   }, [items]);
 
   const lastItem = items[items.length - 1];
-  const waitingForReply = lastItem?.kind === "user";
+  // Keep the spinner visible while tools are running / approvals are pending —
+  // only a final assistant message (or no activity at all) means "idle".
+  const waitingForReply =
+    !!lastItem && lastItem.kind !== "assistant" && lastItem.kind !== "compact_summary";
 
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto bg-neutral-950">
@@ -445,12 +507,30 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
                   resolved={item.resolved}
                 />
               );
+            case "compact_summary":
+              return (
+                <div
+                  key={item.id}
+                  className="mx-3 my-4 rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-3"
+                >
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+                    Conversation compacted
+                  </div>
+                  <Markdown text={item.text} />
+                </div>
+              );
             default:
               return null;
           }
         })
       )}
-      {waitingForReply && <ThinkingIndicator />}
+      {compacting && (
+        <div className="mx-3 my-2 flex items-center gap-2 rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+          Compacting conversation… Claude will be unresponsive until this finishes.
+        </div>
+      )}
+      {waitingForReply && !compacting && <ThinkingIndicator />}
     </div>
   );
 }

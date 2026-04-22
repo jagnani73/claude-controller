@@ -29,9 +29,7 @@ ngrok.yml
 controller.config.json
 
 # Claude Controller
-data/logs/
-data/captures/
-data/sessions.json
+dump
 config/settings.json
 
 # Handoffs

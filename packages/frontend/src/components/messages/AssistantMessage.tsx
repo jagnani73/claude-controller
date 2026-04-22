@@ -1,3 +1,5 @@
+import { Markdown } from "./Markdown";
+
 interface AssistantMessageProps {
   text: string;
   timestamp: string;
@@ -11,9 +13,7 @@ export function AssistantMessage({ text, timestamp }: AssistantMessageProps) {
         <span>Claude</span>
         <span className="text-neutral-700">{formatTime(timestamp)}</span>
       </div>
-      <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-neutral-100">
-        {text}
-      </div>
+      <Markdown text={text} />
     </div>
   );
 }

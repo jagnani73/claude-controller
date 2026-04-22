@@ -99,6 +99,25 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage {
         sessionId: event.sessionId,
         mode: event.mode as PermissionMode,
       };
+    case "compact_start":
+      return {
+        type: "compact_start",
+        sessionId: event.sessionId,
+        trigger: event.trigger,
+      };
+    case "compact_end":
+      return {
+        type: "compact_end",
+        sessionId: event.sessionId,
+        trigger: event.trigger,
+      };
+    case "compact_summary":
+      return {
+        type: "compact_summary",
+        sessionId: event.sessionId,
+        text: event.text,
+        timestamp: event.timestamp,
+      };
   }
 }
 
@@ -149,17 +168,33 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
       exitCode: null,
     });
   };
+  const onMetadataChanged = () => {
+    const info = session.getInfo();
+    if (info) send(ws, { type: "session_metadata", session: info });
+  };
+  const onStatusLine = (text: string) => {
+    send(ws, { type: "status_line", sessionId: session.id, text });
+  };
 
   bus.on("event", onEvent);
   session.on("exit", onExit);
+  session.on("metadataChanged", onMetadataChanged);
+  session.on("statusLine", onStatusLine);
 
   state.subscribedSessionId = session.id;
   state.cleanup = () => {
     bus.off("event", onEvent);
     session.off("exit", onExit);
+    session.off("metadataChanged", onMetadataChanged);
+    session.off("statusLine", onStatusLine);
   };
 
-  send(ws, { type: "session_metadata", session: session.getInfo() });
+  // Replay the latest status line so reconnecting clients see it immediately.
+  const cachedStatus = session.getStatusLine();
+  if (cachedStatus) send(ws, { type: "status_line", sessionId: session.id, text: cachedStatus });
+
+  const info = session.getInfo();
+  if (info) send(ws, { type: "session_metadata", session: info });
 }
 
 function broadcast(msg: ServerMessage): void {
@@ -226,8 +261,13 @@ function handleMessage(
     case "create_session": {
       log.info("Creating session", { config: msg.config });
       const session = sessionManager.create(msg.config);
-      broadcastSessionCreated(session.getInfo());
-      subscribeToSession(ws, session);
+      // Wait for Claude Code's session id to resolve (and initial transcript
+      // drain on resume) before broadcasting — clients need the real id.
+      void session.ready.then(() => {
+        const info = session.getInfo();
+        if (info) broadcastSessionCreated(info);
+        subscribeToSession(ws, session);
+      });
 
       if (msg.config.effort) {
         setTimeout(() => {
@@ -244,16 +284,32 @@ function handleMessage(
     }
 
     case "subscribe": {
-      const session = sessionManager.get(msg.sessionId);
+      let session = sessionManager.get(msg.sessionId);
       if (!session) {
-        send(ws, {
-          type: "error",
-          sessionId: msg.sessionId,
-          message: "Session not found",
+        // Unknown session — if the client sent a resumeConfig (e.g. after a
+        // page refresh or backend restart), auto-create a resume using it.
+        if (!msg.resumeConfig) {
+          send(ws, {
+            type: "error",
+            sessionId: msg.sessionId,
+            message: "Session not found",
+          });
+          return;
+        }
+        log.info("Auto-resuming session", { id: msg.sessionId, cwd: msg.resumeConfig.cwd });
+        session = sessionManager.create({
+          ...msg.resumeConfig,
+          resumeSessionId: msg.sessionId,
+        });
+        const created = session;
+        void created.ready.then(() => {
+          const info = created.getInfo();
+          if (info) broadcastSessionCreated(info);
+          subscribeToSession(ws, created);
         });
         return;
       }
-      subscribeToSession(ws, session);
+      void session.ready.then(() => subscribeToSession(ws, session));
       return;
     }
 
@@ -294,6 +350,18 @@ function handleMessage(
     case "cycle_permission_mode": {
       const session = sessionManager.get(msg.sessionId);
       session?.cyclePermissionMode();
+      return;
+    }
+
+    case "set_model": {
+      const session = sessionManager.get(msg.sessionId);
+      session?.setModel(msg.model);
+      return;
+    }
+
+    case "set_effort": {
+      const session = sessionManager.get(msg.sessionId);
+      session?.setEffort(msg.effort);
       return;
     }
 

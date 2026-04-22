@@ -2,7 +2,9 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { InputBar } from "@/components/layout/InputBar";
+import { StatusLine } from "@/components/layout/StatusLine";
 import { MessageStream } from "@/components/messages/MessageStream";
+import { SessionSettingsSheet } from "@/components/sessions/SessionSettingsSheet";
 import { useSessions } from "@/hooks/use-sessions";
 import { useWsMessage, useWsState } from "@/hooks/use-ws";
 
@@ -10,16 +12,23 @@ export function SessionView() {
   const { sessionId } = useParams({ from: "/session/$sessionId" });
   const navigate = useNavigate();
   const connectionState = useWsState();
-  const { sessions, subscribe, cyclePermissionMode } = useSessions();
+  const { sessions, subscribe, cyclePermissionMode, setModel, setEffort } = useSessions();
   const [takenOver, setTakenOver] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [statusLine, setStatusLine] = useState("");
 
   useEffect(() => {
     setTakenOver(false);
+    setStatusLine("");
     subscribe(sessionId);
   }, [sessionId, subscribe]);
 
   useWsMessage("session_taken_over", (msg) => {
     if (msg.sessionId === sessionId) setTakenOver(true);
+  });
+
+  useWsMessage("status_line", (msg) => {
+    if (msg.sessionId === sessionId) setStatusLine(msg.text);
   });
 
   const session = sessions.find((s) => s.id === sessionId);
@@ -61,13 +70,26 @@ export function SessionView() {
         connectionState={connectionState}
         showBack
         onBack={goHome}
-        permissionMode={session?.permissionMode}
-        onCyclePermissionMode={() => cyclePermissionMode(sessionId)}
       />
       <div className="min-h-0 flex-1">
         <MessageStream sessionId={sessionId} />
       </div>
-      <InputBar sessionId={sessionId} />
+      <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        {settingsOpen && session && (
+          <SessionSettingsSheet
+            session={session}
+            onClose={() => setSettingsOpen(false)}
+            onSetModel={(m) => setModel(sessionId, m)}
+            onSetEffort={(e) => setEffort(sessionId, e)}
+            onCyclePermissionMode={() => cyclePermissionMode(sessionId)}
+          />
+        )}
+        <InputBar
+          sessionId={sessionId}
+          onOpenSettings={session ? () => setSettingsOpen((o) => !o) : undefined}
+        />
+        <StatusLine text={statusLine} />
+      </div>
     </div>
   );
 }

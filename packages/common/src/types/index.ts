@@ -12,11 +12,15 @@ export type SessionStatus =
   | "stopped"
   | "error";
 
-/** Model options — shorthand for CLI --model flag */
-export type ClaudeModel = "opus" | "sonnet" | "haiku";
+/**
+ * Model aliases passed to `--model` and `/model`. Values mirror Claude Code's
+ * `MODEL_ALIASES` list (see `claude-code-source/src/utils/model/aliases.ts`).
+ * `[1m]` variants opt into the 1M-token context window.
+ */
+export type ClaudeModel = "opus" | "opus[1m]" | "opusplan" | "sonnet" | "sonnet[1m]" | "haiku";
 
-/** Effort levels for /effort slash command */
-export type EffortLevel = "low" | "medium" | "high" | "xhigh";
+/** Effort levels accepted by `/effort`. `max` is Opus-family only. */
+export type EffortLevel = "low" | "medium" | "high" | "max";
 
 /** Session configuration when spawning */
 export interface SessionConfig {
@@ -118,6 +122,10 @@ export type ServerMessage =
       fromIndex: number;
       hasMore: boolean;
     }
+  | { type: "status_line"; sessionId: string; text: string }
+  | { type: "compact_start"; sessionId: string; trigger: "manual" | "auto" }
+  | { type: "compact_end"; sessionId: string; trigger: "manual" | "auto" }
+  | { type: "compact_summary"; sessionId: string; text: string; timestamp: string }
   | { type: "error"; message: string; sessionId?: string }
   | { type: "dir_list"; path: string; entries: DirEntry[] }
   | {
@@ -140,7 +148,18 @@ export type ClientMessage =
       decision: "allow" | "deny";
       reason?: string;
     }
-  | { type: "subscribe"; sessionId: string }
+  | {
+      type: "subscribe";
+      sessionId: string;
+      /**
+       * If set and the backend doesn't have this session in memory, it will
+       * auto-resume by spawning Claude Code with `--resume <sessionId>` using
+       * these settings. Used for page-refresh / backend-restart recovery —
+       * the frontend persists last-known config in localStorage keyed by
+       * session id.
+       */
+      resumeConfig?: Omit<SessionConfig, "resumeSessionId">;
+    }
   | { type: "create_session"; config: SessionConfig }
   | { type: "stop_session"; sessionId: string }
   | { type: "list_dirs"; path: string }
@@ -153,6 +172,8 @@ export type ClientMessage =
     }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
   | { type: "cycle_permission_mode"; sessionId: string }
+  | { type: "set_model"; sessionId: string; model: ClaudeModel }
+  | { type: "set_effort"; sessionId: string; effort: EffortLevel }
   | {
       type: "fetch_history";
       sessionId: string;

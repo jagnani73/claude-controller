@@ -8,7 +8,9 @@ import { useEffect, useRef, useState } from "react";
 
 // Spinner glyphs and orange tones are lifted directly from Claude Code's UI
 // (see `claude-code-source/src/components/Spinner/`).
-const SPINNER_CHARS = ["✻", "✶", "✽", "✢", "·", "✳"] as const;
+// `︎` (VS15) forces text presentation — without it iOS/Safari renders
+// several of these asterisks as colour emoji, ignoring our inline colour.
+const SPINNER_CHARS = ["✻︎", "✶︎", "✽︎", "✢︎", "·", "✳︎"] as const;
 const SPINNER_COLOR = "#D77757";
 const VERB_COLOR = "#EB9F7F";
 const SPINNER_INTERVAL_MS = 120;

@@ -4,6 +4,8 @@ import type {
   HookPayload,
   HookResponse,
   PermissionRequestPayload,
+  PostCompactPayload,
+  PreCompactPayload,
 } from "../types/hook.types.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
@@ -140,7 +142,46 @@ export class HooksService {
     switch (event) {
       case "PermissionRequest":
         return this.handlePermissionRequest(bus, payload as PermissionRequestPayload);
+      case "PreCompact":
+        return this.handlePreCompact(bus, payload as PreCompactPayload);
+      case "PostCompact":
+        return this.handlePostCompact(bus, payload as PostCompactPayload);
     }
+  }
+
+  private async handlePreCompact(
+    bus: SessionBus,
+    payload: PreCompactPayload,
+  ): Promise<HookResponse> {
+    bus.push({
+      kind: "compact_start",
+      sessionId: bus.sessionId,
+      timestamp: new Date().toISOString(),
+      trigger: payload.trigger,
+    });
+    return {};
+  }
+
+  private async handlePostCompact(
+    bus: SessionBus,
+    payload: PostCompactPayload,
+  ): Promise<HookResponse> {
+    const timestamp = new Date().toISOString();
+    if (payload.compact_summary) {
+      bus.push({
+        kind: "compact_summary",
+        sessionId: bus.sessionId,
+        timestamp,
+        text: payload.compact_summary,
+      });
+    }
+    bus.push({
+      kind: "compact_end",
+      sessionId: bus.sessionId,
+      timestamp,
+      trigger: payload.trigger,
+    });
+    return {};
   }
 
   private async handlePermissionRequest(

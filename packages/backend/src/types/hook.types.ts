@@ -17,7 +17,19 @@ export interface PermissionRequestPayload extends BaseHookPayload {
   tool_input: unknown;
 }
 
-export type HookPayload = PermissionRequestPayload;
+export interface PreCompactPayload extends BaseHookPayload {
+  hook_event_name: "PreCompact";
+  trigger: "manual" | "auto";
+  custom_instructions: string | null;
+}
+
+export interface PostCompactPayload extends BaseHookPayload {
+  hook_event_name: "PostCompact";
+  trigger: "manual" | "auto";
+  compact_summary: string;
+}
+
+export type HookPayload = PermissionRequestPayload | PreCompactPayload | PostCompactPayload;
 
 export type HookEventName = HookPayload["hook_event_name"];
 

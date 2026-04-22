@@ -7,6 +7,9 @@ export const DEFAULT_HOST = "0.0.0.0";
 /** Default data directory for session persistence */
 export const DEFAULT_DATA_DIR = "./data";
 
+/** Default dump directory for PTY captures and statusline payloads (gitignored). */
+export const DEFAULT_DUMP_DIR = "./dump";
+
 /** Default PTY terminal dimensions */
 export const DEFAULT_PTY_COLS = 120;
 export const DEFAULT_PTY_ROWS = 40;

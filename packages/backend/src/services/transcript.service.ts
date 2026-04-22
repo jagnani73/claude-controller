@@ -2,6 +2,7 @@ import { createReadStream, type FSWatcher, watch } from "node:fs";
 import { stat } from "node:fs/promises";
 import type {
   AssistantEntry,
+  AssistantUsage,
   ContentBlock,
   TranscriptEntry,
   UserEntry,
@@ -30,15 +31,28 @@ export class TranscriptWatcher {
   private stopped = false;
   private readInFlight: Promise<void> | null = null;
   private pendingRead = false;
+  private initialScan = true;
+  lastAssistantModel: string | null = null;
+  lastAssistantUsage: AssistantUsage | null = null;
+  totalInputTokens = 0;
+  totalOutputTokens = 0;
 
   constructor(
     readonly path: string,
     readonly bus: SessionBus,
   ) {}
 
+  private emitEvent(event: Parameters<SessionBus["push"]>[0]): void {
+    if (this.initialScan) this.bus.pushSilent(event);
+    else this.bus.push(event);
+  }
+
   async start(): Promise<void> {
-    // Read anything already in the file, then begin watching.
+    // Initial pass is silent — on resume this can be thousands of entries,
+    // and we don't want them streaming as "live" events to any subscriber.
+    // Subscribers connecting after start() see them via the event-log tail.
     await this.drain();
+    this.initialScan = false;
     this.watch();
   }
 
@@ -141,7 +155,7 @@ export class TranscriptWatcher {
     } else if (entry.type === "permission-mode") {
       const mode = (entry as { permissionMode?: string }).permissionMode;
       if (typeof mode === "string") {
-        this.bus.push({
+        this.emitEvent({
           kind: "permission_mode",
           sessionId: this.bus.sessionId,
           timestamp: new Date().toISOString(),
@@ -157,10 +171,17 @@ export class TranscriptWatcher {
     const timestamp = entry.timestamp;
     const turnId = entry.message.id;
 
+    if (entry.message.model) this.lastAssistantModel = entry.message.model;
+    if (entry.message.usage) {
+      this.lastAssistantUsage = entry.message.usage;
+      this.totalInputTokens += entry.message.usage.input_tokens ?? 0;
+      this.totalOutputTokens += entry.message.usage.output_tokens ?? 0;
+    }
+
     const content: ContentBlock[] = entry.message.content ?? [];
     for (const block of content) {
       if (block.type === "text" && block.text.trim().length > 0) {
-        this.bus.push({
+        this.emitEvent({
           kind: "assistant_text",
           sessionId,
           timestamp,
@@ -168,7 +189,7 @@ export class TranscriptWatcher {
           text: block.text,
         });
       } else if (block.type === "tool_use") {
-        this.bus.push({
+        this.emitEvent({
           kind: "tool_call",
           sessionId,
           timestamp,
@@ -187,11 +208,20 @@ export class TranscriptWatcher {
     const content = entry.message.content;
 
     if (typeof content === "string") {
+      if (entry.isCompactSummary) {
+        this.emitEvent({
+          kind: "compact_summary",
+          sessionId,
+          timestamp,
+          text: content,
+        });
+        return;
+      }
       // Skip command caveats and other meta-text wrappers
       if (content.startsWith("<local-command-caveat>")) return;
       if (content.startsWith("<local-command-stdout>")) return;
       if (content.startsWith("<command-")) return;
-      this.bus.push({
+      this.emitEvent({
         kind: "user_prompt",
         sessionId,
         timestamp,
@@ -203,7 +233,7 @@ export class TranscriptWatcher {
     // Array form — tool_result blocks
     for (const block of content) {
       if (block.type === "tool_result") {
-        this.bus.push({
+        this.emitEvent({
           kind: "tool_result",
           sessionId,
           timestamp,
@@ -212,7 +242,7 @@ export class TranscriptWatcher {
           isError: block.is_error ?? false,
         });
       } else if (block.type === "text") {
-        this.bus.push({
+        this.emitEvent({
           kind: "user_prompt",
           sessionId,
           timestamp,

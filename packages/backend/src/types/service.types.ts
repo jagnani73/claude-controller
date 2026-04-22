@@ -6,6 +6,7 @@ export interface ServerConfig {
   port: number;
   host: string;
   dataDir: string;
+  dumpDir: string;
   workDir: string;
   pty: {
     cols: number;
@@ -41,6 +42,9 @@ export interface SessionDeps {
 
 export interface SessionEvents {
   exit: [{ exitCode: number; signal?: number }];
+  metadataChanged: [];
+  statusLine: [string];
+  idResolved: [string];
 }
 
 // ─── WebSocket Service ───────────────────────────────────────────────

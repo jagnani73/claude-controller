@@ -1,7 +1,46 @@
-import type { DirEntry, ProjectSessionSummary, SessionConfig, SessionInfo } from "common/types";
+import type {
+  ClaudeModel,
+  DirEntry,
+  EffortLevel,
+  ProjectSessionSummary,
+  SessionConfig,
+  SessionInfo,
+} from "common/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { wsService } from "@/services/ws.service";
 import { useWsMessage } from "./use-ws";
+
+/**
+ * Per-session config cache in localStorage. Keyed by the Claude Code session
+ * id so a page refresh (or backend restart) can re-send the settings needed
+ * to `--resume` the session on the backend.
+ */
+const SESSION_CFG_PREFIX = "cc-session-cfg:";
+
+type PersistedConfig = Omit<SessionConfig, "resumeSessionId">;
+
+function persistSessionConfig(s: SessionInfo): void {
+  const cfg: PersistedConfig = {
+    name: s.name,
+    cwd: s.cwd,
+    model: s.model,
+    permissionMode: s.permissionMode,
+    effort: s.effort,
+    tags: s.tags,
+  };
+  try {
+    localStorage.setItem(SESSION_CFG_PREFIX + s.id, JSON.stringify(cfg));
+  } catch {}
+}
+
+function readSessionConfig(sessionId: string): PersistedConfig | null {
+  try {
+    const raw = localStorage.getItem(SESSION_CFG_PREFIX + sessionId);
+    return raw ? (JSON.parse(raw) as PersistedConfig) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function useSessions() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -11,6 +50,7 @@ export function useSessions() {
   useWsMessage("connected", (msg) => {
     setSessions(msg.sessions);
     if (msg.workDir) setWorkDir(msg.workDir);
+    for (const s of msg.sessions) persistSessionConfig(s);
   });
 
   useWsMessage("session_created", (msg) => {
@@ -18,6 +58,7 @@ export function useSessions() {
       if (prev.some((s) => s.id === msg.session.id)) return prev;
       return [...prev, msg.session];
     });
+    persistSessionConfig(msg.session);
     const resolver = pendingCreate.current;
     if (resolver) {
       pendingCreate.current = null;
@@ -32,6 +73,7 @@ export function useSessions() {
   });
 
   useWsMessage("session_metadata", (msg) => {
+    persistSessionConfig(msg.session);
     setSessions((prev) => {
       const idx = prev.findIndex((s) => s.id === msg.session.id);
       if (idx >= 0) {
@@ -45,12 +87,25 @@ export function useSessions() {
 
   useWsMessage("permission_mode", (msg) => {
     setSessions((prev) =>
-      prev.map((s) => (s.id === msg.sessionId ? { ...s, permissionMode: msg.mode } : s)),
+      prev.map((s) => {
+        if (s.id !== msg.sessionId) return s;
+        const next = { ...s, permissionMode: msg.mode };
+        persistSessionConfig(next);
+        return next;
+      }),
     );
   });
 
   const cyclePermissionMode = useCallback((sessionId: string) => {
     wsService.send({ type: "cycle_permission_mode", sessionId });
+  }, []);
+
+  const setModel = useCallback((sessionId: string, model: ClaudeModel) => {
+    wsService.send({ type: "set_model", sessionId, model });
+  }, []);
+
+  const setEffort = useCallback((sessionId: string, effort: EffortLevel) => {
+    wsService.send({ type: "set_effort", sessionId, effort });
   }, []);
 
   /** Send create_session and resolve with the new SessionInfo once the server broadcasts. */
@@ -66,7 +121,8 @@ export function useSessions() {
   }, []);
 
   const subscribe = useCallback((sessionId: string) => {
-    wsService.send({ type: "subscribe", sessionId });
+    const resumeConfig = readSessionConfig(sessionId) ?? undefined;
+    wsService.send({ type: "subscribe", sessionId, resumeConfig });
   }, []);
 
   return {
@@ -76,6 +132,8 @@ export function useSessions() {
     stopSession,
     subscribe,
     cyclePermissionMode,
+    setModel,
+    setEffort,
   };
 }
 

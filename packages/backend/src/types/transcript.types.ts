@@ -40,10 +40,18 @@ export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
 export interface UserEntry extends BaseEntry {
   type: "user";
   isMeta?: boolean;
+  isCompactSummary?: boolean;
   message: {
     role: "user";
     content: string | ContentBlock[];
   };
+}
+
+export interface AssistantUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
 }
 
 export interface AssistantEntry extends BaseEntry {
@@ -54,6 +62,7 @@ export interface AssistantEntry extends BaseEntry {
     role: "assistant";
     content: ContentBlock[];
     stop_reason: string | null;
+    usage?: AssistantUsage;
   };
 }
 

@@ -7,7 +7,8 @@ import type { SessionBus } from "./session-bus.service.js";
 const log = LoggerService.scoped("session-manager");
 
 export class SessionManager {
-  private sessions = new Map<string, Session>();
+  private byToken = new Map<string, Session>();
+  private byId = new Map<string, Session>();
   private hooksBaseUrl = "";
 
   constructor(private serverConfig: ServerConfig) {}
@@ -27,46 +28,59 @@ export class SessionManager {
       serverConfig: this.serverConfig,
       hooksBaseUrl: this.hooksBaseUrl,
     });
-    this.sessions.set(session.id, session);
+    this.byToken.set(session.spawnToken, session);
+
+    const register = (id: string) => {
+      this.byId.set(id, session);
+    };
+    if (session.resolved) register(session.id);
+    else session.once("idResolved", register);
 
     session.on("exit", () => {
-      log.info("Session exited", { id: session.id });
+      log.info("Session exited", { token: session.spawnToken });
     });
 
     return session;
   }
 
   get(id: string): Session | undefined {
-    return this.sessions.get(id);
+    return this.byId.get(id);
   }
 
-  /** Resolve a SessionBus by id. Used by the hooks listener. */
-  getBus(id: string): SessionBus | null {
-    return this.sessions.get(id)?.bus ?? null;
+  /** Resolve a SessionBus by the spawn token embedded in the hook URL path. */
+  getBus(spawnToken: string): SessionBus | null {
+    const session = this.byToken.get(spawnToken);
+    return session?.resolved ? session.bus : null;
   }
 
   list(): SessionInfo[] {
-    return Array.from(this.sessions.values()).map((s) => s.getInfo());
+    const infos: SessionInfo[] = [];
+    for (const session of this.byToken.values()) {
+      const info = session.getInfo();
+      if (info) infos.push(info);
+    }
+    return infos;
   }
 
   stop(id: string): boolean {
-    const session = this.sessions.get(id);
+    const session = this.byId.get(id);
     if (!session) return false;
     session.stop();
     return true;
   }
 
   remove(id: string): boolean {
-    const session = this.sessions.get(id);
+    const session = this.byId.get(id);
     if (!session) return false;
     session.stop();
-    this.sessions.delete(id);
+    this.byId.delete(id);
+    this.byToken.delete(session.spawnToken);
     return true;
   }
 
   stopAll(): void {
-    log.info("Stopping all sessions", { count: this.sessions.size });
-    for (const session of this.sessions.values()) {
+    log.info("Stopping all sessions", { count: this.byToken.size });
+    for (const session of this.byToken.values()) {
       session.stop();
     }
   }
