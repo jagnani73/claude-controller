@@ -336,11 +336,7 @@ export class ParserService {
         r = r.replace(/─{4,}/g, "\n"); // horizontal rules → line breaks
         r = r.replace(/(Sonnet|Opus|Haiku)\s+[\d.]+\s*\|[^●❯⎿⧉\n]*/g, ""); // status bar
         r = r.replace(/ctx\s+\d+%\s+used\s*\|[^●❯⎿⧉\n]*/g, ""); // ctx stats
-        r = r.replace(/[○◐●◉]\s+(low|medium|high)\s*·\s*\/effort/g, ""); // effort tag
-        r = r.replace(
-            /(low|medium|high)\s+ef\s*f?\s*ort\s*·\s*Claude\s+Max/g,
-            "",
-        ); // effort bar (cursor-mangled)
+        r = r.replace(/[○◐●◉]\s+(xhigh|low|medium|high)\s*·\s*\/effort/g, ""); // effort tag
         r = r.replace(/running stop hooks…\s*\d+\/\d+[^)\n]*/g, ""); // stop hooks
         r = r.replace(/· thought for \d+s\)/g, ""); // inline thought duration
         // Repeated spinner labels (from cursor overwrite concatenation)
@@ -418,6 +414,14 @@ export class ParserService {
         const verbMatch = line.match(/^(\w[\w'-]*)…?$/);
         if (verbMatch && SPINNER_VERBS.has(verbMatch[1])) return true;
 
+        // Spinner verb followed by … and any trailing garbage (cursor-overwrite fragments)
+        const verbPrefixMatch = line.match(/^(\w[\w'-]*)…/);
+        if (verbPrefixMatch && SPINNER_VERBS.has(verbPrefixMatch[1]))
+            return true;
+
+        // Tool/spinner timing suffix: (Ns · ↓ N tokens) or (Ns · ↑ N tokens)
+        if (/\(\d+s\s*·\s*[↓↑]\s*\d+\s*tokens?\)/.test(line)) return true;
+
         if (THINKING_EFFORT.test(line)) return true;
         if (THOUGHT_COMPLETE.test(line)) {
             // Thought completion is meaningful
@@ -442,6 +446,14 @@ export class ParserService {
     // ─── Emit ───────────────────────────────────────────────────────
 
     private emit(text: string): void {
+        // Real content cancels any pending spinner emission
+        if (!text.startsWith("[spinner]") && MEANINGFUL_PREFIXES.has(text[0])) {
+            if (this.spinnerDebounce) {
+                clearTimeout(this.spinnerDebounce);
+                this.spinnerDebounce = null;
+            }
+            this.pendingSpinnerText = null;
+        }
         this.lastEmittedText = text;
         for (const handler of this.handlers) {
             handler(text);
