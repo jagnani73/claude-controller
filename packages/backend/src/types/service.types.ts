@@ -32,6 +32,11 @@ export interface PtyManagerEvents {
 
 // ─── Session ─────────────────────────────────────────────────────────
 
+export interface SessionDeps {
+  serverConfig: ServerConfig;
+  hooksBaseUrl: string;
+}
+
 export interface SessionEvents {
   exit: [{ exitCode: number; signal?: number }];
 }

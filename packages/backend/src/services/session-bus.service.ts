@@ -61,7 +61,6 @@ export class SessionBus extends EventEmitter<BusEvents> {
 
   /** Append an event to the log and broadcast to listeners. */
   push(event: SessionBusEvent): void {
-    // Dedup tool_call by tool_use_id — transcript re-reads would replay.
     if (event.kind === "tool_call") {
       if (this.seenToolUseIds.has(event.toolUseId)) return;
       this.seenToolUseIds.add(event.toolUseId);

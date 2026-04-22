@@ -19,10 +19,7 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
 
     const args = ["--model", options.model, "--permission-mode", options.permissionMode];
     if (options.settingsJson) {
-      // Write the JSON to a temp file and pass the path. Passing inline JSON
-      // as a CLI arg gets its quotes stripped by cmd.exe on Windows; the
-      // file-path form works identically on every platform. Claude Code's
-      // own SDK does the same thing internally (main.tsx:454).
+      // Pass via file path, not inline — cmd.exe strips the quotes off inline JSON.
       const settingsPath = join(tmpdir(), `claude-controller-settings-${randomUUID()}.json`);
       writeFileSync(settingsPath, options.settingsJson, "utf8");
       log.info("Wrote --settings file", {
@@ -43,10 +40,6 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
     });
 
     const shell = process.platform === "win32" ? "cmd.exe" : "/bin/bash";
-    // On Windows cmd.exe passes each array element as a separate argv entry
-    // so the settings JSON (which contains quotes) stays intact without
-    // additional shell-escaping. On Unix we assemble a single -c string and
-    // must shell-escape the settings JSON.
     const shellArgs =
       process.platform === "win32"
         ? ["/c", "claude", ...args]

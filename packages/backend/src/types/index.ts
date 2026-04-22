@@ -9,6 +9,7 @@ export type {
   PtyManagerEvents,
   PtySpawnOptions,
   ServerConfig,
+  SessionDeps,
   SessionEvents,
 } from "./service.types.js";
 export type {

@@ -9,15 +9,10 @@ import { PtyService } from "../services/pty.service.js";
 import { SessionBus } from "../services/session-bus.service.js";
 import { TranscriptWatcher } from "../services/transcript.service.js";
 import { TranscriptLocator } from "../services/transcript-locator.service.js";
-import type { ServerConfig, SessionEvents } from "../types/index.js";
+import type { SessionDeps, SessionEvents } from "../types/index.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
 
 const log = LoggerService.scoped("session");
-
-export interface SessionDeps {
-  serverConfig: ServerConfig;
-  hooksBaseUrl: string;
-}
 
 export class Session extends EventEmitter<SessionEvents> {
   readonly id: string;
@@ -41,8 +36,6 @@ export class Session extends EventEmitter<SessionEvents> {
     this.initCapture(deps.serverConfig.dataDir);
 
     this.pty.on("data", (data) => {
-      // Raw PTY stdout is still captured to disk for debugging, but
-      // nothing parses it — content comes from hooks + transcript tail.
       this.captureRaw(data);
     });
 
