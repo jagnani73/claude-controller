@@ -43,6 +43,16 @@ export function useSessions() {
     });
   });
 
+  useWsMessage("permission_mode", (msg) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === msg.sessionId ? { ...s, permissionMode: msg.mode } : s)),
+    );
+  });
+
+  const cyclePermissionMode = useCallback((sessionId: string) => {
+    wsService.send({ type: "cycle_permission_mode", sessionId });
+  }, []);
+
   /** Send create_session and resolve with the new SessionInfo once the server broadcasts. */
   const createSession = useCallback((config: SessionConfig): Promise<SessionInfo> => {
     return new Promise<SessionInfo>((resolve) => {
@@ -65,6 +75,7 @@ export function useSessions() {
     createSession,
     stopSession,
     subscribe,
+    cyclePermissionMode,
   };
 }
 

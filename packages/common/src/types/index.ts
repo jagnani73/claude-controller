@@ -103,7 +103,21 @@ export type ServerMessage =
       toolName: string;
       toolInput: unknown;
     }
+  | { type: "permission_mode"; sessionId: string; mode: PermissionMode }
   | { type: "session_taken_over"; sessionId: string }
+  | {
+      type: "history_available";
+      sessionId: string;
+      earliestIndex: number;
+      hasMore: boolean;
+    }
+  | {
+      type: "history_page";
+      sessionId: string;
+      events: ServerMessage[];
+      fromIndex: number;
+      hasMore: boolean;
+    }
   | { type: "error"; message: string; sessionId?: string }
   | { type: "dir_list"; path: string; entries: DirEntry[] }
   | {
@@ -137,4 +151,11 @@ export type ClientMessage =
       limit?: number;
       query?: string;
     }
-  | { type: "resize"; sessionId: string; cols: number; rows: number };
+  | { type: "resize"; sessionId: string; cols: number; rows: number }
+  | { type: "cycle_permission_mode"; sessionId: string }
+  | {
+      type: "fetch_history";
+      sessionId: string;
+      beforeIndex: number;
+      limit: number;
+    };

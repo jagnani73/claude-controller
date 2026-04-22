@@ -115,24 +115,39 @@ export async function listProjectSessions(
   };
 }
 
-/** Scan a JSONL and return first user prompt + assistant turn count. */
+/**
+ * Scan a JSONL and return a display name + assistant turn count.
+ *
+ * Preference order for the display name:
+ *   1. `custom-title` entry (the user-set session title — authoritative)
+ *   2. First real user prompt (ignores command wrappers, tool_result arrays, meta entries)
+ */
 async function summarizeTranscript(
   path: string,
 ): Promise<{ firstPrompt: string | null; turnCount: number }> {
   const stream = createReadStream(path, { encoding: "utf8" });
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
 
+  let customTitle: string | null = null;
   let firstPrompt: string | null = null;
   let turnCount = 0;
 
   for await (const line of reader) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    let entry: { type?: string; isMeta?: boolean; message?: { content?: unknown } };
+    let entry: {
+      type?: string;
+      isMeta?: boolean;
+      customTitle?: string;
+      message?: { content?: unknown };
+    };
     try {
       entry = JSON.parse(trimmed);
     } catch {
       continue;
+    }
+    if (entry.type === "custom-title" && typeof entry.customTitle === "string") {
+      customTitle = entry.customTitle.trim() || null;
     }
     if (entry.type === "user" && !entry.isMeta && !firstPrompt) {
       const content = entry.message?.content;
@@ -149,7 +164,7 @@ async function summarizeTranscript(
     if (entry.type === "assistant") turnCount++;
   }
 
-  return { firstPrompt, turnCount };
+  return { firstPrompt: customTitle ?? firstPrompt, turnCount };
 }
 
 /** Lowercase and drop separators/whitespace — matches the frontend highlighter. */

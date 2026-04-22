@@ -10,7 +10,7 @@ export function SessionView() {
   const { sessionId } = useParams({ from: "/session/$sessionId" });
   const navigate = useNavigate();
   const connectionState = useWsState();
-  const { sessions, subscribe } = useSessions();
+  const { sessions, subscribe, cyclePermissionMode } = useSessions();
   const [takenOver, setTakenOver] = useState(false);
 
   useEffect(() => {
@@ -61,6 +61,8 @@ export function SessionView() {
         connectionState={connectionState}
         showBack
         onBack={goHome}
+        permissionMode={session?.permissionMode}
+        onCyclePermissionMode={() => cyclePermissionMode(sessionId)}
       />
       <div className="min-h-0 flex-1">
         <MessageStream sessionId={sessionId} />

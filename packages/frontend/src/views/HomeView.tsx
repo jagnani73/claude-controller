@@ -65,7 +65,9 @@ export function HomeView() {
             <div className="border-t border-neutral-800">
               <div className="px-4 pt-4 text-xs font-medium uppercase tracking-wider text-neutral-600">
                 Recent Chats
-                {recentTotal > 0 && <span className="ml-1 text-neutral-700">({recentTotal})</span>}
+                {recentTotal > 0 && (
+                  <span className="ml-1 text-neutral-700">({recentTotal.toLocaleString()})</span>
+                )}
               </div>
               <RecentChats
                 sessions={recentChats}

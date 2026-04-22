@@ -89,7 +89,7 @@ export function RecentChats({
               </div>
               <div className="flex items-center gap-2 text-[10px] text-neutral-600">
                 <span>
-                  {s.turnCount} turn{s.turnCount === 1 ? "" : "s"}
+                  {s.turnCount.toLocaleString()} turn{s.turnCount === 1 ? "" : "s"}
                 </span>
                 <span>·</span>
                 <span className="truncate font-mono">

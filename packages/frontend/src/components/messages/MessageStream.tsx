@@ -1,10 +1,15 @@
-import { useEffect, useReducer, useRef } from "react";
+import type { ServerMessage } from "common/types";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
+import { QuestionCard } from "@/components/messages/QuestionCard";
 import { ThinkingIndicator } from "@/components/messages/ThinkingIndicator";
 import { ToolCallCard } from "@/components/messages/ToolCallCard";
 import { UserMessage } from "@/components/messages/UserMessage";
 import { useWsMessage } from "@/hooks/use-ws";
+import { wsService } from "@/services/ws.service";
+
+const HISTORY_PAGE_SIZE = 20;
 
 type StreamItem =
   | {
@@ -23,7 +28,7 @@ type StreamItem =
     }
   | {
       kind: "tool";
-      id: string; // toolUseId
+      id: string;
       sessionId: string;
       toolName: string;
       input: unknown;
@@ -31,7 +36,7 @@ type StreamItem =
     }
   | {
       kind: "approval";
-      id: string; // toolUseId
+      id: string;
       sessionId: string;
       toolName: string;
       toolInput: unknown;
@@ -78,14 +83,14 @@ type Action =
       type: "approval_resolved";
       toolUseId: string;
       decision: "allow" | "deny";
-    };
+    }
+  | { type: "prepend"; items: StreamItem[] };
 
 function reducer(state: StreamItem[], action: Action): StreamItem[] {
   switch (action.type) {
     case "clear":
       return [];
     case "user_prompt":
-      // Dedup on identical content within the same second
       if (
         state.some(
           (it) =>
@@ -143,13 +148,7 @@ function reducer(state: StreamItem[], action: Action): StreamItem[] {
     case "tool_result":
       return state.map((it) =>
         it.kind === "tool" && it.id === action.toolUseId
-          ? {
-              ...it,
-              result: {
-                value: action.result,
-                isError: action.isError,
-              },
-            }
+          ? { ...it, result: { value: action.result, isError: action.isError } }
           : it,
       );
     case "approval_request":
@@ -172,7 +171,73 @@ function reducer(state: StreamItem[], action: Action): StreamItem[] {
           ? { ...it, resolved: action.decision }
           : it,
       );
+    case "prepend": {
+      // Deduplicate by id — some older messages may already be in the
+      // tail (backend's dedup is per-kind, not per-batch).
+      const existingIds = new Set(state.map((s) => s.id));
+      const fresh = action.items.filter((it) => !existingIds.has(it.id));
+      return fresh.length > 0 ? [...fresh, ...state] : state;
+    }
   }
+}
+
+/** Convert a batch of ServerMessages (a history page) into StreamItems. */
+function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem[] {
+  const items: StreamItem[] = [];
+  let idx = 0;
+  for (const e of events) {
+    const slot = startOffset + idx++;
+    switch (e.type) {
+      case "user_prompt":
+        items.push({
+          kind: "user",
+          id: `u-${e.timestamp}-${slot}`,
+          sessionId: e.sessionId,
+          text: e.text,
+          timestamp: e.timestamp,
+        });
+        break;
+      case "assistant_text":
+        items.push({
+          kind: "assistant",
+          id: `a-${e.turnId}-${slot}`,
+          sessionId: e.sessionId,
+          text: e.text,
+          timestamp: e.timestamp,
+        });
+        break;
+      case "tool_call":
+        items.push({
+          kind: "tool",
+          id: e.toolUseId,
+          sessionId: e.sessionId,
+          toolName: e.name,
+          input: e.input,
+          result: null,
+        });
+        break;
+      case "tool_result": {
+        // Fuse into the matching tool_call if it's in the same batch.
+        const match = items.find((it) => it.kind === "tool" && it.id === e.toolUseId);
+        if (match && match.kind === "tool") {
+          match.result = { value: e.result, isError: e.isError };
+        }
+        break;
+      }
+      case "approval_request":
+        items.push({
+          kind: "approval",
+          id: e.toolUseId,
+          sessionId: e.sessionId,
+          toolName: e.toolName,
+          toolInput: e.toolInput,
+        });
+        break;
+      default:
+        break;
+    }
+  }
+  return items;
 }
 
 interface MessageStreamProps {
@@ -182,10 +247,26 @@ interface MessageStreamProps {
 export function MessageStream({ sessionId }: MessageStreamProps) {
   const [items, dispatch] = useReducer(reducer, []);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+
+  const [earliestIndex, setEarliestIndex] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Anchor tracking for scroll preservation on prepend.
+  const prevScrollHeightRef = useRef(0);
+  const prevFirstIdRef = useRef<string | undefined>(undefined);
+  const pendingAnchorRef = useRef<{ height: number; top: number } | null>(null);
 
   // Reset when switching sessions
   useEffect(() => {
     dispatch({ type: "clear" });
+    setEarliestIndex(null);
+    setHasMore(false);
+    setLoadingHistory(false);
+    prevFirstIdRef.current = undefined;
+    prevScrollHeightRef.current = 0;
+    pendingAnchorRef.current = null;
   }, []);
 
   useWsMessage("user_prompt", (msg) => {
@@ -242,20 +323,88 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
     });
   });
 
+  useWsMessage("history_available", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    setEarliestIndex(msg.earliestIndex);
+    setHasMore(msg.hasMore);
+  });
+
+  useWsMessage("history_page", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    // Record the current scroll position so we can preserve visible content.
+    const el = scrollRef.current;
+    if (el) {
+      pendingAnchorRef.current = {
+        height: el.scrollHeight,
+        top: el.scrollTop,
+      };
+    }
+    const newItems = eventsToItems(msg.events, msg.fromIndex);
+    dispatch({ type: "prepend", items: newItems });
+    setEarliestIndex(msg.fromIndex);
+    setHasMore(msg.hasMore);
+    setLoadingHistory(false);
+  });
+
+  const loadMoreHistory = useCallback(() => {
+    if (loadingHistory || !hasMore || earliestIndex === null || earliestIndex <= 0) return;
+    setLoadingHistory(true);
+    wsService.send({
+      type: "fetch_history",
+      sessionId,
+      beforeIndex: earliestIndex,
+      limit: HISTORY_PAGE_SIZE,
+    });
+  }, [sessionId, earliestIndex, hasMore, loadingHistory]);
+
+  // Top-sentinel observer for upward scroll.
+  useEffect(() => {
+    const el = topSentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMoreHistory();
+      },
+      { root: scrollRef.current, rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [loadMoreHistory]);
+
+  // Chat-style scroll logic: jump to bottom on initial/append, preserve
+  // visible content position on prepend. Runs before paint so there's no
+  // flash of wrong-scroll content.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const anchor = pendingAnchorRef.current;
+    if (anchor) {
+      // Prepend: keep the user looking at the same content as before.
+      const delta = el.scrollHeight - anchor.height;
+      el.scrollTop = anchor.top + delta;
+      pendingAnchorRef.current = null;
+    } else {
+      // Initial load or append: jump to bottom (no smooth animation).
+      el.scrollTop = el.scrollHeight;
+    }
+
+    prevScrollHeightRef.current = el.scrollHeight;
+    prevFirstIdRef.current = items[0]?.id;
+  }, [items]);
+
   const lastItem = items[items.length - 1];
   const waitingForReply = lastItem?.kind === "user";
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on any new item or spinner toggle
-  useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [items, waitingForReply]);
-
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto bg-neutral-950">
-      {items.length === 0 ? (
+      {hasMore && <div ref={topSentinelRef} className="h-1" />}
+      {loadingHistory && (
+        <div className="px-4 py-2 text-center text-xs text-neutral-600">
+          Loading earlier messages…
+        </div>
+      )}
+      {items.length === 0 && !loadingHistory ? (
         <div className="flex h-full items-center justify-center text-sm text-neutral-600">
           Waiting for session to start…
         </div>
@@ -267,6 +416,16 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
             case "assistant":
               return <AssistantMessage key={item.id} text={item.text} timestamp={item.timestamp} />;
             case "tool":
+              if (item.toolName === "AskUserQuestion") {
+                return (
+                  <QuestionCard
+                    key={item.id}
+                    toolUseId={item.id}
+                    input={item.input}
+                    result={item.result}
+                  />
+                );
+              }
               return (
                 <ToolCallCard
                   key={item.id}

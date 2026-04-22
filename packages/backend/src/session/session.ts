@@ -95,6 +95,12 @@ export class Session extends EventEmitter<SessionEvents> {
     this.pty.write(`${cmd}\r`);
   }
 
+  /** Shift+Tab — cycles Claude Code's permission mode (default → acceptEdits → plan). */
+  cyclePermissionMode(): void {
+    log.debug("Cycle permission mode", { id: this.id });
+    this.pty.write("\x1b[Z");
+  }
+
   resize(cols: number, rows: number): void {
     this.pty.resize(cols, rows);
   }

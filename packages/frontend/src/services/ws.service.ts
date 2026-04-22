@@ -15,6 +15,13 @@ class WsService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private url: string | null = null;
   private disposed = false;
+  /**
+   * Some server messages are *stateful* (`connected` carries sessions+workDir)
+   * and only fire once per WS lifetime. We cache the latest of each sticky
+   * type so a newly-mounted subscriber gets the current state immediately.
+   */
+  private stickyMessages = new Map<string, ServerMessage>();
+  private static readonly STICKY_TYPES: ReadonlySet<string> = new Set(["connected"]);
 
   state: ConnectionState = "disconnected";
 
@@ -51,6 +58,13 @@ class WsService {
       this.listeners.set(type, set);
     }
     set.add(handler);
+
+    // Replay sticky state to late subscribers so re-mounted views see it.
+    if (type !== "*") {
+      const cached = this.stickyMessages.get(type);
+      if (cached) queueMicrotask(() => handler(cached));
+    }
+
     return () => this.listeners.get(type)?.delete(handler);
   }
 
@@ -92,6 +106,9 @@ class WsService {
   }
 
   private emit(msg: ServerMessage): void {
+    if (WsService.STICKY_TYPES.has(msg.type)) {
+      this.stickyMessages.set(msg.type, msg);
+    }
     const typeHandlers = this.listeners.get(msg.type);
     if (typeHandlers) {
       for (const handler of typeHandlers) handler(msg);

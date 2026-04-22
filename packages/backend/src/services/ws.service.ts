@@ -1,6 +1,12 @@
 import { readdirSync } from "node:fs";
 import { normalize, resolve } from "node:path";
-import type { ClientMessage, DirEntry, ServerMessage, SessionInfo } from "common/types";
+import type {
+  ClientMessage,
+  DirEntry,
+  PermissionMode,
+  ServerMessage,
+  SessionInfo,
+} from "common/types";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
 import type { ClientState, ServerConfig } from "../types/index.js";
@@ -87,8 +93,16 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage {
         toolName: event.toolName,
         toolInput: event.toolInput,
       };
+    case "permission_mode":
+      return {
+        type: "permission_mode",
+        sessionId: event.sessionId,
+        mode: event.mode as PermissionMode,
+      };
   }
 }
+
+const INITIAL_REPLAY = 20;
 
 function subscribeToSession(ws: WebSocket, session: Session): void {
   const state = clients.get(ws);
@@ -110,11 +124,20 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
 
   log.info("Client subscribing to session", { sessionId: session.id });
 
-  // Replay prior events
+  // Replay only the tail of the event log — chat-style. Older history is
+  // pulled on demand via `fetch_history`.
   const bus: SessionBus = session.bus;
-  for (const event of bus.getEventLog()) {
+  const total = bus.getEventLogSize();
+  const startIdx = Math.max(0, total - INITIAL_REPLAY);
+  for (const event of bus.getEventLogSlice(startIdx, total)) {
     send(ws, busEventToMessage(event));
   }
+  send(ws, {
+    type: "history_available",
+    sessionId: session.id,
+    earliestIndex: startIdx,
+    hasMore: startIdx > 0,
+  });
 
   const onEvent = (event: SessionBusEvent) => {
     send(ws, busEventToMessage(event));
@@ -265,6 +288,31 @@ function handleMessage(
     case "resize": {
       const session = sessionManager.get(msg.sessionId);
       session?.resize(msg.cols, msg.rows);
+      return;
+    }
+
+    case "cycle_permission_mode": {
+      const session = sessionManager.get(msg.sessionId);
+      session?.cyclePermissionMode();
+      return;
+    }
+
+    case "fetch_history": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) return;
+      const bus = session.bus;
+      const total = bus.getEventLogSize();
+      const end = Math.min(total, Math.max(0, msg.beforeIndex));
+      const limit = Math.max(1, Math.min(100, msg.limit));
+      const start = Math.max(0, end - limit);
+      const events = bus.getEventLogSlice(start, end).map(busEventToMessage);
+      send(ws, {
+        type: "history_page",
+        sessionId: msg.sessionId,
+        events,
+        fromIndex: start,
+        hasMore: start > 0,
+      });
       return;
     }
   }

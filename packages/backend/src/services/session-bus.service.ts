@@ -86,6 +86,14 @@ export class SessionBus extends EventEmitter<BusEvents> {
     return this.events;
   }
 
+  getEventLogSize(): number {
+    return this.events.length;
+  }
+
+  getEventLogSlice(start: number, end: number): readonly SessionBusEvent[] {
+    return this.events.slice(start, end);
+  }
+
   /** Clear all state, remove all listeners. */
   dispose(): void {
     this.events = [];
