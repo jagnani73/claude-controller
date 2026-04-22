@@ -138,9 +138,18 @@ export class TranscriptWatcher {
       this.handleAssistant(entry as AssistantEntry);
     } else if (entry.type === "user") {
       this.handleUser(entry as UserEntry);
+    } else if (entry.type === "permission-mode") {
+      const mode = (entry as { permissionMode?: string }).permissionMode;
+      if (typeof mode === "string") {
+        this.bus.push({
+          kind: "permission_mode",
+          sessionId: this.bus.sessionId,
+          timestamp: new Date().toISOString(),
+          mode,
+        });
+      }
     }
-    // other types (system, attachment, permission-mode, file-history-snapshot)
-    // are not surfaced as UI events.
+    // other types (system, attachment, file-history-snapshot) aren't surfaced.
   }
 
   private handleAssistant(entry: AssistantEntry): void {

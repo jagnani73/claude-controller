@@ -18,6 +18,9 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
     }
 
     const args = ["--model", options.model, "--permission-mode", options.permissionMode];
+    if (options.resumeSessionId) {
+      args.push("--resume", options.resumeSessionId);
+    }
     if (options.settingsJson) {
       // Pass via file path, not inline — cmd.exe strips the quotes off inline JSON.
       const settingsPath = join(tmpdir(), `claude-controller-settings-${randomUUID()}.json`);

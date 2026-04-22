@@ -23,6 +23,8 @@ export interface PtySpawnOptions {
   rows: number;
   /** Inline JSON string passed to `claude --settings`. Injects our hooks. */
   settingsJson?: string;
+  /** When set, adds `--resume <id>` to pick up an existing session's transcript. */
+  resumeSessionId?: string;
 }
 
 export interface PtyManagerEvents {

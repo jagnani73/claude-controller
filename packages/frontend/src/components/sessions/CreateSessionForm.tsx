@@ -1,49 +1,55 @@
 import type { ClaudeModel, EffortLevel, PermissionMode, SessionConfig } from "common/types";
-import { useEffect, useState } from "react";
-import { useDirBrowser } from "@/hooks/use-sessions";
+import { useState } from "react";
+import { OptionPills } from "./OptionPills";
 
-const MODEL_OPTIONS: { key: ClaudeModel; label: string }[] = [
-  { key: "opus", label: "Opus 4.7" },
-  { key: "sonnet", label: "Sonnet 4.6" },
-  { key: "haiku", label: "Haiku 4.5" },
+const MODEL_OPTIONS: { value: ClaudeModel; label: string }[] = [
+  { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "haiku", label: "Haiku" },
 ];
 
+const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
+  { value: "default", label: "Default" },
+  { value: "acceptEdits", label: "Accept Edits" },
+  { value: "plan", label: "Plan" },
+  { value: "auto", label: "Auto" },
+];
+
+function effortOptions(
+  model: ClaudeModel,
+): { value: EffortLevel; label: string; hint?: string; disabled?: boolean }[] {
+  return [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+    {
+      value: "xhigh",
+      label: "Extreme",
+      hint: "opus only",
+      disabled: model !== "opus",
+    },
+  ];
+}
+
 interface CreateSessionFormProps {
-  workDir: string;
+  cwd: string;
   onSubmit: (config: SessionConfig) => void;
 }
 
-export function CreateSessionForm({ workDir, onSubmit }: CreateSessionFormProps) {
+export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
   const [model, setModel] = useState<ClaudeModel>("sonnet");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
   const [effort, setEffort] = useState<EffortLevel>("high");
   const [name, setName] = useState("");
 
-  const { currentPath, entries, browse } = useDirBrowser();
-  const dirs = entries.filter((e) => e.isDir);
-
-  // Load root dirs on mount
-  useEffect(() => {
-    if (workDir) browse(workDir);
-  }, [workDir, browse]);
-
-  const handleDirClick = (dirPath: string) => {
-    browse(dirPath);
+  const handleModelChange = (next: ClaudeModel) => {
+    setModel(next);
+    if (next !== "opus" && effort === "xhigh") setEffort("high");
   };
-
-  const parentPath = () => {
-    const separator = currentPath.includes("/") ? "/" : "\\";
-    const parts = currentPath.split(separator);
-    parts.pop();
-    return parts.join(separator);
-  };
-
-  const canGoUp = currentPath !== workDir && currentPath.length > workDir.length;
 
   const handleSubmit = () => {
-    if (!currentPath) return;
     onSubmit({
-      cwd: currentPath,
+      cwd,
       model,
       permissionMode,
       effort,
@@ -52,45 +58,8 @@ export function CreateSessionForm({ workDir, onSubmit }: CreateSessionFormProps)
     setName("");
   };
 
-  const displayPath = currentPath.startsWith(workDir)
-    ? currentPath.slice(workDir.length) || "/"
-    : currentPath;
-
   return (
     <div className="flex flex-col gap-3 p-4">
-      {/* Folder browser */}
-      <div className="rounded-lg bg-neutral-900 ring-1 ring-neutral-800">
-        <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
-          {canGoUp && (
-            <button
-              type="button"
-              onClick={() => browse(parentPath())}
-              className="shrink-0 rounded px-2 py-0.5 text-xs text-neutral-400 transition-colors hover:bg-neutral-800"
-            >
-              ..
-            </button>
-          )}
-          <span className="min-w-0 flex-1 truncate text-xs text-neutral-500">{displayPath}</span>
-        </div>
-        <div className="max-h-40 overflow-y-auto">
-          {dirs.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-neutral-600">No subfolders</div>
-          ) : (
-            dirs.map((entry) => (
-              <button
-                key={entry.path}
-                type="button"
-                onClick={() => handleDirClick(entry.path)}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-300 transition-colors hover:bg-neutral-800"
-              >
-                <span className="text-neutral-600">&#128193;</span>
-                {entry.name}
-              </button>
-            ))
-          )}
-        </div>
-      </div>
-
       <input
         type="text"
         placeholder="Session name (optional)"
@@ -99,47 +68,29 @@ export function CreateSessionForm({ workDir, onSubmit }: CreateSessionFormProps)
         className="rounded-lg bg-neutral-900 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
       />
 
-      <div className="flex gap-3">
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value as ClaudeModel)}
-          className="flex-1 rounded-lg bg-neutral-900 px-3 py-2.5 text-sm text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
-        >
-          {MODEL_OPTIONS.map((m) => (
-            <option key={m.key} value={m.key}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={permissionMode}
-          onChange={(e) => setPermissionMode(e.target.value as PermissionMode)}
-          className="flex-1 rounded-lg bg-neutral-900 px-3 py-2.5 text-sm text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
-        >
-          <option value="default">Default</option>
-          <option value="plan">Plan</option>
-          <option value="acceptEdits">Accept Edits</option>
-          <option value="auto">Auto</option>
-          <option value="bypassPermissions">Bypass</option>
-        </select>
-      </div>
-
-      <select
+      <OptionPills
+        label="Model"
+        value={model}
+        options={MODEL_OPTIONS}
+        onChange={handleModelChange}
+      />
+      <OptionPills
+        label="Permission Mode"
+        value={permissionMode}
+        options={PERMISSION_OPTIONS}
+        onChange={setPermissionMode}
+      />
+      <OptionPills
+        label="Effort"
         value={effort}
-        onChange={(e) => setEffort(e.target.value as EffortLevel)}
-        className="rounded-lg bg-neutral-900 px-3 py-2.5 text-sm text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
-      >
-        <option value="low">Effort: Low</option>
-        <option value="medium">Effort: Medium</option>
-        <option value="high">Effort: High</option>
-        <option value="xhigh">Effort: Extreme (Opus only)</option>
-      </select>
+        options={effortOptions(model)}
+        onChange={setEffort}
+      />
 
       <button
         type="button"
         onClick={handleSubmit}
-        disabled={!currentPath}
-        className="rounded-lg bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-950 transition-opacity disabled:opacity-30"
+        className="rounded-lg bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-950 transition-opacity active:opacity-80"
       >
         Create Session
       </button>

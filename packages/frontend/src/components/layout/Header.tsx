@@ -1,10 +1,14 @@
+import type { PermissionMode } from "common/types";
 import type { ConnectionState } from "@/services/ws.service";
+import { PermissionModeBadge } from "./PermissionModeBadge";
 
 interface HeaderProps {
   title: string;
   connectionState: ConnectionState;
   showBack?: boolean;
   onBack?: () => void;
+  permissionMode?: PermissionMode;
+  onCyclePermissionMode?: () => void;
 }
 
 const stateColors: Record<ConnectionState, string> = {
@@ -13,7 +17,14 @@ const stateColors: Record<ConnectionState, string> = {
   disconnected: "bg-red-500",
 };
 
-export function Header({ title, connectionState, showBack, onBack }: HeaderProps) {
+export function Header({
+  title,
+  connectionState,
+  showBack,
+  onBack,
+  permissionMode,
+  onCyclePermissionMode,
+}: HeaderProps) {
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-neutral-800 bg-neutral-950 px-4">
       {showBack && (
@@ -39,6 +50,9 @@ export function Header({ title, connectionState, showBack, onBack }: HeaderProps
         </button>
       )}
       <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-100">{title}</h1>
+      {permissionMode && (
+        <PermissionModeBadge mode={permissionMode} onCycle={onCyclePermissionMode} />
+      )}
       <span
         className={`h-2 w-2 shrink-0 rounded-full ${stateColors[connectionState]}`}
         title={connectionState}

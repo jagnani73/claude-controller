@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { SessionConfig, SessionInfo, SessionStatus } from "common/types";
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
@@ -11,6 +11,7 @@ import { TranscriptWatcher } from "../services/transcript.service.js";
 import { TranscriptLocator } from "../services/transcript-locator.service.js";
 import type { SessionDeps, SessionEvents } from "../types/index.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
+import { encodedProjectDir } from "../utils/project-sessions.js";
 
 const log = LoggerService.scoped("session");
 
@@ -45,7 +46,20 @@ export class Session extends EventEmitter<SessionEvents> {
       this.emit("exit", info);
     });
 
+    if (config.resumeSessionId) {
+      // Resume case: we already know the transcript file. Tail it directly and
+      // replay history before the first live byte arrives. Also start the
+      // locator in case Claude Code decides to write to a new file instead
+      // of appending (observed behavior varies).
+      const knownPath = join(encodedProjectDir(config.cwd), `${config.resumeSessionId}.jsonl`);
+      this.transcript = new TranscriptWatcher(knownPath, this.bus);
+      void this.transcript.start();
+    }
     this.locator = new TranscriptLocator(config.cwd, (path) => {
+      if (this.transcript && path.endsWith(`${config.resumeSessionId ?? ""}.jsonl`)) {
+        return;
+      }
+      this.transcript?.stop();
       this.transcript = new TranscriptWatcher(path, this.bus);
       void this.transcript.start();
     });
@@ -56,6 +70,7 @@ export class Session extends EventEmitter<SessionEvents> {
       cwd: config.cwd,
       model: config.model,
       permissionMode: config.permissionMode,
+      resume: config.resumeSessionId,
     });
 
     this.pty.spawn({
@@ -65,6 +80,7 @@ export class Session extends EventEmitter<SessionEvents> {
       cols: deps.serverConfig.pty.cols,
       rows: deps.serverConfig.pty.rows,
       settingsJson: buildHooksConfig(deps.hooksBaseUrl, this.id),
+      resumeSessionId: config.resumeSessionId,
     });
   }
 
@@ -95,7 +111,7 @@ export class Session extends EventEmitter<SessionEvents> {
   getInfo(): SessionInfo {
     return {
       id: this.id,
-      name: this.config.name ?? this.config.cwd,
+      name: this.config.name ?? (basename(this.config.cwd) || this.config.cwd),
       status: this.status,
       cwd: this.config.cwd,
       model: this.config.model,

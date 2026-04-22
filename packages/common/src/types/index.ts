@@ -1,13 +1,7 @@
 // ─── Session metadata ─────────────────────────────────────────────
 
 /** Session permission modes matching Claude Code CLI */
-export type PermissionMode =
-  | "default"
-  | "acceptEdits"
-  | "plan"
-  | "auto"
-  | "bypassPermissions"
-  | "dontAsk";
+export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto" | "dontAsk";
 
 /** Session state */
 export type SessionStatus =
@@ -32,6 +26,17 @@ export interface SessionConfig {
   permissionMode: PermissionMode;
   effort?: EffortLevel;
   tags?: string[];
+  /** When set, pass `--resume <id>` to pick up an existing session's transcript. */
+  resumeSessionId?: string;
+}
+
+/** Summary of an existing session on disk that can be resumed. */
+export interface ProjectSessionSummary {
+  id: string;
+  cwd: string;
+  lastModified: number;
+  firstPrompt: string | null;
+  turnCount: number;
 }
 
 /** Session metadata displayed on dashboard */
@@ -98,8 +103,17 @@ export type ServerMessage =
       toolName: string;
       toolInput: unknown;
     }
+  | { type: "session_taken_over"; sessionId: string }
   | { type: "error"; message: string; sessionId?: string }
-  | { type: "dir_list"; path: string; entries: DirEntry[] };
+  | { type: "dir_list"; path: string; entries: DirEntry[] }
+  | {
+      type: "project_sessions";
+      cwd: string;
+      sessions: ProjectSessionSummary[];
+      total: number;
+      offset: number;
+      query: string;
+    };
 
 /** Client → Server messages */
 export type ClientMessage =
@@ -116,4 +130,11 @@ export type ClientMessage =
   | { type: "create_session"; config: SessionConfig }
   | { type: "stop_session"; sessionId: string }
   | { type: "list_dirs"; path: string }
+  | {
+      type: "list_project_sessions";
+      cwd: string;
+      offset?: number;
+      limit?: number;
+      query?: string;
+    }
   | { type: "resize"; sessionId: string; cols: number; rows: number };

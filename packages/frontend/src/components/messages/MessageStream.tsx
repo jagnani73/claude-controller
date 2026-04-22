@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef } from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
+import { ThinkingIndicator } from "@/components/messages/ThinkingIndicator";
 import { ToolCallCard } from "@/components/messages/ToolCallCard";
 import { UserMessage } from "@/components/messages/UserMessage";
 import { useWsMessage } from "@/hooks/use-ws";
@@ -241,13 +242,16 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
     });
   });
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on any new item
+  const lastItem = items[items.length - 1];
+  const waitingForReply = lastItem?.kind === "user";
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on any new item or spinner toggle
   useEffect(() => {
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [items]);
+  }, [items, waitingForReply]);
 
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto bg-neutral-950">
@@ -287,6 +291,7 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
           }
         })
       )}
+      {waitingForReply && <ThinkingIndicator />}
     </div>
   );
 }

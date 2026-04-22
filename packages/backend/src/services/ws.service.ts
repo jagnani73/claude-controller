@@ -4,6 +4,7 @@ import type { ClientMessage, DirEntry, ServerMessage, SessionInfo } from "common
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
 import type { ClientState, ServerConfig } from "../types/index.js";
+import { listProjectSessions } from "../utils/project-sessions.js";
 import type { HooksService } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus, SessionBusEvent } from "./session-bus.service.js";
@@ -92,6 +93,18 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage {
 function subscribeToSession(ws: WebSocket, session: Session): void {
   const state = clients.get(ws);
   if (!state) return;
+
+  // Single-viewer-per-session: evict any other client already watching this session.
+  for (const [otherWs, otherState] of clients) {
+    if (otherWs === ws) continue;
+    if (otherState.subscribedSessionId === session.id) {
+      log.info("Evicting prior subscriber", { sessionId: session.id });
+      otherState.cleanup?.();
+      otherState.subscribedSessionId = null;
+      otherState.cleanup = null;
+      send(otherWs, { type: "session_taken_over", sessionId: session.id });
+    }
+  }
 
   if (state.cleanup) state.cleanup();
 
@@ -227,6 +240,24 @@ function handleMessage(
         type: "dir_list",
         path: resolve(msg.path),
         entries,
+      });
+      return;
+    }
+
+    case "list_project_sessions": {
+      void listProjectSessions(msg.cwd, {
+        offset: msg.offset,
+        limit: msg.limit,
+        query: msg.query,
+      }).then(({ sessions, total, offset, query }) => {
+        send(ws, {
+          type: "project_sessions",
+          cwd: msg.cwd,
+          sessions,
+          total,
+          offset,
+          query,
+        });
       });
       return;
     }

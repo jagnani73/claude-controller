@@ -42,6 +42,12 @@ export type SessionBusEvent =
       toolUseId: string;
       toolName: string;
       toolInput: unknown;
+    }
+  | {
+      kind: "permission_mode";
+      sessionId: string;
+      timestamp: string;
+      mode: string;
     };
 
 type BusEvents = {
