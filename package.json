@@ -1,24 +1,31 @@
 {
-    "name": "claude-controller",
-    "private": true,
-    "scripts": {
-        "dev:backend": "pnpm --filter common build && pnpm --filter backend dev",
-        "dev:frontend": "pnpm --filter frontend dev",
-        "build": "pnpm -r build",
-        "build:backend": "pnpm --filter backend build",
-        "build:frontend": "pnpm --filter frontend build",
-        "lint": "biome check .",
-        "lint:fix": "biome check --write .",
-        "format": "biome format --write .",
-        "format:check": "biome format .",
-        "check": "biome check --write .",
-        "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
-    },
-    "devDependencies": {
-        "@biomejs/biome": "^1.9.0",
-        "typescript": "^5.7.0"
-    },
-    "pnpm": {
-        "onlyBuiltDependencies": ["node-pty", "esbuild", "@biomejs/biome"]
-    }
+  "name": "claude-controller",
+  "private": true,
+  "scripts": {
+    "dev:backend": "pnpm --filter common build && pnpm --filter backend dev",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "build": "pnpm -r build",
+    "build:backend": "pnpm --filter backend build",
+    "build:frontend": "pnpm --filter frontend build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "check": "biome check --write .",
+    "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "typescript": "^5.7.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty",
+      "esbuild",
+      "@biomejs/biome"
+    ]
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }

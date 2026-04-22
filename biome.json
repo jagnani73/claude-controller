@@ -1,78 +1,78 @@
 {
-    "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
-    "vcs": {
-        "enabled": true,
-        "clientKind": "git",
-        "useIgnoreFile": true
-    },
-    "organizeImports": {
-        "enabled": true
-    },
+  "$schema": "https://biomejs.dev/schemas/2.2.0/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": ["**", "!node_modules", "!.next", "!dist", "!build"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
     "formatter": {
-        "enabled": true,
-        "indentStyle": "space",
-        "indentWidth": 4,
-        "lineWidth": 80
-    },
-    "javascript": {
-        "formatter": {
-            "quoteStyle": "double",
-            "semicolons": "always",
-            "trailingCommas": "all",
-            "arrowParentheses": "always",
-            "bracketSpacing": true
-        }
-    },
-    "linter": {
-        "enabled": true,
-        "rules": {
-            "recommended": true,
-            "correctness": {
-                "noUnusedImports": "error",
-                "noUnusedVariables": "warn",
-                "useExhaustiveDependencies": "warn",
-                "useHookAtTopLevel": "error"
-            },
-            "style": {
-                "noNonNullAssertion": "warn",
-                "useConst": "error",
-                "useImportType": "error"
-            },
-            "suspicious": {
-                "noExplicitAny": "warn"
-            }
-        }
-    },
-    "files": {
-        "ignore": [
-            "dist/",
-            "node_modules/",
-            "*.min.js",
-            "bun.lockb",
-            ".claude/"
-        ]
-    },
-    "overrides": [
-        {
-            "include": ["packages/frontend/**/*.tsx", "packages/frontend/**/*.ts"],
-            "linter": {
-                "rules": {
-                    "correctness": {
-                        "useExhaustiveDependencies": "warn",
-                        "useHookAtTopLevel": "error"
-                    }
-                }
-            }
+      "quoteStyle": "double",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true,
+      "bracketSameLine": false
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        "noUnusedFunctionParameters": "error",
+        "useExhaustiveDependencies": "warn",
+        "useHookAtTopLevel": "error"
+      },
+      "style": {
+        "useImportType": "error",
+        "useExportType": "error",
+        "useNodejsImportProtocol": "error",
+        "useConsistentArrayType": {
+          "level": "error",
+          "options": { "syntax": "shorthand" }
         },
-        {
-            "include": ["**/parser.service.ts"],
-            "linter": {
-                "rules": {
-                    "suspicious": {
-                        "noControlCharactersInRegex": "off"
-                    }
-                }
-            }
-        }
-    ]
+        "useTemplate": "error",
+        "noNonNullAssertion": "warn"
+      },
+      "complexity": {
+        "noBannedTypes": "error",
+        "noUselessFragments": "error"
+      },
+      "suspicious": {
+        "noUnknownAtRules": "off",
+        "noExplicitAny": "warn",
+        "noConsole": {
+          "level": "warn",
+          "options": { "allow": ["error", "warn"] }
+        },
+        "noArrayIndexKey": "error",
+        "noDoubleEquals": "error"
+      }
+    },
+    "domains": {
+      "next": "recommended",
+      "react": "recommended"
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  }
 }

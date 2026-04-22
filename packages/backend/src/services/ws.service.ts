@@ -1,288 +1,274 @@
 import { readdirSync } from "node:fs";
 import { normalize, resolve } from "node:path";
-import type { DirListData, EffortLevel, WsMessage } from "common/types";
+import type { ClientMessage, DirEntry, ServerMessage, SessionInfo } from "common/types";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
 import type { ClientState, ServerConfig } from "../types/index.js";
+import type { HooksService } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
+import type { SessionBus, SessionBusEvent } from "./session-bus.service.js";
 import type { SessionManager } from "./session-manager.service.js";
 
 const log = LoggerService.scoped("ws");
 
 const clients = new Map<WebSocket, ClientState>();
 
-function send(ws: WebSocket, msg: WsMessage): void {
-    if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify(msg));
-    }
+function send(ws: WebSocket, msg: ServerMessage): void {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify(msg));
+  }
 }
 
-function listChildDirs(dirPath: string, workDir: string): string[] {
-    const resolved = resolve(dirPath);
-    const normalizedWork = normalize(workDir);
-    if (!resolved.startsWith(normalizedWork)) {
-        return [];
-    }
-    try {
-        return readdirSync(resolved, { withFileTypes: true })
-            .filter((d) => d.isDirectory() && !d.name.startsWith("."))
-            .map((d) => d.name)
-            .sort();
-    } catch {
-        return [];
-    }
+function listChildEntries(dirPath: string, workDir: string): DirEntry[] {
+  const resolved = resolve(dirPath);
+  const normalizedWork = normalize(workDir);
+  if (!resolved.startsWith(normalizedWork)) {
+    return [];
+  }
+  try {
+    return readdirSync(resolved, { withFileTypes: true })
+      .filter((d) => !d.name.startsWith("."))
+      .map((d) => ({
+        name: d.name,
+        path: resolve(resolved, d.name),
+        isDir: d.isDirectory(),
+      }))
+      .sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** Translate a SessionBusEvent into the corresponding WsMessage envelope. */
+function busEventToMessage(event: SessionBusEvent): ServerMessage {
+  switch (event.kind) {
+    case "user_prompt":
+      return {
+        type: "user_prompt",
+        sessionId: event.sessionId,
+        text: event.text,
+        timestamp: event.timestamp,
+      };
+    case "assistant_text":
+      return {
+        type: "assistant_text",
+        sessionId: event.sessionId,
+        text: event.text,
+        turnId: event.turnId,
+        timestamp: event.timestamp,
+      };
+    case "tool_call":
+      return {
+        type: "tool_call",
+        sessionId: event.sessionId,
+        toolUseId: event.toolUseId,
+        name: event.name,
+        input: event.input,
+        timestamp: event.timestamp,
+      };
+    case "tool_result":
+      return {
+        type: "tool_result",
+        sessionId: event.sessionId,
+        toolUseId: event.toolUseId,
+        result: event.result,
+        isError: event.isError,
+        timestamp: event.timestamp,
+      };
+    case "approval_request":
+      return {
+        type: "approval_request",
+        sessionId: event.sessionId,
+        toolUseId: event.toolUseId,
+        toolName: event.toolName,
+        toolInput: event.toolInput,
+      };
+  }
 }
 
 function subscribeToSession(ws: WebSocket, session: Session): void {
-    const state = clients.get(ws);
-    if (!state) return;
+  const state = clients.get(ws);
+  if (!state) return;
 
-    if (state.cleanup) {
-        state.cleanup();
-    }
+  if (state.cleanup) state.cleanup();
 
-    log.info("Client subscribing to session", { sessionId: session.id });
+  log.info("Client subscribing to session", { sessionId: session.id });
 
-    const replayData = session.getReplayBuffer();
-    log.debug("Replaying buffer", { chunks: replayData.length });
-    for (const chunk of replayData) {
-        send(ws, {
-            type: "stream",
-            sessionId: session.id,
-            data: { raw: chunk },
-            timestamp: Date.now(),
-        });
-    }
+  // Replay prior events
+  const bus: SessionBus = session.bus;
+  for (const event of bus.getEventLog()) {
+    send(ws, busEventToMessage(event));
+  }
 
-    const onOutput = (data: string) => {
-        send(ws, {
-            type: "stream",
-            sessionId: session.id,
-            data: { raw: data },
-            timestamp: Date.now(),
-        });
-    };
-
-    const onExit = () => {
-        send(ws, {
-            type: "disconnected",
-            sessionId: session.id,
-            timestamp: Date.now(),
-        });
-    };
-
-    session.on("output", onOutput);
-    session.on("exit", onExit);
-
-    state.subscribedSessionId = session.id;
-    state.cleanup = () => {
-        session.off("output", onOutput);
-        session.off("exit", onExit);
-    };
-
+  const onEvent = (event: SessionBusEvent) => {
+    send(ws, busEventToMessage(event));
+  };
+  const onExit = () => {
     send(ws, {
-        type: "session_metadata",
-        sessionId: session.id,
-        data: session.getInfo(),
-        timestamp: Date.now(),
+      type: "session_stopped",
+      sessionId: session.id,
+      exitCode: null,
     });
+  };
+
+  bus.on("event", onEvent);
+  session.on("exit", onExit);
+
+  state.subscribedSessionId = session.id;
+  state.cleanup = () => {
+    bus.off("event", onEvent);
+    session.off("exit", onExit);
+  };
+
+  send(ws, { type: "session_metadata", session: session.getInfo() });
+}
+
+function broadcast(msg: ServerMessage): void {
+  for (const ws of clients.keys()) send(ws, msg);
+}
+
+export function broadcastSessionCreated(session: SessionInfo): void {
+  broadcast({ type: "session_created", session });
 }
 
 function handleMessage(
-    ws: WebSocket,
-    msg: WsMessage,
-    sessionManager: SessionManager,
-    config: ServerConfig,
+  ws: WebSocket,
+  msg: ClientMessage,
+  sessionManager: SessionManager,
+  hooksService: HooksService,
+  config: ServerConfig,
 ): void {
-    switch (msg.type) {
-        case "input": {
-            const session = msg.sessionId
-                ? sessionManager.get(msg.sessionId)
-                : null;
-            if (!session) {
-                log.warn("Input to unknown session", {
-                    sessionId: msg.sessionId,
-                });
-                send(ws, {
-                    type: "error",
-                    data: { message: "Session not found" },
-                    timestamp: Date.now(),
-                });
-                return;
-            }
-            const data = msg.data as { text: string };
-            log.debug("Forwarding input to session", {
-                sessionId: session.id,
-                text: data.text.slice(0, 500),
-            });
-            session.sendInput(data.text);
-            break;
-        }
-
-        case "command": {
-            const data = msg.data as Record<string, unknown>;
-
-            if (data.action === "create_session") {
-                const sessionConfig = data.config as {
-                    cwd: string;
-                    model: string;
-                    permissionMode: string;
-                    effort?: string;
-                    name?: string;
-                    tags?: string[];
-                };
-                log.info("Creating session", sessionConfig);
-                const session = sessionManager.create({
-                    cwd: sessionConfig.cwd,
-                    model: sessionConfig.model as "opus" | "sonnet" | "haiku",
-                    permissionMode: sessionConfig.permissionMode as
-                        | "default"
-                        | "plan",
-                    effort: sessionConfig.effort as EffortLevel | undefined,
-                    name: sessionConfig.name,
-                    tags: sessionConfig.tags,
-                });
-                subscribeToSession(ws, session);
-
-                // Auto-send /effort after PTY is ready
-                if (sessionConfig.effort) {
-                    setTimeout(() => {
-                        session.sendSlashCommand(
-                            `/effort ${sessionConfig.effort}`,
-                        );
-                    }, 3000);
-                }
-                return;
-            }
-
-            if (data.action === "stop_session") {
-                const id = (data.sessionId ?? msg.sessionId) as string;
-                log.info("Stopping session", { sessionId: id });
-                sessionManager.stop(id);
-                return;
-            }
-
-            if (data.action === "list_sessions") {
-                log.debug("Listing sessions");
-                send(ws, {
-                    type: "connected",
-                    data: { sessions: sessionManager.list() },
-                    timestamp: Date.now(),
-                });
-                return;
-            }
-
-            if (data.action === "list_dirs") {
-                const dirPath = (data.path as string) || config.workDir;
-                log.debug("Listing directories", { path: dirPath });
-                const dirs = listChildDirs(dirPath, config.workDir);
-                const response: DirListData = {
-                    path: resolve(dirPath),
-                    dirs,
-                };
-                send(ws, {
-                    type: "dir_list",
-                    data: response,
-                    timestamp: Date.now(),
-                });
-                return;
-            }
-
-            if (data.action === "subscribe") {
-                const id = (data.sessionId ?? msg.sessionId) as string;
-                const session = sessionManager.get(id);
-                if (!session) {
-                    log.warn("Subscribe to unknown session", {
-                        sessionId: id,
-                    });
-                    send(ws, {
-                        type: "error",
-                        data: { message: "Session not found" },
-                        timestamp: Date.now(),
-                    });
-                    return;
-                }
-                subscribeToSession(ws, session);
-                return;
-            }
-
-            // Slash command
-            if (data.text) {
-                const session = msg.sessionId
-                    ? sessionManager.get(msg.sessionId)
-                    : null;
-                if (session) {
-                    log.debug("Forwarding slash command", {
-                        sessionId: session.id,
-                        command: data.text,
-                    });
-                    session.sendSlashCommand(data.text as string);
-                }
-            }
-            break;
-        }
-
-        case "approve": {
-            const session = msg.sessionId
-                ? sessionManager.get(msg.sessionId)
-                : null;
-            if (session) {
-                log.info("Approving", { sessionId: session.id });
-                session.approve();
-            }
-            break;
-        }
-
-        case "deny": {
-            const session = msg.sessionId
-                ? sessionManager.get(msg.sessionId)
-                : null;
-            if (session) {
-                log.info("Denying", { sessionId: session.id });
-                session.deny();
-            }
-            break;
-        }
+  switch (msg.type) {
+    case "input": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) {
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          message: "Session not found",
+        });
+        return;
+      }
+      log.debug("Forwarding input", {
+        sessionId: msg.sessionId,
+        text: msg.text.slice(0, 500),
+      });
+      session.sendInput(msg.text);
+      return;
     }
+
+    case "slash_command": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) return;
+      log.debug("Slash command", {
+        sessionId: msg.sessionId,
+        command: msg.command,
+      });
+      session.sendSlashCommand(msg.command);
+      return;
+    }
+
+    case "approval_response": {
+      const ok = hooksService.resolveApproval(
+        msg.sessionId,
+        msg.toolUseId,
+        msg.decision,
+        msg.reason,
+      );
+      if (!ok) {
+        log.warn("No pending approval to resolve", {
+          sessionId: msg.sessionId,
+          toolUseId: msg.toolUseId,
+        });
+      }
+      return;
+    }
+
+    case "create_session": {
+      log.info("Creating session", { config: msg.config });
+      const session = sessionManager.create(msg.config);
+      broadcastSessionCreated(session.getInfo());
+      subscribeToSession(ws, session);
+
+      if (msg.config.effort) {
+        setTimeout(() => {
+          session.sendSlashCommand(`/effort ${msg.config.effort}`);
+        }, 3000);
+      }
+      return;
+    }
+
+    case "stop_session": {
+      log.info("Stopping session", { sessionId: msg.sessionId });
+      sessionManager.stop(msg.sessionId);
+      return;
+    }
+
+    case "subscribe": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) {
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          message: "Session not found",
+        });
+        return;
+      }
+      subscribeToSession(ws, session);
+      return;
+    }
+
+    case "list_dirs": {
+      const entries = listChildEntries(msg.path, config.workDir);
+      send(ws, {
+        type: "dir_list",
+        path: resolve(msg.path),
+        entries,
+      });
+      return;
+    }
+
+    case "resize": {
+      const session = sessionManager.get(msg.sessionId);
+      session?.resize(msg.cols, msg.rows);
+      return;
+    }
+  }
 }
 
 export function handleConnection(
-    ws: WebSocket,
-    sessionManager: SessionManager,
-    config: ServerConfig,
+  ws: WebSocket,
+  sessionManager: SessionManager,
+  hooksService: HooksService,
+  config: ServerConfig,
 ): void {
-    clients.set(ws, { subscribedSessionId: null, cleanup: null });
+  clients.set(ws, { subscribedSessionId: null, cleanup: null });
 
-    log.info("Client connected");
+  log.info("Client connected");
 
-    // Send session list + workDir on connect
-    send(ws, {
-        type: "connected",
-        data: {
-            sessions: sessionManager.list(),
-            workDir: config.workDir,
-        },
-        timestamp: Date.now(),
-    });
+  send(ws, {
+    type: "connected",
+    sessions: sessionManager.list(),
+    workDir: config.workDir,
+  });
 
-    ws.on("message", (raw) => {
-        try {
-            const msg = JSON.parse(raw.toString()) as WsMessage;
-            handleMessage(ws, msg, sessionManager, config);
-        } catch (err) {
-            log.error("Invalid message received", { error: err });
-            send(ws, {
-                type: "error",
-                data: { message: "Invalid message format" },
-                timestamp: Date.now(),
-            });
-        }
-    });
+  ws.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString()) as ClientMessage;
+      handleMessage(ws, msg, sessionManager, hooksService, config);
+    } catch (err) {
+      log.error("Invalid message", { error: err });
+      send(ws, { type: "error", message: "Invalid message format" });
+    }
+  });
 
-    ws.on("close", () => {
-        log.info("Client disconnected");
-        const state = clients.get(ws);
-        if (state?.cleanup) state.cleanup();
-        clients.delete(ws);
-    });
+  ws.on("close", () => {
+    log.info("Client disconnected");
+    const state = clients.get(ws);
+    if (state?.cleanup) state.cleanup();
+    clients.delete(ws);
+  });
 }

@@ -1,49 +1,44 @@
-import type { ClaudeModel, PermissionMode, SessionStatus } from "common/types";
+import type { ClaudeModel, PermissionMode } from "common/types";
 
 // ─── Config ──────────────────────────────────────────────────────────
 
 export interface ServerConfig {
-    port: number;
-    host: string;
-    dataDir: string;
-    workDir: string;
-    pty: {
-        cols: number;
-        rows: number;
-    };
-    ringBufferSize: number;
+  port: number;
+  host: string;
+  dataDir: string;
+  workDir: string;
+  pty: {
+    cols: number;
+    rows: number;
+  };
 }
 
 // ─── PTY Service ─────────────────────────────────────────────────────
 
 export interface PtySpawnOptions {
-    cwd: string;
-    model: ClaudeModel;
-    permissionMode: PermissionMode;
-    cols: number;
-    rows: number;
+  cwd: string;
+  model: ClaudeModel;
+  permissionMode: PermissionMode;
+  cols: number;
+  rows: number;
+  /** Inline JSON string passed to `claude --settings`. Injects our hooks. */
+  settingsJson?: string;
 }
 
 export interface PtyManagerEvents {
-    data: [string];
-    exit: [{ exitCode: number; signal?: number }];
+  data: [string];
+  exit: [{ exitCode: number; signal?: number }];
 }
 
 // ─── Session ─────────────────────────────────────────────────────────
 
 export interface SessionEvents {
-    output: [string];
-    status: [SessionStatus];
-    exit: [{ exitCode: number; signal?: number }];
+  exit: [{ exitCode: number; signal?: number }];
 }
-
-// ─── Parser Service ─────────────────────────────────────────────────
-
-export type ParsedHandler = (text: string) => void;
 
 // ─── WebSocket Service ───────────────────────────────────────────────
 
 export interface ClientState {
-    subscribedSessionId: string | null;
-    cleanup: (() => void) | null;
+  subscribedSessionId: string | null;
+  cleanup: (() => void) | null;
 }
