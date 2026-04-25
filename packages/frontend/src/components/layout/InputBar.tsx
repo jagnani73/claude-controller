@@ -1,14 +1,15 @@
-import { ArrowUp, Settings2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { ArrowUp } from "lucide-react";
+import { type ReactNode, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { wsService } from "@/services/ws.service";
 
 interface InputBarProps {
   sessionId: string;
-  onOpenSettings?: () => void;
+  /** Optional element rendered to the left of the textarea (e.g. settings popover trigger). */
+  settingsSlot?: ReactNode;
 }
 
-export function InputBar({ sessionId, onOpenSettings }: InputBarProps) {
+export function InputBar({ sessionId, settingsSlot }: InputBarProps) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -25,20 +26,9 @@ export function InputBar({ sessionId, onOpenSettings }: InputBarProps) {
   };
 
   return (
-    <div className="shrink-0 px-3 pb-2 pt-1 mb-2">
-      <div className="mx-auto flex w-full max-w-4xl items-end gap-2 rounded-2xl border border-border/60 bg-card/80 p-2 backdrop-blur transition-colors focus-within:border-accent/40">
-        {onOpenSettings && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={onOpenSettings}
-            aria-label="Session settings"
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-          >
-            <Settings2 className="size-4" />
-          </Button>
-        )}
+    <div className="mb-2 shrink-0 px-3 pb-2 pt-1">
+      <div className="mx-auto flex w-full max-w-4xl items-center gap-2 rounded-2xl border border-border/60 bg-card/80 p-2 backdrop-blur transition-colors focus-within:border-accent/40">
+        {settingsSlot}
         <textarea
           ref={textareaRef}
           rows={1}

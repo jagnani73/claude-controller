@@ -5,7 +5,7 @@ import { InputBar } from "@/components/layout/InputBar";
 import { SessionTopBar } from "@/components/layout/SessionTopBar";
 import { StatusLine } from "@/components/layout/StatusLine";
 import { MessageStream } from "@/components/messages/MessageStream";
-import { SessionSettingsSheet } from "@/components/sessions/SessionSettingsSheet";
+import { SessionSettingsPopover } from "@/components/sessions/SessionSettingsPopover";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useSessions } from "@/hooks/use-sessions";
@@ -18,7 +18,6 @@ export function SessionView() {
   const { requestBrowse } = useWorkspace();
   const [takenOver, setTakenOver] = useState(false);
   const [notFound, setNotFound] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [statusLine, setStatusLine] = useState("");
 
   useEffect(() => {
@@ -114,16 +113,17 @@ export function SessionView() {
         <MessageStream sessionId={sessionId} />
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-        {settingsOpen && (
-          <SessionSettingsSheet
-            session={session}
-            onClose={() => setSettingsOpen(false)}
-            onSetModel={(m) => setModel(sessionId, m)}
-            onSetEffort={(e) => setEffort(sessionId, e)}
-            onCyclePermissionMode={() => cyclePermissionMode(sessionId)}
-          />
-        )}
-        <InputBar sessionId={sessionId} onOpenSettings={() => setSettingsOpen((o) => !o)} />
+        <InputBar
+          sessionId={sessionId}
+          settingsSlot={
+            <SessionSettingsPopover
+              session={session}
+              onSetModel={(m) => setModel(sessionId, m)}
+              onSetEffort={(e) => setEffort(sessionId, e)}
+              onCyclePermissionMode={() => cyclePermissionMode(sessionId)}
+            />
+          }
+        />
         <StatusLine text={statusLine} />
       </div>
     </div>
