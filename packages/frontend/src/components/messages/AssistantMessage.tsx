@@ -9,9 +9,7 @@ export function AssistantMessage({ text, timestamp }: AssistantMessageProps) {
   return (
     <div className="group/message px-4 py-4">
       <Markdown text={text} />
-      <div className="mt-2 text-[11px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/message:opacity-100">
-        {formatTime(timestamp)}
-      </div>
+      <div className="mt-2 text-[11px] text-muted-foreground/50">{formatTime(timestamp)}</div>
     </div>
   );
 }

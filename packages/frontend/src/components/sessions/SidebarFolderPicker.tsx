@@ -2,6 +2,8 @@ import { ChevronRight, Folder } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useDirBrowser } from "@/hooks/use-sessions";
 import { cn } from "@/lib/utils";
+import { useWorkspace } from "@/lib/workspace-context";
+import { Highlight, normalizeSearch } from "./Highlight";
 
 interface SidebarFolderPickerProps {
   workDir: string;
@@ -35,11 +37,24 @@ function lastSegment(p: string): string {
 
 export function SidebarFolderPicker({ workDir, onPathChange }: SidebarFolderPickerProps) {
   const { currentPath, entries, browse } = useDirBrowser();
-  const dirs = entries.filter((e) => e.isDir);
+  const { pendingBrowse, searchQuery } = useWorkspace();
+  const allDirs = entries.filter((e) => e.isDir);
+  const normQuery = normalizeSearch(searchQuery);
+  const dirs = normQuery
+    ? allDirs.filter((d) => normalizeSearch(d.name).includes(normQuery))
+    : allDirs;
 
   useEffect(() => {
     if (workDir) browse(workDir);
   }, [workDir, browse]);
+
+  // React to external requests to navigate the picker (logo click, session
+  // load, etc). Nonce ensures the effect re-runs even when the same path is
+  // requested twice in a row.
+  useEffect(() => {
+    if (!pendingBrowse) return;
+    if (pendingBrowse.path) browse(pendingBrowse.path);
+  }, [pendingBrowse, browse]);
 
   useEffect(() => {
     onPathChange(currentPath);
@@ -77,7 +92,9 @@ export function SidebarFolderPicker({ workDir, onPathChange }: SidebarFolderPick
       )}
       <div className="flex flex-col gap-0.5">
         {dirs.length === 0 ? (
-          <div className="px-2 py-1 text-[12px] text-muted-foreground/40">No subfolders</div>
+          <div className="px-2 py-1 text-[12px] text-muted-foreground/40">
+            {normQuery ? "No matching folders." : "No subfolders"}
+          </div>
         ) : (
           dirs.map((entry) => (
             <button
@@ -90,7 +107,9 @@ export function SidebarFolderPicker({ workDir, onPathChange }: SidebarFolderPick
                 className="size-3.5 shrink-0 text-muted-foreground/50 transition-colors duration-150 ease-out group-hover:text-accent/80"
                 strokeWidth={1.75}
               />
-              <span className="truncate">{entry.name}</span>
+              <span className="truncate">
+                <Highlight text={entry.name} query={searchQuery} />
+              </span>
             </button>
           ))
         )}

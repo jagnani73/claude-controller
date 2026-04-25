@@ -10,7 +10,7 @@ export function UserMessage({ text, timestamp }: UserMessageProps) {
         <div className="whitespace-pre-wrap break-words text-base leading-relaxed text-foreground/95">
           {text.trim()}
         </div>
-        <div className="mt-1 text-right text-[11px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/message:opacity-100">
+        <div className="mt-1 text-right text-[11px] text-muted-foreground/50">
           {formatTime(timestamp)}
         </div>
       </div>

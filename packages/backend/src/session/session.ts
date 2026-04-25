@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync } from "node:fs";
+import { type FSWatcher, mkdirSync, readFileSync, watch } from "node:fs";
 import { appendFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import type {
   ClaudeModel,
   EffortLevel,
   SessionConfig,
   SessionInfo,
   SessionStatus,
+  SessionStatusSnapshot,
 } from "common/types";
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
@@ -18,7 +20,6 @@ import {
   readDumpedPayload,
   resolveStatusLineCommand,
   runStatusLine,
-  type StatusLinePayload,
   statusLinePayloadPath,
 } from "../services/statusline.service.js";
 import { TranscriptWatcher } from "../services/transcript.service.js";
@@ -50,10 +51,15 @@ export class Session extends EventEmitter<SessionEvents> {
   private currentModel: ClaudeModel;
   private currentEffort: EffortLevel | undefined;
   private statusLineTimer: NodeJS.Timeout | null = null;
+  private statusLineWatcher: FSWatcher | null = null;
+  private statusLineInFlight = false;
+  private statusLinePending = false;
   private lastStatusLine = "";
   private statusLinePayloadFile: string;
   /** Latest model id observed in the transcript (e.g. "claude-opus-4-7"). */
   private currentModelId: string | null = null;
+  private statusSnapshot: SessionStatusSnapshot | null = null;
+  private statusSnapshotKey = "";
 
   get id(): string {
     if (!this._id) throw new Error("Session id not yet resolved");
@@ -72,7 +78,9 @@ export class Session extends EventEmitter<SessionEvents> {
     this.spawnToken = randomUUID();
     this.config = config;
     this.currentModel = config.model;
-    this.currentEffort = config.effort;
+    // Fall back to the user's global default effort when the create config
+    // doesn't specify one (e.g. direct-nav auto-resume from disk discovery).
+    this.currentEffort = config.effort ?? readGlobalDefaultEffort();
     this.createdAt = Date.now();
     this.pty = new PtyService();
 
@@ -156,6 +164,59 @@ export class Session extends EventEmitter<SessionEvents> {
     this.emit("metadataChanged");
   };
 
+  /**
+   * Parse Claude Code's dumped statusline payload and stash the bits the top
+   * bar wants. Emits `metadataChanged` only when something user-visible
+   * changes — payload is dumped on every internal Claude Code render so this
+   * gets called frequently.
+   */
+  private absorbDumpedPayload(json: string): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== "object") return;
+    const p = parsed as Record<string, unknown>;
+    const pick = (path: string): unknown =>
+      path.split(".").reduce<unknown>((acc, key) => {
+        if (acc && typeof acc === "object") return (acc as Record<string, unknown>)[key];
+        return undefined;
+      }, p);
+
+    const numOrUndef = (v: unknown): number | undefined => {
+      const n = typeof v === "string" ? Number(v) : (v as number);
+      return Number.isFinite(n) ? (n as number) : undefined;
+    };
+    const window = (path: string) => {
+      const used = numOrUndef(pick(`${path}.used_percentage`));
+      const resets = numOrUndef(pick(`${path}.resets_at`));
+      if (used === undefined || resets === undefined) return undefined;
+      return { usedPercentage: used, resetsAt: resets };
+    };
+
+    const snapshot: SessionStatusSnapshot = {
+      modelDisplayName:
+        typeof pick("model.display_name") === "string"
+          ? (pick("model.display_name") as string)
+          : undefined,
+      contextUsedPercentage: numOrUndef(pick("context_window.used_percentage")),
+      totalInputTokens: numOrUndef(pick("context_window.total_input_tokens")),
+      totalOutputTokens: numOrUndef(pick("context_window.total_output_tokens")),
+      costUsd: numOrUndef(pick("cost.total_cost_usd")),
+      fiveHour: window("rate_limits.five_hour"),
+      sevenDay: window("rate_limits.seven_day"),
+    };
+
+    // Cheap diff: serialize and compare. Snapshot is small.
+    const key = JSON.stringify(snapshot);
+    if (key === this.statusSnapshotKey) return;
+    this.statusSnapshot = snapshot;
+    this.statusSnapshotKey = key;
+    this.emit("metadataChanged");
+  }
+
   private resolveId(id: string): void {
     if (this._id) return;
     this._id = id;
@@ -169,73 +230,95 @@ export class Session extends EventEmitter<SessionEvents> {
     return this.lastStatusLine;
   }
 
+  /**
+   * Status line is driven by Claude Code itself: it invokes our injected
+   * dump script every time it re-renders its statusline, which writes the
+   * authoritative payload JSON to disk. We `fs.watch` the parent dir and
+   * pick up each write reactively — no stale-data window from a poll loop.
+   *
+   * A 30s safety-net interval covers the case where the OS swallows a watch
+   * event (rare on Windows under heavy I/O).
+   */
   private startStatusLinePolling(): void {
-    const POLL_MS = 5000;
+    const SAFETY_INTERVAL_MS = 30_000;
     let warnedMissing = false;
+
     const tick = async () => {
-      const command = await resolveStatusLineCommand(this.config.cwd);
-      if (!command) {
-        if (!warnedMissing) {
-          log.info("No statusLine configured", { token: this.spawnToken });
-          warnedMissing = true;
-        }
+      if (!this.resolved) return;
+      if (this.statusLineInFlight) {
+        this.statusLinePending = true;
         return;
       }
-      const dumped = await readDumpedPayload(this.statusLinePayloadFile);
-      const payload: StatusLinePayload | string = dumped ?? this.buildStatusLinePayload();
-      const output = await runStatusLine(command, payload);
-      if (output == null) return;
-      const trimmed = output.replace(/\r?\n$/, "");
-      if (trimmed === this.lastStatusLine) return;
-      this.lastStatusLine = trimmed;
-      log.debug("Status line", { token: this.spawnToken, length: trimmed.length });
-      this.emit("statusLine", trimmed);
+      this.statusLineInFlight = true;
+      try {
+        const command = await resolveStatusLineCommand(this.config.cwd);
+        if (!command) {
+          if (!warnedMissing) {
+            log.info("No statusLine configured", { token: this.spawnToken });
+            warnedMissing = true;
+          }
+          return;
+        }
+        const dumped = await readDumpedPayload(this.statusLinePayloadFile);
+        // Refuse to render until Claude Code's first authoritative payload
+        // lands — anything earlier would be synthesized from create-time
+        // defaults (model alias, ctx 0%) and mislead the user.
+        if (!dumped) return;
+        this.absorbDumpedPayload(dumped);
+        const output = await runStatusLine(command, dumped);
+        if (output == null) return;
+        const trimmed = output.replace(/\r?\n$/, "");
+        if (trimmed === this.lastStatusLine) return;
+        this.lastStatusLine = trimmed;
+        log.debug("Status line", { token: this.spawnToken, length: trimmed.length });
+        this.emit("statusLine", trimmed);
+      } finally {
+        this.statusLineInFlight = false;
+        if (this.statusLinePending) {
+          this.statusLinePending = false;
+          void tick().catch((err) =>
+            log.warn("status-line tick failed", {
+              token: this.spawnToken,
+              error: (err as Error).message,
+            }),
+          );
+        }
+      }
     };
-    void tick();
-    this.statusLineTimer = setInterval(() => void tick(), POLL_MS);
-  }
 
-  private buildStatusLinePayload(): StatusLinePayload {
-    const transcriptPath = this.transcript?.path ?? "";
-    const modelId = this.transcript?.lastAssistantModel ?? this.currentModel;
-    const windowSize = contextWindowSize(this.currentModel);
-    const usage = this.transcript?.lastAssistantUsage ?? null;
-    const currentUsage = usage
-      ? (usage.input_tokens ?? 0) +
-        (usage.cache_read_input_tokens ?? 0) +
-        (usage.cache_creation_input_tokens ?? 0)
-      : 0;
-    const usedPct = windowSize > 0 ? (currentUsage / windowSize) * 100 : 0;
-    return {
-      session_id: this.config.resumeSessionId ?? this.id,
-      transcript_path: transcriptPath,
-      cwd: this.config.cwd,
-      permission_mode: this.config.permissionMode,
-      model: { id: modelId, display_name: modelDisplayName(this.currentModel) },
-      workspace: {
-        current_dir: this.config.cwd,
-        project_dir: this.config.cwd,
-        added_dirs: [],
-      },
-      output_style: { name: "default" },
-      version: "",
-      cost: {
-        total_cost_usd: 0,
-        total_duration_ms: 0,
-        total_api_duration_ms: 0,
-        total_lines_added: 0,
-        total_lines_removed: 0,
-      },
-      context_window: {
-        total_input_tokens: this.transcript?.totalInputTokens ?? 0,
-        total_output_tokens: this.transcript?.totalOutputTokens ?? 0,
-        context_window_size: windowSize,
-        current_usage: currentUsage,
-        used_percentage: usedPct,
-        remaining_percentage: Math.max(0, 100 - usedPct),
-      },
-      exceeds_200k_tokens: currentUsage > 200_000,
-    };
+    const safeTick = () =>
+      void tick().catch((err) =>
+        log.warn("status-line tick failed", {
+          token: this.spawnToken,
+          error: (err as Error).message,
+        }),
+      );
+
+    // Ensure the parent dir exists so watch() doesn't throw before Claude
+    // Code's first write creates the file.
+    const watchDir = dirname(this.statusLinePayloadFile);
+    const watchFile = basename(this.statusLinePayloadFile);
+    try {
+      mkdirSync(watchDir, { recursive: true });
+      this.statusLineWatcher = watch(watchDir, (_event, filename) => {
+        if (!filename) return;
+        if (filename.toString() === watchFile) safeTick();
+      });
+      this.statusLineWatcher.on("error", (err) => {
+        log.warn("status-line watcher error", {
+          token: this.spawnToken,
+          error: err.message,
+        });
+      });
+    } catch (err) {
+      log.warn("Could not watch dump dir", {
+        dir: watchDir,
+        error: (err as Error).message,
+      });
+    }
+
+    safeTick();
+    this.statusLineTimer = setInterval(safeTick, SAFETY_INTERVAL_MS);
   }
 
   sendInput(text: string): void {
@@ -281,6 +364,10 @@ export class Session extends EventEmitter<SessionEvents> {
       clearInterval(this.statusLineTimer);
       this.statusLineTimer = null;
     }
+    if (this.statusLineWatcher) {
+      this.statusLineWatcher.close();
+      this.statusLineWatcher = null;
+    }
     this.locator.stop();
     this.transcript?.stop();
     this.pty.kill();
@@ -302,6 +389,7 @@ export class Session extends EventEmitter<SessionEvents> {
       effort: this.currentEffort,
       tags: this.config.tags ?? [],
       createdAt: this.createdAt,
+      statusSnapshot: this.statusSnapshot ?? undefined,
     };
   }
 
@@ -334,23 +422,19 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 }
 
-function contextWindowSize(alias: ClaudeModel): number {
-  return alias === "opus[1m]" || alias === "sonnet[1m]" ? 1_000_000 : 200_000;
-}
+const VALID_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "high", "max"]);
 
-function modelDisplayName(alias: ClaudeModel): string {
-  switch (alias) {
-    case "opus":
-      return "Opus 4.7";
-    case "opus[1m]":
-      return "Opus 4.7 (1M context)";
-    case "opusplan":
-      return "Opus Plan";
-    case "sonnet":
-      return "Sonnet 4.6";
-    case "sonnet[1m]":
-      return "Sonnet 4.6 (1M context)";
-    case "haiku":
-      return "Haiku 4.5";
-  }
+/**
+ * Read the user's global Claude Code default effort from
+ * `~/.claude/settings.json`. Returns undefined when the file is missing,
+ * malformed, or the field isn't one of the levels we recognise.
+ */
+function readGlobalDefaultEffort(): EffortLevel | undefined {
+  try {
+    const raw = readFileSync(join(homedir(), ".claude", "settings.json"), "utf8");
+    const parsed = JSON.parse(raw) as { effortLevel?: unknown };
+    const v = parsed.effortLevel;
+    if (typeof v === "string" && VALID_EFFORTS.has(v)) return v as EffortLevel;
+  } catch {}
+  return undefined;
 }

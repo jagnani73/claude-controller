@@ -1,4 +1,5 @@
 import type { ServerMessage } from "common/types";
+import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
@@ -9,6 +10,9 @@ import { ToolCallCard } from "@/components/messages/ToolCallCard";
 import { UserMessage } from "@/components/messages/UserMessage";
 import { useWsMessage } from "@/hooks/use-ws";
 import { wsService } from "@/services/ws.service";
+
+/** Min consecutive tool cards before we collapse them into a single pill. */
+const TOOL_GROUP_COLLAPSE_THRESHOLD = 3;
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -458,6 +462,40 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
   const waitingForReply =
     !!lastItem && lastItem.kind !== "assistant" && lastItem.kind !== "compact_summary";
 
+  // Manual overrides keyed by the group's first-item id. Default for runs of
+  // ≥ THRESHOLD consecutive `tool` items is "collapsed".
+  const [toolGroupOverride, setToolGroupOverride] = useState<Record<string, "open" | "closed">>({});
+  const toggleToolGroup = useCallback((groupId: string, openByDefault: boolean) => {
+    setToolGroupOverride((prev) => {
+      const current = prev[groupId] ?? (openByDefault ? "open" : "closed");
+      return { ...prev, [groupId]: current === "open" ? "closed" : "open" };
+    });
+  }, []);
+
+  // Walk items and either keep them as-is or wrap a consecutive run of tool
+  // items into a single "tool-group" entry the renderer knows how to handle.
+  type RenderEntry =
+    | { kind: "single"; item: StreamItem }
+    | { kind: "tool-group"; groupId: string; items: Extract<StreamItem, { kind: "tool" }>[] };
+  const renderEntries: RenderEntry[] = [];
+  let cursor = 0;
+  while (cursor < items.length) {
+    const item = items[cursor];
+    if (item.kind === "tool") {
+      const start = cursor;
+      while (cursor < items.length && items[cursor].kind === "tool") cursor++;
+      const run = items.slice(start, cursor) as Extract<StreamItem, { kind: "tool" }>[];
+      if (run.length >= TOOL_GROUP_COLLAPSE_THRESHOLD) {
+        renderEntries.push({ kind: "tool-group", groupId: run[0].id, items: run });
+      } else {
+        for (const r of run) renderEntries.push({ kind: "single", item: r });
+      }
+    } else {
+      renderEntries.push({ kind: "single", item });
+      cursor++;
+    }
+  }
+
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-4xl px-2 pb-6 pt-4">
@@ -472,7 +510,57 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
             Waiting for session to start…
           </div>
         ) : (
-          items.map((item) => {
+          renderEntries.map((entry) => {
+            if (entry.kind === "tool-group") {
+              const isOpen = toolGroupOverride[entry.groupId] === "open";
+              const uniqueTools = Array.from(new Set(entry.items.map((it) => it.toolName)));
+              const preview = uniqueTools.slice(0, 3).join(" · ");
+              const more = uniqueTools.length > 3 ? ` · +${uniqueTools.length - 3} more` : "";
+              return (
+                <div key={`group-${entry.groupId}`} className="px-4">
+                  <button
+                    type="button"
+                    onClick={() => toggleToolGroup(entry.groupId, false)}
+                    className="group/group flex w-full items-center gap-2 rounded-lg border border-dashed border-border/60 bg-card/30 px-3 py-1.5 text-xs text-muted-foreground transition-colors duration-150 ease-out hover:border-accent/40 hover:bg-card/60 hover:text-foreground"
+                  >
+                    {isOpen ? (
+                      <ChevronsDownUp className="size-3.5 text-accent" strokeWidth={2} />
+                    ) : (
+                      <ChevronsUpDown className="size-3.5 text-accent" strokeWidth={2} />
+                    )}
+                    <span className="font-medium">
+                      {isOpen ? "Hide" : "Show"} {entry.items.length} tool calls
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-left font-mono text-[11px] uppercase tracking-wider text-muted-foreground/60">
+                      {preview}
+                      {more}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="mt-1">
+                      {entry.items.map((it) =>
+                        it.toolName === "AskUserQuestion" ? (
+                          <QuestionCard
+                            key={it.id}
+                            toolUseId={it.id}
+                            input={it.input}
+                            result={it.result}
+                          />
+                        ) : (
+                          <ToolCallCard
+                            key={it.id}
+                            toolName={it.toolName}
+                            input={it.input}
+                            result={it.result}
+                          />
+                        ),
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            const item = entry.item;
             switch (item.kind) {
               case "user":
                 return <UserMessage key={item.id} text={item.text} timestamp={item.timestamp} />;
@@ -528,7 +616,7 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
           })
         )}
         {compacting && (
-          <div className="mx-4 my-2 flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/[0.06] px-3 py-2 text-sm text-warning">
+          <div className="mx-4 my-2 flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/6 px-3 py-2 text-sm text-warning">
             <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
             Compacting conversation… Claude will be unresponsive until this finishes.
           </div>

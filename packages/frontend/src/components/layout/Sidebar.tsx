@@ -1,6 +1,7 @@
-import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { PanelLeftClose, Plus, Search, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { SidebarFolderPicker } from "@/components/sessions/SidebarFolderPicker";
 import { SidebarRecentChats } from "@/components/sessions/SidebarRecentChats";
 import { SectionLabel } from "@/components/ui/SectionLabel";
@@ -15,7 +16,8 @@ const SEARCH_DEBOUNCE_MS = 250;
 export function Sidebar() {
   const connectionState = useWsState();
   const { workDir, createSession } = useSessions();
-  const { selectedPath, setSelectedPath, searchQuery, setSearchQuery } = useWorkspace();
+  const { selectedPath, setSelectedPath, searchQuery, setSearchQuery, requestBrowse } =
+    useWorkspace();
   const { collapse } = useSidebarShell();
   const navigate = useNavigate();
   const routerState = useRouterState();
@@ -23,6 +25,7 @@ export function Sidebar() {
   const activeSessionId = params.sessionId;
 
   const [searchDraft, setSearchDraft] = useState(searchQuery);
+  const [resumingId, setResumingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (searchDraft === searchQuery) return;
@@ -40,17 +43,26 @@ export function Sidebar() {
   } = useProjectSessions(isProjectFolder ? selectedPath : null, searchQuery);
 
   const handleResume = async (resumeSessionId: string) => {
-    const session = await createSession({
-      cwd: selectedPath,
-      model: "sonnet",
-      permissionMode: "default",
-      resumeSessionId,
-    });
-    navigate({ to: "/session/$sessionId", params: { sessionId: session.id } });
+    if (resumingId) return;
+    setResumingId(resumeSessionId);
+    try {
+      const session = await createSession({
+        cwd: selectedPath,
+        model: "sonnet",
+        permissionMode: "default",
+        resumeSessionId,
+      });
+      navigate({ to: "/session/$sessionId", params: { sessionId: session.id } });
+    } catch (err) {
+      toast.error("Couldn't resume session", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setResumingId(null);
+    }
   };
 
   const onHomeRoute = routerState.location.pathname === "/";
-  const goHome = () => navigate({ to: "/" });
 
   const connectionTone = connectionState === "connected" ? "success" : "warning";
   const connectionLabel =
@@ -63,9 +75,9 @@ export function Sidebar() {
   return (
     <div className="flex h-full min-w-0 flex-col">
       <div className="flex shrink-0 items-center justify-between gap-1 border-b border-sidebar-border/60 px-3 py-3">
-        <button
-          type="button"
-          onClick={goHome}
+        <Link
+          to="/"
+          onClick={() => workDir && requestBrowse(workDir)}
           className="flex min-w-0 items-center gap-2 text-left transition-opacity duration-150 ease-out hover:opacity-90"
         >
           <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent">
@@ -74,7 +86,7 @@ export function Sidebar() {
           <span className="truncate font-serif text-base leading-none text-foreground">
             Claude Controller
           </span>
-        </button>
+        </Link>
         <button
           type="button"
           onClick={collapse}
@@ -86,15 +98,14 @@ export function Sidebar() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-2 py-3">
-        <button
-          type="button"
-          onClick={goHome}
+        <Link
+          to="/"
           data-active={onHomeRoute || undefined}
           className="flex w-full items-center gap-2 rounded-md border border-accent/30 bg-accent/10 px-2.5 py-2 text-sm font-medium text-foreground transition-colors duration-150 ease-out hover:bg-accent/15"
         >
           <Plus className="size-4 shrink-0 text-accent" strokeWidth={2} />
           <span>New session</span>
-        </button>
+        </Link>
 
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/50" />
@@ -125,6 +136,7 @@ export function Sidebar() {
               onLoadMore={loadMoreRecent}
               onOpen={handleResume}
               activeSessionId={activeSessionId}
+              resumingId={resumingId}
             />
           ) : (
             <div className="px-2 py-2 text-sm text-muted-foreground/50">
@@ -139,9 +151,7 @@ export function Sidebar() {
           <span>{connectionLabel}</span>
         </StatusDot>
         {workDir && (
-          <div className="truncate font-mono text-xs text-muted-foreground/50" dir="rtl">
-            {workDir}
-          </div>
+          <div className="truncate font-mono text-xs text-muted-foreground/50">{workDir}</div>
         )}
       </div>
     </div>

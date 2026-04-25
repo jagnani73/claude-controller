@@ -18,7 +18,7 @@ export function Highlight({ text, query }: HighlightProps) {
   return (
     <>
       {text.slice(0, start)}
-      <mark className="rounded-[3px] bg-amber-400/25 px-[1px] text-amber-100">
+      <mark className="rounded-[3px] bg-accent/25 px-[1px] text-foreground">
         {text.slice(start, end)}
       </mark>
       {text.slice(end)}

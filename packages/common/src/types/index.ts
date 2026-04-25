@@ -43,6 +43,26 @@ export interface ProjectSessionSummary {
   turnCount: number;
 }
 
+/** Optional rate-limit window pulled from Claude Code's dumped status payload. */
+export interface RateLimitWindow {
+  /** 0..100. Percentage of the budget already consumed in this window. */
+  usedPercentage: number;
+  /** Unix epoch (seconds) when the budget resets. */
+  resetsAt: number;
+}
+
+/** Latest snapshot of Claude Code's status payload — surfaced to the top bar. */
+export interface SessionStatusSnapshot {
+  /** Friendly model label, e.g. "Opus 4.7 (1M context)". */
+  modelDisplayName?: string;
+  contextUsedPercentage?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  costUsd?: number;
+  fiveHour?: RateLimitWindow;
+  sevenDay?: RateLimitWindow;
+}
+
 /** Session metadata displayed on dashboard */
 export interface SessionInfo {
   id: string;
@@ -57,6 +77,8 @@ export interface SessionInfo {
   effort?: EffortLevel;
   tags: string[];
   createdAt: number;
+  /** Live snapshot from Claude Code's statusline payload, when available. */
+  statusSnapshot?: SessionStatusSnapshot;
 }
 
 /** Controller config file shape */
@@ -129,7 +151,13 @@ export type ServerMessage =
   | { type: "compact_start"; sessionId: string; trigger: "manual" | "auto" }
   | { type: "compact_end"; sessionId: string; trigger: "manual" | "auto" }
   | { type: "compact_summary"; sessionId: string; text: string; timestamp: string }
-  | { type: "error"; message: string; sessionId?: string }
+  | {
+      type: "error";
+      message: string;
+      sessionId?: string;
+      /** Optional machine-readable code so callers can branch on intent. */
+      code?: "session_not_found" | "create_failed" | "ready_failed";
+    }
   | { type: "dir_list"; path: string; entries: DirEntry[] }
   | {
       type: "project_sessions";

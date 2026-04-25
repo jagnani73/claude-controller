@@ -69,7 +69,7 @@ export function ThinkingIndicator() {
   }, []);
 
   return (
-    <div className="flex items-center gap-2 px-4 py-3 font-serif text-base italic">
+    <div className="flex items-end gap-2 px-4 py-3 font-serif text-base">
       <span className="inline-block w-4 text-center" style={{ color: SPINNER_COLOR }}>
         {SPINNER_CHARS[frame]}
       </span>

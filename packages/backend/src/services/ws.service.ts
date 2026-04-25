@@ -11,6 +11,7 @@ import ignore, { type Ignore } from "ignore";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
 import type { ClientState, ServerConfig } from "../types/index.js";
+import { findSessionByTranscript } from "../utils/find-session.js";
 import { listProjectSessions } from "../utils/project-sessions.js";
 import type { HooksService } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
@@ -323,14 +324,29 @@ function handleMessage(
 
     case "create_session": {
       log.info("Creating session", { config: msg.config });
-      const session = sessionManager.create(msg.config);
+      let session: Session;
+      try {
+        session = sessionManager.create(msg.config);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error("Session creation failed", { error: message });
+        send(ws, { type: "error", message: `Couldn't create session: ${message}` });
+        return;
+      }
       // Wait for Claude Code's session id to resolve (and initial transcript
       // drain on resume) before broadcasting — clients need the real id.
-      void session.ready.then(() => {
-        const info = session.getInfo();
-        if (info) broadcastSessionCreated(info);
-        subscribeToSession(ws, session);
-      });
+      void session.ready.then(
+        () => {
+          const info = session.getInfo();
+          if (info) broadcastSessionCreated(info);
+          subscribeToSession(ws, session);
+        },
+        (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.error("Session never became ready", { error: message });
+          send(ws, { type: "error", message: `Session crashed during startup: ${message}` });
+        },
+      );
 
       if (msg.config.effort) {
         setTimeout(() => {
@@ -347,32 +363,66 @@ function handleMessage(
     }
 
     case "subscribe": {
-      let session = sessionManager.get(msg.sessionId);
-      if (!session) {
-        // Unknown session — if the client sent a resumeConfig (e.g. after a
-        // page refresh or backend restart), auto-create a resume using it.
-        if (!msg.resumeConfig) {
-          send(ws, {
-            type: "error",
-            sessionId: msg.sessionId,
-            message: "Session not found",
+      const session = sessionManager.get(msg.sessionId);
+      if (session) {
+        void session.ready.then(() => subscribeToSession(ws, session));
+        return;
+      }
+      // Unknown session — three fallback paths, in order of fidelity:
+      //   1. Client passed `resumeConfig` from localStorage → use it.
+      //   2. Scan `~/.claude/projects/*` for a transcript with this id and
+      //      auto-resume using the recovered cwd + sane defaults. This is the
+      //      "open /session/<id> directly" path.
+      //   3. Genuinely unknown id → 404 the client.
+      void (async () => {
+        if (msg.resumeConfig) {
+          log.info("Auto-resuming session (client config)", {
+            id: msg.sessionId,
+            cwd: msg.resumeConfig.cwd,
           });
-          return;
-        }
-        log.info("Auto-resuming session", { id: msg.sessionId, cwd: msg.resumeConfig.cwd });
-        session = sessionManager.create({
-          ...msg.resumeConfig,
-          resumeSessionId: msg.sessionId,
-        });
-        const created = session;
-        void created.ready.then(() => {
+          const created = sessionManager.create({
+            ...msg.resumeConfig,
+            resumeSessionId: msg.sessionId,
+          });
+          await created.ready;
           const info = created.getInfo();
           if (info) broadcastSessionCreated(info);
           subscribeToSession(ws, created);
+          return;
+        }
+        const found = await findSessionByTranscript(msg.sessionId);
+        if (found) {
+          log.info("Auto-resuming session (disk discovery)", {
+            id: msg.sessionId,
+            cwd: found.cwd,
+          });
+          const created = sessionManager.create({
+            cwd: found.cwd,
+            model: "sonnet",
+            permissionMode: "default",
+            resumeSessionId: msg.sessionId,
+          });
+          await created.ready;
+          const info = created.getInfo();
+          if (info) broadcastSessionCreated(info);
+          subscribeToSession(ws, created);
+          return;
+        }
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          message: "Session not found",
+          code: "session_not_found",
         });
-        return;
-      }
-      void session.ready.then(() => subscribeToSession(ws, session));
+      })().catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error("Subscribe fallback failed", { id: msg.sessionId, error: message });
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          message: `Subscribe failed: ${message}`,
+        });
+      });
       return;
     }
 

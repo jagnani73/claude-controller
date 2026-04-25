@@ -1,8 +1,11 @@
 import { Outlet } from "@tanstack/react-router";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { type Layout, useGroupRef, usePanelRef } from "react-resizable-panels";
+import { toast } from "sonner";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useWsMessage } from "@/hooks/use-ws";
 import { SidebarShellContext } from "@/lib/sidebar-shell-context";
 import { WorkspaceProvider } from "@/lib/workspace-context";
 import { Sidebar } from "./Sidebar";
@@ -29,6 +32,17 @@ function ShellInner({ children }: { children: ReactNode }) {
   const sidebarRef = usePanelRef();
   const groupRef = useGroupRef();
   const [collapsed, setCollapsed] = useState(false);
+
+  // Surface server-side errors as toasts so the user isn't left guessing.
+  // 404s render a dedicated SessionView empty state, so suppress the toast
+  // for those — otherwise we'd double-up.
+  useWsMessage("error", (msg) => {
+    if (msg.code === "session_not_found") return;
+    toast.error(
+      msg.message,
+      msg.sessionId ? { description: `session ${msg.sessionId}` } : undefined,
+    );
+  });
 
   const expand = useCallback(() => sidebarRef.current?.expand(), [sidebarRef]);
   const collapse = useCallback(() => sidebarRef.current?.collapse(), [sidebarRef]);
@@ -83,6 +97,7 @@ function ShellInner({ children }: { children: ReactNode }) {
           {children}
         </ResizablePanel>
       </ResizablePanelGroup>
+      <Toaster position="bottom-right" richColors closeButton />
     </SidebarShellContext.Provider>
   );
 }

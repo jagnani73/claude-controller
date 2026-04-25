@@ -34,3 +34,13 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGHUP", shutdown);
 process.on("SIGTERM", shutdown);
+
+// Don't let a single throw inside an async timer/promise tear the process
+// down — log and keep serving. Genuine crashes still surface in logs.
+process.on("uncaughtException", (err) => {
+  log.error("uncaughtException", { error: err.message, stack: err.stack });
+});
+process.on("unhandledRejection", (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  log.error("unhandledRejection", { error: err.message, stack: err.stack });
+});

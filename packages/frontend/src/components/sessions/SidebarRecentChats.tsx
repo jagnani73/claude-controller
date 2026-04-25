@@ -1,5 +1,5 @@
 import type { ProjectSessionSummary } from "common/types";
-import { MessageSquare } from "lucide-react";
+import { Loader2, MessageSquare } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -13,6 +13,7 @@ interface SidebarRecentChatsProps {
   onLoadMore: () => void;
   onOpen: (sessionId: string) => void;
   activeSessionId?: string;
+  resumingId?: string | null;
 }
 
 export function SidebarRecentChats({
@@ -23,6 +24,7 @@ export function SidebarRecentChats({
   onLoadMore,
   onOpen,
   activeSessionId,
+  resumingId,
 }: SidebarRecentChatsProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef(onLoadMore);
@@ -54,6 +56,8 @@ export function SidebarRecentChats({
     <div className="flex flex-col gap-0.5">
       {sessions.map((s) => {
         const isActive = s.id === activeSessionId;
+        const isResuming = resumingId === s.id;
+        const isDisabled = !!resumingId && !isResuming;
         const fullPrompt = s.firstPrompt || "(no prompt recorded)";
         return (
           <Tooltip key={s.id} delayDuration={500}>
@@ -61,18 +65,22 @@ export function SidebarRecentChats({
               <button
                 type="button"
                 onClick={() => onOpen(s.id)}
+                disabled={isDisabled || isResuming}
                 data-active={isActive || undefined}
-                className="group flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors duration-150 ease-out hover:bg-sidebar-accent data-[active]:bg-sidebar-accent data-[active]:text-foreground"
+                className="group flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors duration-150 ease-out hover:bg-sidebar-accent disabled:cursor-default data-[active]:bg-sidebar-accent data-[active]:text-foreground"
               >
-                <span className="w-full truncate font-serif text-[14px] leading-tight text-foreground/90">
-                  <Highlight text={fullPrompt} query={query} />
+                <span className="flex w-full items-center gap-1.5">
+                  {isResuming && <Loader2 className="size-3 shrink-0 animate-spin text-accent" />}
+                  <span className="min-w-0 flex-1 truncate font-serif text-[14px] leading-tight text-foreground/90">
+                    <Highlight text={fullPrompt} query={query} />
+                  </span>
                 </span>
                 <span className="flex w-full items-center gap-1.5 text-xs text-muted-foreground/60">
                   <span>
                     {s.turnCount.toLocaleString()} turn{s.turnCount === 1 ? "" : "s"}
                   </span>
                   <span>·</span>
-                  <span>{formatRelative(s.lastModified)}</span>
+                  <span>{isResuming ? "spawning…" : formatRelative(s.lastModified)}</span>
                 </span>
               </button>
             </TooltipTrigger>

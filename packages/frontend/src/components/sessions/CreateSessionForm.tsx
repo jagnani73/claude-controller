@@ -1,4 +1,5 @@
 import type { ClaudeModel, EffortLevel, PermissionMode, SessionConfig } from "common/types";
+import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,7 +16,7 @@ const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
 
 interface CreateSessionFormProps {
   cwd: string;
-  onSubmit: (config: SessionConfig) => void;
+  onSubmit: (config: SessionConfig) => Promise<void> | void;
 }
 
 export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
@@ -23,21 +24,28 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
   const [effort, setEffort] = useState<EffortLevel>("high");
   const [name, setName] = useState("");
+  const [pending, setPending] = useState(false);
 
   const handleModelChange = (next: ClaudeModel) => {
     setModel(next);
     setEffort((prev) => clampEffort(next, prev));
   };
 
-  const handleSubmit = () => {
-    onSubmit({
-      cwd,
-      model,
-      permissionMode,
-      effort,
-      name: name.trim() || undefined,
-    });
-    setName("");
+  const handleSubmit = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await onSubmit({
+        cwd,
+        model,
+        permissionMode,
+        effort,
+        name: name.trim() || undefined,
+      });
+      setName("");
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -74,8 +82,15 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
         onChange={setEffort}
       />
 
-      <Button onClick={handleSubmit} className="mt-1 h-10 text-base">
-        Create session
+      <Button onClick={handleSubmit} disabled={pending} className="mt-1 h-10 text-base">
+        {pending ? (
+          <>
+            <Loader2 className="size-4 animate-spin" />
+            Spawning Claude Code…
+          </>
+        ) : (
+          "Create session"
+        )}
       </Button>
     </Card>
   );

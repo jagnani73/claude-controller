@@ -42,10 +42,27 @@ function readSessionConfig(sessionId: string): PersistedConfig | null {
   }
 }
 
+interface PendingCreate {
+  resolve: (s: SessionInfo) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const CREATE_TIMEOUT_MS = 30_000;
+
 export function useSessions() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [workDir, setWorkDir] = useState<string>("");
-  const pendingCreate = useRef<((s: SessionInfo) => void) | null>(null);
+  const pendingCreate = useRef<PendingCreate | null>(null);
+
+  const settlePending = useCallback((kind: "resolve" | "reject", value: SessionInfo | Error) => {
+    const p = pendingCreate.current;
+    if (!p) return;
+    pendingCreate.current = null;
+    clearTimeout(p.timer);
+    if (kind === "resolve") p.resolve(value as SessionInfo);
+    else p.reject(value as Error);
+  }, []);
 
   useWsMessage("connected", (msg) => {
     setSessions(msg.sessions);
@@ -59,11 +76,12 @@ export function useSessions() {
       return [...prev, msg.session];
     });
     persistSessionConfig(msg.session);
-    const resolver = pendingCreate.current;
-    if (resolver) {
-      pendingCreate.current = null;
-      resolver(msg.session);
-    }
+    settlePending("resolve", msg.session);
+  });
+
+  useWsMessage("error", (msg) => {
+    // Reject any in-flight create_session — error toast is shown at AppShell.
+    settlePending("reject", new Error(msg.message));
   });
 
   useWsMessage("session_stopped", (msg) => {
@@ -109,12 +127,22 @@ export function useSessions() {
   }, []);
 
   /** Send create_session and resolve with the new SessionInfo once the server broadcasts. */
-  const createSession = useCallback((config: SessionConfig): Promise<SessionInfo> => {
-    return new Promise<SessionInfo>((resolve) => {
-      pendingCreate.current = resolve;
-      wsService.send({ type: "create_session", config });
-    });
-  }, []);
+  const createSession = useCallback(
+    (config: SessionConfig): Promise<SessionInfo> => {
+      return new Promise<SessionInfo>((resolve, reject) => {
+        // Reject any prior in-flight create — only one can be pending at a time.
+        if (pendingCreate.current) {
+          settlePending("reject", new Error("Replaced by a newer create_session"));
+        }
+        const timer = setTimeout(() => {
+          settlePending("reject", new Error("Session creation timed out"));
+        }, CREATE_TIMEOUT_MS);
+        pendingCreate.current = { resolve, reject, timer };
+        wsService.send({ type: "create_session", config });
+      });
+    },
+    [settlePending],
+  );
 
   const stopSession = useCallback((sessionId: string) => {
     wsService.send({ type: "stop_session", sessionId });

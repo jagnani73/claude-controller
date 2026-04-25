@@ -16,6 +16,12 @@ class WsService {
   private url: string | null = null;
   private disposed = false;
   /**
+   * Outbound messages queued while the socket isn't yet OPEN. Without this,
+   * a `subscribe` fired from a route-mount useEffect on cold start gets
+   * silently dropped because the connection is still in CONNECTING state.
+   */
+  private outboundQueue: ClientMessage[] = [];
+  /**
    * Some server messages are *stateful* (`connected` carries sessions+workDir)
    * and only fire once per WS lifetime. We cache the latest of each sticky
    * type so a newly-mounted subscriber gets the current state immediately.
@@ -47,6 +53,17 @@ class WsService {
 
   send(msg: ClientMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+      return;
+    }
+    this.outboundQueue.push(msg);
+  }
+
+  private flushOutbound(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const queued = this.outboundQueue;
+    this.outboundQueue = [];
+    for (const msg of queued) {
       this.ws.send(JSON.stringify(msg));
     }
   }
@@ -83,6 +100,7 @@ class WsService {
       this.ws = ws;
       this.reconnectAttempt = 0;
       this.setState("connected");
+      this.flushOutbound();
     };
 
     ws.onmessage = (event) => {

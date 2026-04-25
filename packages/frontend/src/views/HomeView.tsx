@@ -1,6 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { SessionConfig } from "common/types";
 import { FolderOpen, PanelLeftOpen } from "lucide-react";
+import { toast } from "sonner";
 import { CreateSessionForm } from "@/components/sessions/CreateSessionForm";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useSessions } from "@/hooks/use-sessions";
@@ -16,8 +17,14 @@ export function HomeView() {
   const isProjectFolder = !!selectedPath && selectedPath !== workDir;
 
   const handleCreate = async (config: SessionConfig) => {
-    const session = await createSession(config);
-    navigate({ to: "/session/$sessionId", params: { sessionId: session.id } });
+    try {
+      const session = await createSession(config);
+      navigate({ to: "/session/$sessionId", params: { sessionId: session.id } });
+    } catch (err) {
+      toast.error("Couldn't create session", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   return (

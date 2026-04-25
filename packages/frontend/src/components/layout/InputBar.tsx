@@ -25,7 +25,7 @@ export function InputBar({ sessionId, onOpenSettings }: InputBarProps) {
   };
 
   return (
-    <div className="shrink-0 px-3 pb-2 pt-1">
+    <div className="shrink-0 px-3 pb-2 pt-1 mb-2">
       <div className="mx-auto flex w-full max-w-4xl items-end gap-2 rounded-2xl border border-border/60 bg-card/80 p-2 backdrop-blur transition-colors focus-within:border-accent/40">
         {onOpenSettings && (
           <Button
