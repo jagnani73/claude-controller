@@ -3,6 +3,7 @@ import { Loader2, MessageSquare } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatRelative } from "@/lib/utils";
 import { Highlight } from "./Highlight";
 
 interface SidebarRecentChatsProps {
@@ -67,7 +68,7 @@ export function SidebarRecentChats({
                 onClick={() => onOpen(s.id)}
                 disabled={isDisabled || isResuming}
                 data-active={isActive || undefined}
-                className="group flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors duration-150 ease-out hover:bg-sidebar-accent disabled:cursor-default data-[active]:bg-sidebar-accent data-[active]:text-foreground"
+                className="group flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors duration-150 ease-out hover:bg-sidebar-accent disabled:cursor-default data-active:bg-sidebar-accent data-active:text-foreground"
               >
                 <span className="flex w-full items-center gap-1.5">
                   {isResuming && <Loader2 className="size-3 shrink-0 animate-spin text-accent" />}
@@ -114,16 +115,4 @@ export function SidebarRecentChats({
       {!exhausted && !loading && <div ref={sentinelRef} className="h-1" />}
     </div>
   );
-}
-
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(ts).toLocaleDateString();
 }

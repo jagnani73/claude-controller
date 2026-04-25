@@ -1,79 +1,44 @@
-import { createReadStream } from "node:fs";
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { claudeProjectsRoot, streamJsonlEntries } from "./claude-paths.js";
 
 /**
- * Walks `~/.claude/projects/*` looking for `<sessionId>.jsonl`. When found,
- * peeks the first few entries to recover the original `cwd` (which Claude
- * Code records on most entries — folder name encoding is lossy). Returns
- * null when the transcript can't be located.
- *
- * Used to support "open this session id directly" flows where the frontend
- * has no localStorage hint about which workdir the session belongs to.
+ * Supports the "open /session/<id> directly" flow: when the frontend has no
+ * localStorage hint about which workdir a session belongs to, scan every
+ * project dir for the matching transcript and recover the cwd from its body.
  */
 export async function findSessionByTranscript(
   sessionId: string,
 ): Promise<{ cwd: string; transcriptPath: string } | null> {
-  const projectsDir = join(homedir(), ".claude", "projects");
   let projectDirs: string[];
   try {
-    projectDirs = await readdir(projectsDir);
+    projectDirs = await readdir(claudeProjectsRoot());
   } catch {
     return null;
   }
 
   const target = `${sessionId}.jsonl`;
-  for (const project of projectDirs) {
-    const transcriptPath = join(projectsDir, project, target);
-    try {
-      const cwd = await peekCwdFromTranscript(transcriptPath);
-      if (cwd) return { cwd, transcriptPath };
-    } catch {
-      // not in this project — keep scanning
-    }
+  const candidates = projectDirs
+    .map((p) => join(claudeProjectsRoot(), p, target))
+    .filter((path) => existsSync(path));
+  if (candidates.length === 0) return null;
+
+  for (const transcriptPath of candidates) {
+    const cwd = await peekCwdFromTranscript(transcriptPath);
+    if (cwd) return { cwd, transcriptPath };
   }
   return null;
 }
 
-/** Reads up to ~50 lines, returns the first `cwd` it finds in any entry. */
-async function peekCwdFromTranscript(path: string): Promise<string | null> {
-  return await new Promise<string | null>((resolve, reject) => {
-    let stream: ReturnType<typeof createReadStream>;
-    try {
-      stream = createReadStream(path, { encoding: "utf8" });
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    let settled = false;
-    const settle = (value: string | null, err?: Error) => {
-      if (settled) return;
-      settled = true;
-      stream.destroy();
-      if (err) reject(err);
-      else resolve(value);
-    };
-    stream.once("error", (err) => settle(null, err));
+interface CwdEntry {
+  cwd?: unknown;
+}
 
-    const rl = createInterface({ input: stream, crlfDelay: Infinity });
-    let count = 0;
-    rl.on("line", (line) => {
-      if (++count > 50) {
-        settle(null);
-        return;
-      }
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      try {
-        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-        const cwd = parsed.cwd;
-        if (typeof cwd === "string" && cwd.length > 0) settle(cwd);
-      } catch {
-        // malformed line — skip
-      }
-    });
-    rl.on("close", () => settle(null));
-  });
+async function peekCwdFromTranscript(path: string): Promise<string | null> {
+  // Cap reads — `cwd` appears on virtually every transcript entry.
+  for await (const entry of streamJsonlEntries<CwdEntry>(path, { maxLines: 10 })) {
+    if (typeof entry.cwd === "string" && entry.cwd.length > 0) return entry.cwd;
+  }
+  return null;
 }

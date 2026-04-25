@@ -1,18 +1,12 @@
-import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import type { ProjectSessionSummary } from "common/types";
+import { encodedProjectDir, streamJsonlEntries } from "./claude-paths.js";
+
+export { encodedProjectDir };
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-
-/** Map a cwd to Claude Code's encoded project folder. */
-export function encodedProjectDir(cwd: string): string {
-  const encoded = cwd.replaceAll(/[:\\/]/g, "-");
-  return join(homedir(), ".claude", "projects", encoded);
-}
 
 export interface ListProjectSessionsOptions {
   offset?: number;
@@ -122,30 +116,21 @@ export async function listProjectSessions(
  *   1. `custom-title` entry (the user-set session title — authoritative)
  *   2. First real user prompt (ignores command wrappers, tool_result arrays, meta entries)
  */
+interface SummaryEntry {
+  type?: string;
+  isMeta?: boolean;
+  customTitle?: string;
+  message?: { content?: unknown };
+}
+
 async function summarizeTranscript(
   path: string,
 ): Promise<{ firstPrompt: string | null; turnCount: number }> {
-  const stream = createReadStream(path, { encoding: "utf8" });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
-
   let customTitle: string | null = null;
   let firstPrompt: string | null = null;
   let turnCount = 0;
 
-  for await (const line of reader) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let entry: {
-      type?: string;
-      isMeta?: boolean;
-      customTitle?: string;
-      message?: { content?: unknown };
-    };
-    try {
-      entry = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
+  for await (const entry of streamJsonlEntries<SummaryEntry>(path)) {
     if (entry.type === "custom-title" && typeof entry.customTitle === "string") {
       customTitle = entry.customTitle.trim() || null;
     }

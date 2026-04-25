@@ -53,7 +53,6 @@ function ShellInner({ children }: { children: ReactNode }) {
     else handle.collapse();
   }, [sidebarRef]);
 
-  // Mirror collapsed state for consumers (top bar, home view).
   useEffect(() => {
     setCollapsed(sidebarRef.current?.isCollapsed() ?? false);
   }, [sidebarRef]);
@@ -63,7 +62,6 @@ function ShellInner({ children }: { children: ReactNode }) {
       try {
         localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
       } catch {}
-      // Reflect collapse state via the panel handle (size === 0 ⇒ collapsed).
       setCollapsed(sidebarRef.current?.isCollapsed() ?? false);
     },
     [sidebarRef],

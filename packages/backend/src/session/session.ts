@@ -7,6 +7,7 @@ import { basename, dirname, join } from "node:path";
 import type {
   ClaudeModel,
   EffortLevel,
+  RateLimitWindow,
   SessionConfig,
   SessionInfo,
   SessionStatus,
@@ -25,8 +26,8 @@ import {
 import { TranscriptWatcher } from "../services/transcript.service.js";
 import { TranscriptLocator } from "../services/transcript-locator.service.js";
 import type { SessionDeps, SessionEvents } from "../types/index.js";
+import { encodedProjectDir } from "../utils/claude-paths.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
-import { encodedProjectDir } from "../utils/project-sessions.js";
 
 const log = LoggerService.scoped("session");
 
@@ -59,7 +60,6 @@ export class Session extends EventEmitter<SessionEvents> {
   /** Latest model id observed in the transcript (e.g. "claude-opus-4-7"). */
   private currentModelId: string | null = null;
   private statusSnapshot: SessionStatusSnapshot | null = null;
-  private statusSnapshotKey = "";
 
   get id(): string {
     if (!this._id) throw new Error("Session id not yet resolved");
@@ -78,8 +78,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.spawnToken = randomUUID();
     this.config = config;
     this.currentModel = config.model;
-    // Fall back to the user's global default effort when the create config
-    // doesn't specify one (e.g. direct-nav auto-resume from disk discovery).
+    // Fall back to user's global default when config omits effort.
     this.currentEffort = config.effort ?? readGlobalDefaultEffort();
     this.createdAt = Date.now();
     this.pty = new PtyService();
@@ -164,12 +163,8 @@ export class Session extends EventEmitter<SessionEvents> {
     this.emit("metadataChanged");
   };
 
-  /**
-   * Parse Claude Code's dumped statusline payload and stash the bits the top
-   * bar wants. Emits `metadataChanged` only when something user-visible
-   * changes — payload is dumped on every internal Claude Code render so this
-   * gets called frequently.
-   */
+  // Diff-then-emit because Claude Code rewrites the dump on every render,
+  // and downstream metadataChanged listeners trigger session_metadata broadcasts.
   private absorbDumpedPayload(json: string): void {
     let parsed: unknown;
     try {
@@ -209,11 +204,8 @@ export class Session extends EventEmitter<SessionEvents> {
       sevenDay: window("rate_limits.seven_day"),
     };
 
-    // Cheap diff: serialize and compare. Snapshot is small.
-    const key = JSON.stringify(snapshot);
-    if (key === this.statusSnapshotKey) return;
+    if (statusSnapshotsEqual(this.statusSnapshot, snapshot)) return;
     this.statusSnapshot = snapshot;
-    this.statusSnapshotKey = key;
     this.emit("metadataChanged");
   }
 
@@ -422,19 +414,42 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 }
 
+function rateWindowEqual(a: RateLimitWindow | undefined, b: RateLimitWindow | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.usedPercentage === b.usedPercentage && a.resetsAt === b.resetsAt;
+}
+
+function statusSnapshotsEqual(a: SessionStatusSnapshot | null, b: SessionStatusSnapshot): boolean {
+  if (!a) return false;
+  return (
+    a.modelDisplayName === b.modelDisplayName &&
+    a.contextUsedPercentage === b.contextUsedPercentage &&
+    a.totalInputTokens === b.totalInputTokens &&
+    a.totalOutputTokens === b.totalOutputTokens &&
+    a.costUsd === b.costUsd &&
+    rateWindowEqual(a.fiveHour, b.fiveHour) &&
+    rateWindowEqual(a.sevenDay, b.sevenDay)
+  );
+}
+
 const VALID_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "high", "max"]);
 
-/**
- * Read the user's global Claude Code default effort from
- * `~/.claude/settings.json`. Returns undefined when the file is missing,
- * malformed, or the field isn't one of the levels we recognise.
- */
+// Cached: settings.json doesn't change mid-process, so a single sync read
+// at first access beats a fresh read on every Session construction.
+let cachedDefaultEffort: EffortLevel | undefined | null = null;
+
 function readGlobalDefaultEffort(): EffortLevel | undefined {
+  if (cachedDefaultEffort !== null) return cachedDefaultEffort;
   try {
     const raw = readFileSync(join(homedir(), ".claude", "settings.json"), "utf8");
     const parsed = JSON.parse(raw) as { effortLevel?: unknown };
     const v = parsed.effortLevel;
-    if (typeof v === "string" && VALID_EFFORTS.has(v)) return v as EffortLevel;
+    if (typeof v === "string" && VALID_EFFORTS.has(v)) {
+      cachedDefaultEffort = v as EffortLevel;
+      return cachedDefaultEffort;
+    }
   } catch {}
+  cachedDefaultEffort = undefined;
   return undefined;
 }

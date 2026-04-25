@@ -109,14 +109,7 @@ export function SessionView() {
 
   return (
     <div className="flex h-dvh flex-col">
-      <SessionTopBar
-        title={session.name}
-        cwd={session.cwd}
-        model={session.model}
-        currentModelId={session.currentModelId}
-        effort={session.effort}
-        status={session.statusSnapshot}
-      />
+      <SessionTopBar session={session} />
       <div className="min-h-0 flex-1">
         <MessageStream sessionId={sessionId} />
       </div>

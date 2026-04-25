@@ -1,9 +1,4 @@
-import type {
-  ClaudeModel,
-  EffortLevel,
-  RateLimitWindow,
-  SessionStatusSnapshot,
-} from "common/types";
+import type { RateLimitWindow, SessionInfo } from "common/types";
 import { PanelLeftOpen } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -11,24 +6,7 @@ import { useSidebarShell } from "@/lib/sidebar-shell-context";
 import { cn } from "@/lib/utils";
 
 interface SessionTopBarProps {
-  title: string;
-  cwd?: string;
-  model?: ClaudeModel;
-  /** Real Anthropic model id from transcript — preferred over alias when present. */
-  currentModelId?: string;
-  effort?: EffortLevel;
-  status?: SessionStatusSnapshot;
-}
-
-const MODEL_ID_PATTERN = /^claude-([a-z]+)-(\d+)-(\d+)$/;
-
-/** Map "claude-opus-4-7" → "Opus 4.7" with graceful fallback. */
-function modelIdLabel(id: string): string {
-  const m = id.match(MODEL_ID_PATTERN);
-  if (!m) return id;
-  const [, family, major, minor] = m;
-  const name = family.charAt(0).toUpperCase() + family.slice(1);
-  return `${name} ${major}.${minor}`;
+  session: SessionInfo;
 }
 
 function pctTone(pct: number): string {
@@ -45,14 +23,13 @@ function formatReset(epoch: number): string {
   return `${Math.round(secs / 86400)}d`;
 }
 
-// Field-by-field options — `dateStyle`/`timeStyle` can't legally combine with
-// `timeZoneName` in some runtimes and throws "Invalid option : option".
+// `dateStyle`/`timeStyle` cannot be combined with `timeZoneName` in some
+// runtimes — they throw "Invalid option : option". Use field-level options.
 const RESET_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
   hour: "numeric",
   minute: "2-digit",
-  // "short" gives the IANA short name when available (e.g. "PST", "IST").
   timeZoneName: "short",
 });
 
@@ -92,35 +69,16 @@ function QuotaBadge({ label, window }: { label: string; window: RateLimitWindow 
   );
 }
 
-export function SessionTopBar({
-  title,
-  cwd,
-  model,
-  currentModelId,
-  effort,
-  status,
-}: SessionTopBarProps) {
-  // Only show a model label when we have data observed from the live session
-  // (Claude Code's own display name, or the model id from the latest assistant
-  // turn). The create-time alias is unreliable on resumes, so we'd rather show
-  // nothing than mislead — empty space fills as soon as the first dump or
-  // assistant turn arrives.
-  const isOneM = model === "opus[1m]" || model === "sonnet[1m]";
-  const synthesizedFromId = currentModelId ? modelIdLabel(currentModelId) : null;
-  const synthesizedDecorated =
-    synthesizedFromId && isOneM ? `${synthesizedFromId} · 1M` : synthesizedFromId;
-  const modelLabel = status?.modelDisplayName ?? synthesizedDecorated;
-
+export function SessionTopBar({ session }: SessionTopBarProps) {
   const { collapsed, expand } = useSidebarShell();
-
+  const { name: title, cwd, effort, statusSnapshot: status } = session;
+  // Until Claude Code's first dump arrives, every session-detail badge is
+  // unreliable (model alias is wrong on resume, effort can be overridden).
+  // Show the title alone until we have ground truth.
+  const ready = !!status;
   const ctxPct = status?.contextUsedPercentage;
   const inTokens = status?.totalInputTokens;
   const outTokens = status?.totalOutputTokens;
-
-  // Until Claude Code's first dump arrives, we don't trust any of the
-  // session-detail badges (model alias is wrong on resume, effort/permission
-  // can be overridden by the loaded session). Show only the title until then.
-  const ready = !!status;
 
   return (
     <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
@@ -135,15 +93,14 @@ export function SessionTopBar({
         </button>
       )}
 
-      <div className="flex justify-between min-w-0 items-center flex-1 space-y-1">
-        <div className="flex flex-col gap-2 w-full">
+      <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-2">
           <h1 className="truncate font-serif text-lg leading-tight text-foreground">{title}</h1>
-
           {ready && (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              {modelLabel && (
+              {status.modelDisplayName && (
                 <Badge variant="secondary" className="font-mono text-xs tracking-wider">
-                  {modelLabel}
+                  {status.modelDisplayName}
                 </Badge>
               )}
               {effort && (
@@ -159,12 +116,11 @@ export function SessionTopBar({
         </div>
 
         {cwd && (
-          <div className="flex flex-col justify-end gap-2 w-full">
+          <div className="flex min-w-0 max-w-[60%] flex-col items-end gap-2">
             <div className="truncate font-mono text-[11px] text-muted-foreground/60" dir="rtl">
               {cwd}
             </div>
-
-            <div className="flex flex-wrap items-center justify-end gap-2 w-full text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
               {ctxPct !== undefined && (
                 <Tooltip>
                   <TooltipTrigger asChild>

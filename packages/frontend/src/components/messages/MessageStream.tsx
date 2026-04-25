@@ -462,8 +462,6 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
   const waitingForReply =
     !!lastItem && lastItem.kind !== "assistant" && lastItem.kind !== "compact_summary";
 
-  // Manual overrides keyed by the group's first-item id. Default for runs of
-  // ≥ THRESHOLD consecutive `tool` items is "collapsed".
   const [toolGroupOverride, setToolGroupOverride] = useState<Record<string, "open" | "closed">>({});
   const toggleToolGroup = useCallback((groupId: string, openByDefault: boolean) => {
     setToolGroupOverride((prev) => {
@@ -472,8 +470,6 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
     });
   }, []);
 
-  // Walk items and either keep them as-is or wrap a consecutive run of tool
-  // items into a single "tool-group" entry the renderer knows how to handle.
   type RenderEntry =
     | { kind: "single"; item: StreamItem }
     | { kind: "tool-group"; groupId: string; items: Extract<StreamItem, { kind: "tool" }>[] };

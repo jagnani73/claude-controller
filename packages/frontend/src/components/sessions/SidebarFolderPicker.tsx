@@ -48,9 +48,8 @@ export function SidebarFolderPicker({ workDir, onPathChange }: SidebarFolderPick
     if (workDir) browse(workDir);
   }, [workDir, browse]);
 
-  // React to external requests to navigate the picker (logo click, session
-  // load, etc). Nonce ensures the effect re-runs even when the same path is
-  // requested twice in a row.
+  // Nonce-keyed so the same path can be requested twice (e.g. clicking the
+  // logo while already at workDir) and still re-trigger this effect.
   useEffect(() => {
     if (!pendingBrowse) return;
     if (pendingBrowse.path) browse(pendingBrowse.path);
@@ -69,7 +68,6 @@ export function SidebarFolderPicker({ workDir, onPathChange }: SidebarFolderPick
           {crumbs.map((c, i) => {
             const isLast = i === crumbs.length - 1;
             return (
-              // biome-ignore lint/suspicious/noArrayIndexKey: stable per render
               <div key={`${c.path}-${i}`} className="flex items-center gap-0.5">
                 {i > 0 && <ChevronRight className="size-3 text-muted-foreground/40" />}
                 <button

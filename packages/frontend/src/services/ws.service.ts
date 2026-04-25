@@ -21,6 +21,9 @@ class WsService {
    * silently dropped because the connection is still in CONNECTING state.
    */
   private outboundQueue: ClientMessage[] = [];
+  // Cap so a never-opening socket (backend down at boot) can't grow this
+  // unboundedly as the user clicks around.
+  private static readonly OUTBOUND_QUEUE_LIMIT = 200;
   /**
    * Some server messages are *stateful* (`connected` carries sessions+workDir)
    * and only fire once per WS lifetime. We cache the latest of each sticky
@@ -56,7 +59,19 @@ class WsService {
       this.ws.send(JSON.stringify(msg));
       return;
     }
+    // Coalesce repeated subscribes to the same id — common when a route
+    // mount/unmount cycle fires multiple subscribes before the WS opens.
+    if (msg.type === "subscribe") {
+      const last = this.outboundQueue[this.outboundQueue.length - 1];
+      if (last && last.type === "subscribe" && last.sessionId === msg.sessionId) {
+        this.outboundQueue[this.outboundQueue.length - 1] = msg;
+        return;
+      }
+    }
     this.outboundQueue.push(msg);
+    if (this.outboundQueue.length > WsService.OUTBOUND_QUEUE_LIMIT) {
+      this.outboundQueue.splice(0, this.outboundQueue.length - WsService.OUTBOUND_QUEUE_LIMIT);
+    }
   }
 
   private flushOutbound(): void {

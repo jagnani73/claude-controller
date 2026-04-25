@@ -156,7 +156,7 @@ export type ServerMessage =
       message: string;
       sessionId?: string;
       /** Optional machine-readable code so callers can branch on intent. */
-      code?: "session_not_found" | "create_failed" | "ready_failed";
+      code?: "session_not_found";
     }
   | { type: "dir_list"; path: string; entries: DirEntry[] }
   | {

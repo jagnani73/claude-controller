@@ -2,7 +2,6 @@ import { createReadStream, type FSWatcher, watch } from "node:fs";
 import { stat } from "node:fs/promises";
 import type {
   AssistantEntry,
-  AssistantUsage,
   ContentBlock,
   TranscriptEntry,
   UserEntry,
@@ -32,10 +31,7 @@ export class TranscriptWatcher {
   private readInFlight: Promise<void> | null = null;
   private pendingRead = false;
   private initialScan = true;
-  lastAssistantModel: string | null = null;
-  lastAssistantUsage: AssistantUsage | null = null;
-  totalInputTokens = 0;
-  totalOutputTokens = 0;
+  private lastAssistantModel: string | null = null;
 
   constructor(
     readonly path: string,
@@ -177,11 +173,6 @@ export class TranscriptWatcher {
     if (entry.message.model && this.lastAssistantModel !== entry.message.model) {
       this.lastAssistantModel = entry.message.model;
       if (!this.initialScan) this.onModelChange?.(entry.message.model);
-    }
-    if (entry.message.usage) {
-      this.lastAssistantUsage = entry.message.usage;
-      this.totalInputTokens += entry.message.usage.input_tokens ?? 0;
-      this.totalOutputTokens += entry.message.usage.output_tokens ?? 0;
     }
 
     const content: ContentBlock[] = entry.message.content ?? [];

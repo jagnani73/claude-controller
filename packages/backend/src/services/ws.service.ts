@@ -28,29 +28,37 @@ function send(ws: WebSocket, msg: ServerMessage): void {
   }
 }
 
-/**
- * Walks up from `dirPath` until either a `.git` folder is found (= git repo
- * root) or the filesystem root. Collects every `.gitignore` along the way and
- * returns a matcher rooted at the repo root. Returns null if `dirPath` is not
- * inside a git repo — outside repos we don't filter.
- */
-function buildGitignoreMatcher(dirPath: string): { matcher: Ignore; repoRoot: string } | null {
-  let dir = resolve(dirPath);
+// Cached for a short TTL — `list_dirs` fires for every breadcrumb click and
+// folder browse, and a fresh walk + read on each call is wasted work.
+const GITIGNORE_CACHE_TTL_MS = 30_000;
+type CachedMatcher = { matcher: Ignore; repoRoot: string } | null;
+const gitignoreCache = new Map<string, { value: CachedMatcher; expiresAt: number }>();
+
+// Returns null when `dirPath` is outside any git repo — we don't filter then.
+function buildGitignoreMatcher(dirPath: string): CachedMatcher {
+  const key = resolve(dirPath);
+  const now = Date.now();
+  const cached = gitignoreCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const value = computeGitignoreMatcher(key);
+  gitignoreCache.set(key, { value, expiresAt: now + GITIGNORE_CACHE_TTL_MS });
+  return value;
+}
+
+function computeGitignoreMatcher(start: string): CachedMatcher {
+  let dir = start;
   const ignores: Array<{ dir: string; content: string }> = [];
   let repoRoot: string | null = null;
   while (true) {
     if (existsSync(join(dir, ".git"))) {
       repoRoot = dir;
       const gi = join(dir, ".gitignore");
-      if (existsSync(gi)) {
-        ignores.unshift({ dir, content: safeRead(gi) });
-      }
+      if (existsSync(gi)) ignores.unshift({ dir, content: safeRead(gi) });
       break;
     }
     const gi = join(dir, ".gitignore");
-    if (existsSync(gi)) {
-      ignores.unshift({ dir, content: safeRead(gi) });
-    }
+    if (existsSync(gi)) ignores.unshift({ dir, content: safeRead(gi) });
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -58,14 +66,12 @@ function buildGitignoreMatcher(dirPath: string): { matcher: Ignore; repoRoot: st
   if (!repoRoot) return null;
   const matcher = ignore();
   for (const { dir: gd, content } of ignores) {
-    // Patterns relative to the gitignore's dir need re-rooting at repoRoot.
     const prefix = relative(repoRoot, gd).replace(/\\/g, "/");
     const lines = content
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#"));
     for (const line of lines) {
-      // ignore lib expects forward-slash paths and respects negations.
       const pat = prefix && !line.startsWith("/") ? `${prefix}/${line}` : line;
       matcher.add(pat);
     }

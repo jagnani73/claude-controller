@@ -1,6 +1,6 @@
 import { type FSWatcher, readdirSync, watch } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { encodedProjectDir } from "../utils/claude-paths.js";
 import { LoggerService } from "./logger.service.js";
 
 const log = LoggerService.scoped("transcript-locator");
@@ -25,7 +25,7 @@ export class TranscriptLocator {
   ) {}
 
   start(): void {
-    const dir = resolveProjectDir(this.cwd);
+    const dir = encodedProjectDir(this.cwd);
     const seen = new Set<string>(safeReaddir(dir));
     log.debug("watching project dir", { dir, existing: seen.size });
 
@@ -59,12 +59,6 @@ export class TranscriptLocator {
       this.watcher = null;
     }
   }
-}
-
-/** Resolve `D:\Work\claude-controller` → `<home>/.claude/projects/D--Work-claude-controller`. */
-function resolveProjectDir(cwd: string): string {
-  const encoded = cwd.replaceAll(/[:\\/]/g, "-");
-  return join(homedir(), ".claude", "projects", encoded);
 }
 
 function safeReaddir(dir: string): string[] {
