@@ -49,7 +49,10 @@ export interface SessionInfo {
   name: string;
   status: SessionStatus;
   cwd: string;
+  /** Alias passed to `--model` at create time. */
   model: ClaudeModel;
+  /** Latest Anthropic model id observed in the transcript (e.g. "claude-opus-4-7"). */
+  currentModelId?: string;
   permissionMode: PermissionMode;
   effort?: EffortLevel;
   tags: string[];

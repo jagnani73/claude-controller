@@ -1,17 +1,17 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Header } from "@/components/layout/Header";
 import { InputBar } from "@/components/layout/InputBar";
+import { SessionTopBar } from "@/components/layout/SessionTopBar";
 import { StatusLine } from "@/components/layout/StatusLine";
 import { MessageStream } from "@/components/messages/MessageStream";
 import { SessionSettingsSheet } from "@/components/sessions/SessionSettingsSheet";
+import { Button } from "@/components/ui/button";
 import { useSessions } from "@/hooks/use-sessions";
-import { useWsMessage, useWsState } from "@/hooks/use-ws";
+import { useWsMessage } from "@/hooks/use-ws";
 
 export function SessionView() {
   const { sessionId } = useParams({ from: "/session/$sessionId" });
   const navigate = useNavigate();
-  const connectionState = useWsState();
   const { sessions, subscribe, cyclePermissionMode, setModel, setEffort } = useSessions();
   const [takenOver, setTakenOver] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -36,40 +36,38 @@ export function SessionView() {
 
   if (takenOver) {
     return (
-      <div className="flex h-dvh flex-col items-center justify-center gap-4 bg-neutral-950 px-6 text-center text-white">
-        <div className="text-sm text-neutral-400">
+      <div className="flex h-dvh flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="font-serif text-lg text-foreground">Session in use elsewhere</p>
+        <p className="max-w-md text-base text-muted-foreground">
           This session was opened on another device. Stream paused here to keep it exclusive.
-        </div>
+        </p>
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={goHome}
-            className="rounded-lg bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-950 transition-opacity active:opacity-80"
-          >
+          <Button variant="default" onClick={goHome}>
             Back to Home
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="secondary"
             onClick={() => {
               setTakenOver(false);
               subscribe(sessionId);
             }}
-            className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-neutral-200 ring-1 ring-neutral-800 transition-opacity active:opacity-80"
           >
             Reclaim here
-          </button>
+          </Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-dvh flex-col bg-neutral-950 text-white">
-      <Header
+    <div className="flex h-dvh flex-col">
+      <SessionTopBar
         title={session?.name ?? "Session"}
-        connectionState={connectionState}
-        showBack
-        onBack={goHome}
+        cwd={session?.cwd}
+        model={session?.model}
+        currentModelId={session?.currentModelId}
+        permissionMode={session?.permissionMode}
+        effort={session?.effort}
       />
       <div className="min-h-0 flex-1">
         <MessageStream sessionId={sessionId} />

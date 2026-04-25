@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { normalize, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, normalize, relative, resolve, sep } from "node:path";
 import type {
   ClientMessage,
   DirEntry,
@@ -7,6 +7,7 @@ import type {
   ServerMessage,
   SessionInfo,
 } from "common/types";
+import ignore, { type Ignore } from "ignore";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
 import type { ClientState, ServerConfig } from "../types/index.js";
@@ -26,15 +27,77 @@ function send(ws: WebSocket, msg: ServerMessage): void {
   }
 }
 
+/**
+ * Walks up from `dirPath` until either a `.git` folder is found (= git repo
+ * root) or the filesystem root. Collects every `.gitignore` along the way and
+ * returns a matcher rooted at the repo root. Returns null if `dirPath` is not
+ * inside a git repo — outside repos we don't filter.
+ */
+function buildGitignoreMatcher(dirPath: string): { matcher: Ignore; repoRoot: string } | null {
+  let dir = resolve(dirPath);
+  const ignores: Array<{ dir: string; content: string }> = [];
+  let repoRoot: string | null = null;
+  while (true) {
+    if (existsSync(join(dir, ".git"))) {
+      repoRoot = dir;
+      const gi = join(dir, ".gitignore");
+      if (existsSync(gi)) {
+        ignores.unshift({ dir, content: safeRead(gi) });
+      }
+      break;
+    }
+    const gi = join(dir, ".gitignore");
+    if (existsSync(gi)) {
+      ignores.unshift({ dir, content: safeRead(gi) });
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (!repoRoot) return null;
+  const matcher = ignore();
+  for (const { dir: gd, content } of ignores) {
+    // Patterns relative to the gitignore's dir need re-rooting at repoRoot.
+    const prefix = relative(repoRoot, gd).replace(/\\/g, "/");
+    const lines = content
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"));
+    for (const line of lines) {
+      // ignore lib expects forward-slash paths and respects negations.
+      const pat = prefix && !line.startsWith("/") ? `${prefix}/${line}` : line;
+      matcher.add(pat);
+    }
+  }
+  return { matcher, repoRoot };
+}
+
+function safeRead(p: string): string {
+  try {
+    return readFileSync(p, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 function listChildEntries(dirPath: string, workDir: string): DirEntry[] {
   const resolved = resolve(dirPath);
   const normalizedWork = normalize(workDir);
   if (!resolved.startsWith(normalizedWork)) {
     return [];
   }
+  const gi = buildGitignoreMatcher(resolved);
   try {
     return readdirSync(resolved, { withFileTypes: true })
       .filter((d) => !d.name.startsWith("."))
+      .filter((d) => {
+        if (!gi) return true;
+        const full = resolve(resolved, d.name);
+        const rel = relative(gi.repoRoot, full).split(sep).join("/");
+        if (!rel || rel.startsWith("..")) return true;
+        // `ignore` needs a trailing slash for dirs to match dir-only rules.
+        return !gi.matcher.ignores(d.isDirectory() ? `${rel}/` : rel);
+      })
       .map((d) => ({
         name: d.name,
         path: resolve(resolved, d.name),

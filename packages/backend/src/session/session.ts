@@ -52,6 +52,8 @@ export class Session extends EventEmitter<SessionEvents> {
   private statusLineTimer: NodeJS.Timeout | null = null;
   private lastStatusLine = "";
   private statusLinePayloadFile: string;
+  /** Latest model id observed in the transcript (e.g. "claude-opus-4-7"). */
+  private currentModelId: string | null = null;
 
   get id(): string {
     if (!this._id) throw new Error("Session id not yet resolved");
@@ -98,7 +100,7 @@ export class Session extends EventEmitter<SessionEvents> {
     let drainDone: Promise<void> = Promise.resolve();
     if (config.resumeSessionId) {
       const knownPath = join(encodedProjectDir(config.cwd), `${config.resumeSessionId}.jsonl`);
-      this.transcript = new TranscriptWatcher(knownPath, this.bus);
+      this.transcript = new TranscriptWatcher(knownPath, this.bus, this.handleModelChange);
       drainDone = this.transcript.start().catch((err) => {
         log.warn("Initial transcript drain failed", { token: this.spawnToken, error: err });
       });
@@ -116,7 +118,7 @@ export class Session extends EventEmitter<SessionEvents> {
         return;
       }
       this.resolveId(discoveredId);
-      this.transcript = new TranscriptWatcher(path, this.bus);
+      this.transcript = new TranscriptWatcher(path, this.bus, this.handleModelChange);
       void this.transcript.start();
     });
     this.locator.start();
@@ -146,6 +148,13 @@ export class Session extends EventEmitter<SessionEvents> {
 
     this.startStatusLinePolling();
   }
+
+  private handleModelChange = (model: string): void => {
+    if (this.currentModelId === model) return;
+    log.info("Model changed", { token: this.spawnToken, model });
+    this.currentModelId = model;
+    this.emit("metadataChanged");
+  };
 
   private resolveId(id: string): void {
     if (this._id) return;
@@ -288,6 +297,7 @@ export class Session extends EventEmitter<SessionEvents> {
       status: this.status,
       cwd: this.config.cwd,
       model: this.currentModel,
+      currentModelId: this.currentModelId ?? undefined,
       permissionMode: this.config.permissionMode,
       effort: this.currentEffort,
       tags: this.config.tags ?? [],

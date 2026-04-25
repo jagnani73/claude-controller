@@ -40,6 +40,8 @@ export class TranscriptWatcher {
   constructor(
     readonly path: string,
     readonly bus: SessionBus,
+    /** Fires whenever a fresh assistant turn changes the active model. */
+    private readonly onModelChange?: (model: string) => void,
   ) {}
 
   private emitEvent(event: Parameters<SessionBus["push"]>[0]): void {
@@ -53,6 +55,7 @@ export class TranscriptWatcher {
     // Subscribers connecting after start() see them via the event-log tail.
     await this.drain();
     this.initialScan = false;
+    if (this.lastAssistantModel) this.onModelChange?.(this.lastAssistantModel);
     this.watch();
   }
 
@@ -171,7 +174,10 @@ export class TranscriptWatcher {
     const timestamp = entry.timestamp;
     const turnId = entry.message.id;
 
-    if (entry.message.model) this.lastAssistantModel = entry.message.model;
+    if (entry.message.model && this.lastAssistantModel !== entry.message.model) {
+      this.lastAssistantModel = entry.message.model;
+      if (!this.initialScan) this.onModelChange?.(entry.message.model);
+    }
     if (entry.message.usage) {
       this.lastAssistantUsage = entry.message.usage;
       this.totalInputTokens += entry.message.usage.input_tokens ?? 0;

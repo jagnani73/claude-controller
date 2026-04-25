@@ -25,7 +25,7 @@ export function StatusLine({ text }: StatusLineProps) {
   if (!text.trim()) return null;
 
   return (
-    <div className="shrink-0 overflow-x-auto whitespace-pre border-t border-neutral-900 bg-neutral-950 px-3 py-1.5 font-mono text-xs leading-tight text-neutral-400">
+    <div className="shrink-0 overflow-x-auto whitespace-pre border-t border-border/40 bg-background/60 px-3 py-1.5 font-mono text-xs leading-tight text-muted-foreground/80 backdrop-blur">
       {parts.map((part, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: ANSI parts have no stable id
         <span key={i} style={styleFor(part)}>

@@ -7,13 +7,11 @@ interface AssistantMessageProps {
 
 export function AssistantMessage({ text, timestamp }: AssistantMessageProps) {
   return (
-    <div className="px-4 py-3">
-      <div className="mb-1 flex items-center gap-2 text-xs text-neutral-500">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
-        <span>Claude</span>
-        <span className="text-neutral-700">{formatTime(timestamp)}</span>
-      </div>
+    <div className="group/message px-4 py-4">
       <Markdown text={text} />
+      <div className="mt-2 text-[11px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/message:opacity-100">
+        {formatTime(timestamp)}
+      </div>
     </div>
   );
 }

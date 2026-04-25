@@ -69,12 +69,14 @@ export function ThinkingIndicator() {
   }, []);
 
   return (
-    <div className="flex items-center gap-2 px-4 py-3 text-sm">
-      <span className="inline-block w-4 text-center font-medium" style={{ color: SPINNER_COLOR }}>
+    <div className="flex items-center gap-2 px-4 py-3 font-serif text-base italic">
+      <span className="inline-block w-4 text-center" style={{ color: SPINNER_COLOR }}>
         {SPINNER_CHARS[frame]}
       </span>
       <span style={{ color: VERB_COLOR }}>{verbRef.current}…</span>
-      <span className="text-xs text-neutral-600">({elapsed}s)</span>
+      <span className="font-sans text-[11px] not-italic text-muted-foreground/50">
+        ({elapsed}s)
+      </span>
     </div>
   );
 }

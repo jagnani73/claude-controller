@@ -5,14 +5,14 @@ interface UserMessageProps {
 
 export function UserMessage({ text, timestamp }: UserMessageProps) {
   return (
-    <div className="px-4 py-3">
-      <div className="mb-1 flex items-center gap-2 text-xs text-neutral-500">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-sky-400" />
-        <span>You</span>
-        <span className="text-neutral-700">{formatTime(timestamp)}</span>
-      </div>
-      <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-neutral-300">
-        {text}
+    <div className="group/message flex justify-end px-4 py-3">
+      <div className="max-w-[80%] rounded-2xl rounded-br-md border border-border/60 bg-card px-4 py-2.5">
+        <div className="whitespace-pre-wrap break-words text-base leading-relaxed text-foreground/95">
+          {text.trim()}
+        </div>
+        <div className="mt-1 text-right text-[11px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/message:opacity-100">
+          {formatTime(timestamp)}
+        </div>
       </div>
     </div>
   );

@@ -1,9 +1,10 @@
-import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { AppShell } from "./components/layout/AppShell";
 import { HomeView } from "./views/HomeView";
 import { SessionView } from "./views/SessionView";
 
 const rootRoute = createRootRoute({
-  component: () => <Outlet />,
+  component: AppShell,
 });
 
 const indexRoute = createRoute({

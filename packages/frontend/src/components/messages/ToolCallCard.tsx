@@ -1,3 +1,6 @@
+import { ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
+
 interface ToolCallCardProps {
   toolName: string;
   input: unknown;
@@ -5,54 +8,61 @@ interface ToolCallCardProps {
 }
 
 export function ToolCallCard({ toolName, input, result }: ToolCallCardProps) {
+  const status = result === undefined ? "running" : result?.isError ? "error" : "success";
+  const dotClass =
+    status === "running"
+      ? "bg-accent animate-pulse"
+      : status === "error"
+        ? "bg-destructive"
+        : "bg-success";
+
   return (
     <div className="px-4 py-2">
-      <div className="rounded-lg border border-neutral-800 bg-neutral-900/50">
-        <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
-          <span
-            className={`inline-block h-1.5 w-1.5 rounded-full ${
-              result === undefined
-                ? "animate-pulse bg-amber-400"
-                : result?.isError
-                  ? "bg-red-500"
-                  : "bg-emerald-500"
-            }`}
-          />
-          <span className="text-xs font-medium uppercase tracking-wider text-neutral-400">
+      <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60 transition-colors hover:bg-card/80">
+        <div className="flex items-center gap-2 px-3 py-2">
+          <span className={cn("inline-block size-1.5 shrink-0 rounded-full", dotClass)} />
+          <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
             {toolName}
           </span>
-          {result === undefined && (
-            <span className="ml-auto text-xs text-neutral-600">running…</span>
+          {status === "running" && (
+            <span className="ml-auto text-[11px] text-accent/80">running…</span>
           )}
         </div>
-        <details className="group">
-          <summary className="cursor-pointer list-none px-3 py-2 text-xs text-neutral-500 hover:text-neutral-300">
-            <span className="group-open:hidden">Show arguments</span>
-            <span className="hidden group-open:inline">Hide arguments</span>
-          </summary>
-          <pre className="overflow-x-auto border-t border-neutral-800 px-3 py-2 text-xs text-neutral-300">
-            {formatValue(input)}
-          </pre>
-        </details>
+        <DetailsRow label="arguments">{formatValue(input)}</DetailsRow>
         {result && (
-          <details className="group border-t border-neutral-800">
-            <summary className="cursor-pointer list-none px-3 py-2 text-xs text-neutral-500 hover:text-neutral-300">
-              <span className="group-open:hidden">
-                {result.isError ? "Show error" : "Show result"}
-              </span>
-              <span className="hidden group-open:inline">Hide result</span>
-            </summary>
-            <pre
-              className={`overflow-x-auto border-t border-neutral-800 px-3 py-2 text-xs ${
-                result.isError ? "text-red-400" : "text-neutral-300"
-              }`}
-            >
-              {formatValue(result.value)}
-            </pre>
-          </details>
+          <DetailsRow label={result.isError ? "error" : "result"} error={result.isError}>
+            {formatValue(result.value)}
+          </DetailsRow>
         )}
       </div>
     </div>
+  );
+}
+
+function DetailsRow({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: boolean;
+  children: string;
+}) {
+  return (
+    <details className="group/details border-t border-border/40">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+        <ChevronRight className="size-3 transition-transform group-open/details:rotate-90" />
+        <span>{label}</span>
+      </summary>
+      <pre
+        className={cn(
+          "overflow-x-auto border-t border-border/40 bg-muted/30 px-3 py-2 font-mono text-[12px] leading-relaxed",
+          error ? "text-destructive" : "text-foreground/85",
+        )}
+      >
+        {children}
+      </pre>
+    </details>
   );
 }
 

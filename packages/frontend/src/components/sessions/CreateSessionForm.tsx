@@ -1,5 +1,8 @@
 import type { ClaudeModel, EffortLevel, PermissionMode, SessionConfig } from "common/types";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { clampEffort, effortOptionsFor, MODEL_OPTIONS } from "./model-config";
 import { OptionPills } from "./OptionPills";
 
@@ -38,13 +41,18 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
   };
 
   return (
-    <div className="flex flex-col gap-3 p-4">
-      <input
+    <Card className="gap-5 border-border/60 bg-card/60 p-6 backdrop-blur-sm">
+      <div className="space-y-1">
+        <div className="font-mono text-xs text-muted-foreground/70" dir="rtl">
+          {cwd}
+        </div>
+      </div>
+
+      <Input
         type="text"
         placeholder="Session name (optional)"
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="rounded-lg bg-neutral-900 px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
       />
 
       <OptionPills
@@ -54,7 +62,7 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
         onChange={handleModelChange}
       />
       <OptionPills
-        label="Permission Mode"
+        label="Permission mode"
         value={permissionMode}
         options={PERMISSION_OPTIONS}
         onChange={setPermissionMode}
@@ -66,13 +74,9 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
         onChange={setEffort}
       />
 
-      <button
-        type="button"
-        onClick={handleSubmit}
-        className="rounded-lg bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-950 transition-opacity active:opacity-80"
-      >
-        Create Session
-      </button>
-    </div>
+      <Button onClick={handleSubmit} className="mt-1 h-10 text-base">
+        Create session
+      </Button>
+    </Card>
   );
 }

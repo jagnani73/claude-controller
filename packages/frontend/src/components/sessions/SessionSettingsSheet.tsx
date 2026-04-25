@@ -1,5 +1,12 @@
 import type { ClaudeModel, EffortLevel, SessionInfo } from "common/types";
 import { PermissionModeBadge } from "@/components/layout/PermissionModeBadge";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { effortOptionsFor, MODEL_OPTIONS } from "./model-config";
 import { OptionPills } from "./OptionPills";
 
@@ -19,29 +26,16 @@ export function SessionSettingsSheet({
   onCyclePermissionMode,
 }: SessionSettingsSheetProps) {
   return (
-    <>
-      {/* backdrop */}
-      <button
-        type="button"
-        aria-label="Close settings"
-        onClick={onClose}
-        className="fixed inset-0 z-20 bg-black/40"
-      />
-      <div className="absolute inset-x-0 bottom-full z-30 border-t border-neutral-800 bg-neutral-950 px-4 pb-4 pt-3 shadow-2xl">
-        <div className="mb-3 flex items-center justify-between">
-          <span className="text-xs font-medium uppercase tracking-wider text-neutral-500">
-            Session Settings
-          </span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs text-neutral-500 transition-colors active:text-neutral-300"
-          >
-            Close
-          </button>
-        </div>
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="bottom" className="rounded-t-2xl border-border/60 bg-card">
+        <SheetHeader className="border-b border-border/40">
+          <SheetTitle className="font-serif text-lg">Session settings</SheetTitle>
+          <SheetDescription className="font-mono text-xs text-muted-foreground/70">
+            {session.cwd}
+          </SheetDescription>
+        </SheetHeader>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-5 px-4 pb-6 pt-2">
           <OptionPills
             label="Model"
             value={session.model}
@@ -54,17 +48,17 @@ export function SessionSettingsSheet({
             options={effortOptionsFor(session.model)}
             onChange={onSetEffort}
           />
-          <div className="flex flex-col gap-1.5">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-neutral-600">
-              Permission Mode
+          <div className="flex flex-col gap-2">
+            <span className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+              Permission mode
             </span>
-            <div>
+            <div className="flex items-center gap-2">
               <PermissionModeBadge mode={session.permissionMode} onCycle={onCyclePermissionMode} />
-              <span className="ml-2 text-[11px] text-neutral-600">Tap to cycle</span>
+              <span className="text-xs text-muted-foreground/60">Tap to cycle</span>
             </div>
           </div>
         </div>
-      </div>
-    </>
+      </SheetContent>
+    </Sheet>
   );
 }

@@ -459,78 +459,82 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
     !!lastItem && lastItem.kind !== "assistant" && lastItem.kind !== "compact_summary";
 
   return (
-    <div ref={scrollRef} className="h-full overflow-y-auto bg-neutral-950">
-      {hasMore && <div ref={topSentinelRef} className="h-1" />}
-      {loadingHistory && (
-        <div className="px-4 py-2 text-center text-xs text-neutral-600">
-          Loading earlier messages…
-        </div>
-      )}
-      {items.length === 0 && !loadingHistory ? (
-        <div className="flex h-full items-center justify-center text-sm text-neutral-600">
-          Waiting for session to start…
-        </div>
-      ) : (
-        items.map((item) => {
-          switch (item.kind) {
-            case "user":
-              return <UserMessage key={item.id} text={item.text} timestamp={item.timestamp} />;
-            case "assistant":
-              return <AssistantMessage key={item.id} text={item.text} timestamp={item.timestamp} />;
-            case "tool":
-              if (item.toolName === "AskUserQuestion") {
+    <div ref={scrollRef} className="h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-4xl px-2 pb-6 pt-4">
+        {hasMore && <div ref={topSentinelRef} className="h-1" />}
+        {loadingHistory && (
+          <div className="px-4 py-2 text-center text-sm text-muted-foreground/60">
+            Loading earlier messages…
+          </div>
+        )}
+        {items.length === 0 && !loadingHistory ? (
+          <div className="flex h-full min-h-[60vh] items-center justify-center font-serif text-base italic text-muted-foreground/60">
+            Waiting for session to start…
+          </div>
+        ) : (
+          items.map((item) => {
+            switch (item.kind) {
+              case "user":
+                return <UserMessage key={item.id} text={item.text} timestamp={item.timestamp} />;
+              case "assistant":
                 return (
-                  <QuestionCard
+                  <AssistantMessage key={item.id} text={item.text} timestamp={item.timestamp} />
+                );
+              case "tool":
+                if (item.toolName === "AskUserQuestion") {
+                  return (
+                    <QuestionCard
+                      key={item.id}
+                      toolUseId={item.id}
+                      input={item.input}
+                      result={item.result}
+                    />
+                  );
+                }
+                return (
+                  <ToolCallCard
                     key={item.id}
-                    toolUseId={item.id}
+                    toolName={item.toolName}
                     input={item.input}
                     result={item.result}
                   />
                 );
-              }
-              return (
-                <ToolCallCard
-                  key={item.id}
-                  toolName={item.toolName}
-                  input={item.input}
-                  result={item.result}
-                />
-              );
-            case "approval":
-              return (
-                <ApprovalCard
-                  key={item.id}
-                  sessionId={item.sessionId}
-                  toolUseId={item.id}
-                  toolName={item.toolName}
-                  toolInput={item.toolInput}
-                  resolved={item.resolved}
-                />
-              );
-            case "compact_summary":
-              return (
-                <div
-                  key={item.id}
-                  className="mx-3 my-4 rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-3"
-                >
-                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-                    Conversation compacted
+              case "approval":
+                return (
+                  <ApprovalCard
+                    key={item.id}
+                    sessionId={item.sessionId}
+                    toolUseId={item.id}
+                    toolName={item.toolName}
+                    toolInput={item.toolInput}
+                    resolved={item.resolved}
+                  />
+                );
+              case "compact_summary":
+                return (
+                  <div
+                    key={item.id}
+                    className="mx-4 my-4 rounded-xl border border-border/60 bg-card/60 px-4 py-3"
+                  >
+                    <div className="mb-2 font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+                      Conversation compacted
+                    </div>
+                    <Markdown text={item.text} />
                   </div>
-                  <Markdown text={item.text} />
-                </div>
-              );
-            default:
-              return null;
-          }
-        })
-      )}
-      {compacting && (
-        <div className="mx-3 my-2 flex items-center gap-2 rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
-          Compacting conversation… Claude will be unresponsive until this finishes.
-        </div>
-      )}
-      {waitingForReply && !compacting && <ThinkingIndicator />}
+                );
+              default:
+                return null;
+            }
+          })
+        )}
+        {compacting && (
+          <div className="mx-4 my-2 flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/[0.06] px-3 py-2 text-sm text-warning">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
+            Compacting conversation… Claude will be unresponsive until this finishes.
+          </div>
+        )}
+        {waitingForReply && !compacting && <ThinkingIndicator />}
+      </div>
     </div>
   );
 }

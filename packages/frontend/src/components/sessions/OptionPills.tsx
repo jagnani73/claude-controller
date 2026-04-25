@@ -1,3 +1,6 @@
+import { Pill } from "@/components/ui/Pill";
+import { SectionLabel } from "@/components/ui/SectionLabel";
+
 interface Option<T extends string> {
   value: T;
   label: string;
@@ -19,45 +22,20 @@ export function OptionPills<T extends string>({
   onChange,
 }: OptionPillsProps<T>) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-neutral-600">
-        {label}
-      </span>
+    <div className="flex flex-col gap-2">
+      <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-1.5">
-        {options.map((opt) => {
-          const selected = opt.value === value;
-          const disabled = opt.disabled;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onChange(opt.value)}
-              disabled={disabled}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                disabled
-                  ? "cursor-not-allowed bg-neutral-950 text-neutral-700 ring-1 ring-neutral-900"
-                  : selected
-                    ? "bg-neutral-100 text-neutral-950"
-                    : "bg-neutral-900 text-neutral-400 ring-1 ring-neutral-800 hover:bg-neutral-800 hover:text-neutral-200"
-              }`}
-            >
-              {opt.label}
-              {opt.hint && (
-                <span
-                  className={`ml-1 text-[10px] ${
-                    disabled
-                      ? "text-neutral-700"
-                      : selected
-                        ? "text-neutral-500"
-                        : "text-neutral-600"
-                  }`}
-                >
-                  {opt.hint}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {options.map((opt) => (
+          <Pill
+            key={opt.value}
+            selected={opt.value === value}
+            disabled={opt.disabled}
+            meta={opt.hint}
+            onClick={() => onChange(opt.value)}
+          >
+            {opt.label}
+          </Pill>
+        ))}
       </div>
     </div>
   );

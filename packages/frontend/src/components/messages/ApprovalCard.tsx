@@ -1,4 +1,7 @@
+import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { wsService } from "@/services/ws.service";
 
 interface ApprovalCardProps {
@@ -45,26 +48,28 @@ export function ApprovalCard({
 
   return (
     <div className="px-4 py-2">
-      <div className="rounded-lg border border-amber-800/50 bg-amber-950/30">
-        <div className="flex items-center gap-2 border-b border-amber-900/50 px-3 py-2">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
-          <span className="text-xs font-medium uppercase tracking-wider text-amber-300">
-            Approval needed · {toolName}
+      <div className="overflow-hidden rounded-xl border border-accent/40 bg-accent/[0.04]">
+        <div className="flex items-center gap-2 border-b border-accent/30 px-3 py-2">
+          <ShieldCheck className="size-3.5 text-accent" strokeWidth={2} />
+          <span className="font-mono text-xs uppercase tracking-wider text-accent">
+            Approval needed
           </span>
+          <span className="text-xs text-muted-foreground">·</span>
+          <span className="font-mono text-xs text-foreground/80">{toolName}</span>
         </div>
-        <pre className="overflow-x-auto border-b border-amber-900/50 px-3 py-2 text-xs text-amber-100">
+        <pre className="overflow-x-auto border-b border-accent/20 bg-muted/20 px-3 py-2 font-mono text-[12px] text-foreground/85">
           {formatValue(toolInput)}
         </pre>
         {decision ? (
-          <div className="px-3 py-3 text-center text-xs text-neutral-500">
+          <div className="px-3 py-3 text-center text-sm text-muted-foreground">
             {decision === "allow" ? "Approved" : "Denied"}
             {decision === "deny" && reason.trim() && (
-              <div className="mt-1 text-neutral-600">"{reason.trim()}"</div>
+              <div className="mt-1 text-muted-foreground/70">"{reason.trim()}"</div>
             )}
           </div>
         ) : denyMode ? (
           <div className="flex flex-col gap-2 p-2">
-            <input
+            <Input
               // biome-ignore lint/a11y/noAutofocus: focusing the reason field on deny click is intentional
               autoFocus
               type="text"
@@ -75,41 +80,28 @@ export function ApprovalCard({
                 if (e.key === "Enter") confirmDeny();
                 if (e.key === "Escape") setDenyMode(false);
               }}
-              className="w-full rounded-md bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 outline-none ring-1 ring-amber-900/50 focus:ring-amber-700"
             />
             <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setDenyMode(false)}
-                className="flex-1 rounded-md bg-neutral-800 px-3 py-2 text-sm font-medium text-neutral-300 transition-opacity active:opacity-80"
-              >
+              <Button variant="ghost" className="flex-1" onClick={() => setDenyMode(false)}>
                 Back
-              </button>
-              <button
-                type="button"
-                onClick={confirmDeny}
-                className="flex-1 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-opacity active:opacity-80"
-              >
+              </Button>
+              <Button variant="destructive" className="flex-1" onClick={confirmDeny}>
                 Deny
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
           <div className="flex gap-2 p-2">
-            <button
-              type="button"
-              onClick={approve}
-              className="flex-1 rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition-opacity active:opacity-80"
-            >
+            <Button onClick={approve} className="flex-1">
               Approve
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="ghost"
+              className="flex-1 text-muted-foreground hover:text-destructive"
               onClick={() => setDenyMode(true)}
-              className="flex-1 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-opacity active:opacity-80"
             >
               Deny…
-            </button>
+            </Button>
           </div>
         )}
       </div>

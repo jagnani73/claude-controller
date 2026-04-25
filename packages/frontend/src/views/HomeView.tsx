@@ -1,92 +1,60 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { SessionConfig } from "common/types";
-import { useCallback, useState } from "react";
-import { Header } from "@/components/layout/Header";
+import { FolderOpen, PanelLeftOpen } from "lucide-react";
 import { CreateSessionForm } from "@/components/sessions/CreateSessionForm";
-import { FolderPicker } from "@/components/sessions/FolderPicker";
-import { RecentChats } from "@/components/sessions/RecentChats";
-import { useProjectSessions, useSessions } from "@/hooks/use-sessions";
-import { useWsState } from "@/hooks/use-ws";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { useSessions } from "@/hooks/use-sessions";
+import { useSidebarShell } from "@/lib/sidebar-shell-context";
+import { useWorkspace } from "@/lib/workspace-context";
 
 export function HomeView() {
-  const connectionState = useWsState();
   const navigate = useNavigate();
   const { workDir, createSession } = useSessions();
+  const { selectedPath } = useWorkspace();
+  const { collapsed, expand } = useSidebarShell();
 
-  const [selectedPath, setSelectedPath] = useState("");
-  const [recentQuery, setRecentQuery] = useState("");
   const isProjectFolder = !!selectedPath && selectedPath !== workDir;
-
-  const handlePathChange = useCallback((path: string) => {
-    setSelectedPath(path);
-    setRecentQuery("");
-  }, []);
-
-  const {
-    sessions: recentChats,
-    total: recentTotal,
-    loading: recentLoading,
-    exhausted: recentExhausted,
-    loadMore: loadMoreRecent,
-  } = useProjectSessions(isProjectFolder ? selectedPath : null, recentQuery);
-
-  const openSession = (sessionId: string) => {
-    navigate({ to: "/session/$sessionId", params: { sessionId } });
-  };
 
   const handleCreate = async (config: SessionConfig) => {
     const session = await createSession(config);
-    openSession(session.id);
-  };
-
-  const handleResume = async (resumeSessionId: string) => {
-    const session = await createSession({
-      cwd: selectedPath,
-      model: "sonnet",
-      permissionMode: "default",
-      resumeSessionId,
-    });
-    openSession(session.id);
+    navigate({ to: "/session/$sessionId", params: { sessionId: session.id } });
   };
 
   return (
-    <div className="flex h-dvh flex-col bg-neutral-950 text-white">
-      <Header title="Claude Controller" connectionState={connectionState} />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="px-4 py-4">
-          <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-neutral-600">
-            Project Folder
-          </div>
-          <FolderPicker workDir={workDir} onPathChange={handlePathChange} />
+    <div className="flex h-dvh min-h-0 flex-col">
+      {collapsed && (
+        <div className="flex shrink-0 items-center px-3 py-2">
+          <button
+            type="button"
+            onClick={expand}
+            aria-label="Show sidebar"
+            className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-card hover:text-foreground"
+          >
+            <PanelLeftOpen className="size-4" strokeWidth={1.75} />
+          </button>
         </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-6 py-12 md:py-20">
+          <header className="space-y-2">
+            <h1 className="font-serif text-3xl text-foreground">Start a new session</h1>
+            <p className="text-base text-muted-foreground">
+              {isProjectFolder
+                ? "Configure how Claude Code will run, then create the session."
+                : "Pick a project folder in the sidebar to get started."}
+            </p>
+          </header>
 
-        {isProjectFolder && (
-          <>
-            <div className="border-t border-neutral-800">
-              <div className="px-4 pt-4 text-xs font-medium uppercase tracking-wider text-neutral-600">
-                Recent Chats
-                {recentTotal > 0 && (
-                  <span className="ml-1 text-neutral-700">({recentTotal.toLocaleString()})</span>
-                )}
-              </div>
-              <RecentChats
-                sessions={recentChats}
-                loading={recentLoading}
-                exhausted={recentExhausted}
-                query={recentQuery}
-                onQueryChange={setRecentQuery}
-                onLoadMore={loadMoreRecent}
-                onOpen={handleResume}
-              />
-            </div>
-            <div className="border-t border-neutral-800">
-              <div className="px-4 pt-4 text-xs font-medium uppercase tracking-wider text-neutral-600">
-                New Session
-              </div>
-              <CreateSessionForm cwd={selectedPath} onSubmit={handleCreate} />
-            </div>
-          </>
-        )}
+          {isProjectFolder ? (
+            <CreateSessionForm cwd={selectedPath} onSubmit={handleCreate} />
+          ) : (
+            <EmptyState
+              icon={FolderOpen}
+              title="No folder selected"
+              description="Use the sidebar to browse to a project folder. Past chats and the new-session form will appear here."
+            />
+          )}
+        </div>
       </div>
     </div>
   );

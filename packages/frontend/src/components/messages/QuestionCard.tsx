@@ -1,13 +1,6 @@
-/**
- * Rendered when Claude uses the `AskUserQuestion` tool. The question + options
- * come in via the tool_use block's `input`. For now we just render the
- * question nicely — user answers via the InputBar because Claude Code's
- * internal selection UI consumes arrow-key/space/enter events from stdin,
- * and replying from outside that event loop would take a separate dance.
- *
- * Once this is observed end-to-end, we'll wire tappable options that
- * actually submit the selection via stdin keystrokes.
- */
+import { HelpCircle } from "lucide-react";
+import { Pill } from "@/components/ui/Pill";
+import { cn } from "@/lib/utils";
 
 interface AskQuestion {
   question?: string;
@@ -27,14 +20,14 @@ export function QuestionCard({ input, result }: QuestionCardProps) {
 
   return (
     <div className="px-4 py-2">
-      <div className="rounded-lg border border-sky-800/50 bg-sky-950/30">
-        <div className="flex items-center gap-2 border-b border-sky-900/50 px-3 py-2">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-sky-400" />
-          <span className="text-xs font-medium uppercase tracking-wider text-sky-300">
-            Claude is asking · AskUserQuestion
+      <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60">
+        <div className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
+          <HelpCircle className="size-3.5 text-accent" strokeWidth={2} />
+          <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+            Question
           </span>
           {result && (
-            <span className="ml-auto text-xs text-neutral-500">
+            <span className="ml-auto text-xs text-muted-foreground/70">
               {result.isError ? "error" : "answered"}
             </span>
           )}
@@ -42,36 +35,40 @@ export function QuestionCard({ input, result }: QuestionCardProps) {
 
         <div className="flex flex-col gap-3 p-3">
           {questions.length === 0 ? (
-            <pre className="overflow-x-auto text-xs text-sky-100">{formatValue(input)}</pre>
+            <pre className="overflow-x-auto font-mono text-[12px] text-foreground/85">
+              {formatValue(input)}
+            </pre>
           ) : (
             questions.map((q, qi) => (
               <div
                 key={`q-${
-                  // biome-ignore lint/suspicious/noArrayIndexKey: question list is small and stable
+                  // biome-ignore lint/suspicious/noArrayIndexKey: stable, small list
                   qi
                 }`}
                 className="flex flex-col gap-2"
               >
-                {q.question && <div className="text-sm font-medium text-sky-100">{q.question}</div>}
+                {q.question && (
+                  <div className="font-serif text-base text-foreground">{q.question}</div>
+                )}
                 {q.options && q.options.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {q.options.map((opt, oi) => {
                       const label = typeof opt === "string" ? opt : (opt.label ?? opt.value ?? "");
                       return (
-                        <span
+                        <Pill
                           key={`${qi}-${
-                            // biome-ignore lint/suspicious/noArrayIndexKey: option list is small and stable
+                            // biome-ignore lint/suspicious/noArrayIndexKey: stable, small list
                             oi
                           }`}
-                          className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 ring-1 ring-sky-900/40"
+                          disabled
                         >
                           {label}
-                        </span>
+                        </Pill>
                       );
                     })}
                   </div>
                 )}
-                <div className="flex gap-3 text-xs text-neutral-500">
+                <div className="flex gap-3 text-xs text-muted-foreground/60">
                   {q.multiSelect && <span>multi-select</span>}
                   {q.allowNotes && <span>notes allowed</span>}
                 </div>
@@ -79,19 +76,20 @@ export function QuestionCard({ input, result }: QuestionCardProps) {
             ))
           )}
           {!result && (
-            <div className="mt-1 rounded-md bg-sky-950/60 px-3 py-2 text-xs text-sky-200">
-              Type your answer in the input bar.
+            <div className="rounded-md border border-border/40 bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              Type your answer in the input bar below.
             </div>
           )}
           {result && (
             <details>
-              <summary className="cursor-pointer list-none text-xs text-neutral-500 hover:text-neutral-300">
+              <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
                 Show result
               </summary>
               <pre
-                className={`mt-2 overflow-x-auto rounded-md bg-neutral-900 px-3 py-2 text-xs ${
-                  result.isError ? "text-red-400" : "text-neutral-300"
-                }`}
+                className={cn(
+                  "mt-2 overflow-x-auto rounded-md bg-muted/30 px-3 py-2 font-mono text-[12px]",
+                  result.isError ? "text-destructive" : "text-foreground/85",
+                )}
               >
                 {formatValue(result.value)}
               </pre>
