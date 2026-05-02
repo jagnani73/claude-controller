@@ -14,7 +14,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 export function SessionView() {
   const { sessionId } = useParams({ from: "/session/$sessionId" });
-  const { sessions, subscribe, cyclePermissionMode, setModel, setEffort } = useSessions();
+  const { sessions, subscribe, setPermissionMode, setModel, setEffort } = useSessions();
   const { requestBrowse } = useWorkspace();
   const [takenOver, setTakenOver] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -120,7 +120,7 @@ export function SessionView() {
               session={session}
               onSetModel={(m) => setModel(sessionId, m)}
               onSetEffort={(e) => setEffort(sessionId, e)}
-              onCyclePermissionMode={() => cyclePermissionMode(sessionId)}
+              onSetPermissionMode={(mode) => setPermissionMode(sessionId, mode)}
             />
           }
         />

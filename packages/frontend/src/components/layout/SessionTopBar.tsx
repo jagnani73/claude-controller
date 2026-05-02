@@ -1,5 +1,6 @@
 import type { RateLimitWindow, SessionInfo } from "common/types";
 import { PanelLeftOpen } from "lucide-react";
+import { PERMISSION_LABEL, PERMISSION_TONE } from "@/components/sessions/permission-config";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSidebarShell } from "@/lib/sidebar-shell-context";
@@ -71,7 +72,7 @@ function QuotaBadge({ label, window }: { label: string; window: RateLimitWindow 
 
 export function SessionTopBar({ session }: SessionTopBarProps) {
   const { collapsed, expand } = useSidebarShell();
-  const { name: title, cwd, effort, statusSnapshot: status } = session;
+  const { name: title, cwd, effort, permissionMode, statusSnapshot: status } = session;
   // Until Claude Code's first dump arrives, every session-detail badge is
   // unreliable (model alias is wrong on resume, effort can be overridden).
   // Show the title alone until we have ground truth.
@@ -111,6 +112,15 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
                   {effort}
                 </Badge>
               )}
+              <Badge
+                variant="outline"
+                className={cn(
+                  "font-mono text-xs uppercase tracking-wider",
+                  PERMISSION_TONE[permissionMode],
+                )}
+              >
+                {PERMISSION_LABEL[permissionMode]}
+              </Badge>
             </div>
           )}
         </div>

@@ -19,8 +19,14 @@ export type SessionStatus =
  */
 export type ClaudeModel = "opus" | "opus[1m]" | "opusplan" | "sonnet" | "sonnet[1m]" | "haiku";
 
-/** Effort levels accepted by `/effort`. `max` is Opus-family only. */
-export type EffortLevel = "low" | "medium" | "high" | "max";
+/**
+ * Effort levels accepted by `/effort`. Gating notes:
+ *  - `low | medium | high`: any model that supports effort (i.e. not Haiku)
+ *  - `xhigh`: Opus 4.7+ only (per Claude Code's runtime hint)
+ *  - `max`: Opus family only
+ *  - `auto`: clears the override — Claude Code falls back to the model default
+ */
+export type EffortLevel = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Session configuration when spawning */
 export interface SessionConfig {
@@ -151,6 +157,15 @@ export type ServerMessage =
   | { type: "compact_start"; sessionId: string; trigger: "manual" | "auto" }
   | { type: "compact_end"; sessionId: string; trigger: "manual" | "auto" }
   | { type: "compact_summary"; sessionId: string; text: string; timestamp: string }
+  | {
+      type: "slash_command";
+      sessionId: string;
+      name: string;
+      args?: string;
+      /** Stdout from the local command (e.g. `/effort`'s feedback). */
+      output?: string;
+      timestamp: string;
+    }
   | {
       type: "error";
       message: string;

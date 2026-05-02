@@ -2,11 +2,16 @@ import type {
   ClaudeModel,
   DirEntry,
   EffortLevel,
+  PermissionMode,
   ProjectSessionSummary,
   SessionConfig,
   SessionInfo,
 } from "common/types";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  PERMISSION_CYCLE,
+  PERMISSION_CYCLE_STEP_MS,
+} from "@/components/sessions/permission-config";
 import { wsService } from "@/services/ws.service";
 import { useWsMessage } from "./use-ws";
 
@@ -118,12 +123,67 @@ export function useSessions() {
     wsService.send({ type: "cycle_permission_mode", sessionId });
   }, []);
 
+  /**
+   * Walk Claude Code's Shift+Tab cycle (default → acceptEdits → plan → auto)
+   * to land on the target mode. Updates local session state optimistically so
+   * the popover pill responds instantly; the JSONL → ws path eventually
+   * confirms (or corrects) the value.
+   */
+  const setPermissionMode = useCallback((sessionId: string, target: PermissionMode) => {
+    let current: PermissionMode | undefined;
+    setSessions((prev) => {
+      const found = prev.find((s) => s.id === sessionId);
+      if (!found || found.permissionMode === target) return prev;
+      current = found.permissionMode;
+      return prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        const next = { ...s, permissionMode: target };
+        persistSessionConfig(next);
+        return next;
+      });
+    });
+    if (!current) return;
+    const fromIdx = PERMISSION_CYCLE.indexOf(current);
+    const toIdx = PERMISSION_CYCLE.indexOf(target);
+    // If either mode is outside the standard cycle, fall back to one nudge.
+    if (fromIdx === -1 || toIdx === -1) {
+      wsService.send({ type: "cycle_permission_mode", sessionId });
+      return;
+    }
+    const dist = (toIdx - fromIdx + PERMISSION_CYCLE.length) % PERMISSION_CYCLE.length;
+    for (let i = 0; i < dist; i++) {
+      setTimeout(() => {
+        wsService.send({ type: "cycle_permission_mode", sessionId });
+      }, i * PERMISSION_CYCLE_STEP_MS);
+    }
+  }, []);
+
   const setModel = useCallback((sessionId: string, model: ClaudeModel) => {
-    wsService.send({ type: "set_model", sessionId, model });
+    setSessions((prev) => {
+      const target = prev.find((s) => s.id === sessionId);
+      if (!target || target.model === model) return prev;
+      wsService.send({ type: "set_model", sessionId, model });
+      return prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        const next = { ...s, model };
+        persistSessionConfig(next);
+        return next;
+      });
+    });
   }, []);
 
   const setEffort = useCallback((sessionId: string, effort: EffortLevel) => {
-    wsService.send({ type: "set_effort", sessionId, effort });
+    setSessions((prev) => {
+      const target = prev.find((s) => s.id === sessionId);
+      if (!target || target.effort === effort) return prev;
+      wsService.send({ type: "set_effort", sessionId, effort });
+      return prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        const next = { ...s, effort };
+        persistSessionConfig(next);
+        return next;
+      });
+    });
   }, []);
 
   /** Send create_session and resolve with the new SessionInfo once the server broadcasts. */
@@ -160,6 +220,7 @@ export function useSessions() {
     stopSession,
     subscribe,
     cyclePermissionMode,
+    setPermissionMode,
     setModel,
     setEffort,
   };

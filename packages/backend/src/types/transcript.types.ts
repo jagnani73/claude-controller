@@ -66,4 +66,17 @@ export interface AssistantEntry extends BaseEntry {
   };
 }
 
-export type TranscriptEntry = UserEntry | AssistantEntry | { type: string };
+/**
+ * Local-command entries appear as `system / subtype: "local_command"` for
+ * UI-only commands (e.g. `/rename`) and as `user` entries with content
+ * `<command-name>/X</command-name>...` for commands that affect the
+ * conversation context (e.g. `/effort`).
+ */
+export interface SystemEntry extends BaseEntry {
+  type: "system";
+  subtype?: string;
+  content?: string;
+  level?: string;
+}
+
+export type TranscriptEntry = UserEntry | AssistantEntry | SystemEntry | { type: string };

@@ -46,7 +46,7 @@ export function InputBar({ sessionId, settingsSlot }: InputBarProps) {
               send();
             }
           }}
-          className="min-h-[36px] min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground/50"
+          className="min-h-8 min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground/50"
         />
         <Button
           type="button"

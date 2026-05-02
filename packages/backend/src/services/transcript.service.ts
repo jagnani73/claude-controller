@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import type {
   AssistantEntry,
   ContentBlock,
+  SystemEntry,
   TranscriptEntry,
   UserEntry,
 } from "../types/transcript.types.js";
@@ -10,6 +11,32 @@ import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
 
 const log = LoggerService.scoped("transcript");
+
+const COMMAND_NAME_RE = /<command-name>([^<]+)<\/command-name>/;
+const COMMAND_ARGS_RE = /<command-args>([^<]*)<\/command-args>/;
+
+// Constructed via `new RegExp` to keep raw control bytes out of source.
+// Mirrors the `strip-ansi` package's CSI/SGR coverage.
+const ANSI_RE = new RegExp(
+  "[\\u001b\\u009b][[\\]()#;?]*" +
+    "(?:(?:(?:[a-zA-Z\\d]+(?:;[-a-zA-Z\\d/#&.:=?%@~_]*)*)?\\u0007)" +
+    "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))",
+  "g",
+);
+
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_RE, "");
+}
+
+function parseLocalCommand(content: string): { name: string; args?: string } | null {
+  const nameMatch = content.match(COMMAND_NAME_RE);
+  if (!nameMatch) return null;
+  const name = nameMatch[1].trim();
+  if (!name) return null;
+  const argsMatch = content.match(COMMAND_ARGS_RE);
+  const args = argsMatch ? argsMatch[1].trim() : "";
+  return { name, args: args || undefined };
+}
 
 /**
  * Watches a Claude Code transcript JSONL file and emits normalized events
@@ -32,6 +59,14 @@ export class TranscriptWatcher {
   private pendingRead = false;
   private initialScan = true;
   private lastAssistantModel: string | null = null;
+  // Buffered while waiting for a `<local-command-stdout>` follow-up entry
+  // that completes the slash command. Flushed without output on any other
+  // entry so a stuck buffer can't outlive its prompt group.
+  private pendingSlashCommand: {
+    name: string;
+    args?: string;
+    timestamp: string;
+  } | null = null;
 
   constructor(
     readonly path: string,
@@ -146,8 +181,23 @@ export class TranscriptWatcher {
     }
   }
 
+  private flushPendingSlashCommand(output?: string): void {
+    if (!this.pendingSlashCommand) return;
+    const cmd = this.pendingSlashCommand;
+    this.pendingSlashCommand = null;
+    this.emitEvent({
+      kind: "slash_command",
+      sessionId: this.bus.sessionId,
+      timestamp: cmd.timestamp,
+      name: cmd.name,
+      args: cmd.args,
+      output,
+    });
+  }
+
   private handleEntry(entry: TranscriptEntry): void {
     if (entry.type === "assistant") {
+      this.flushPendingSlashCommand();
       this.handleAssistant(entry as AssistantEntry);
     } else if (entry.type === "user") {
       this.handleUser(entry as UserEntry);
@@ -161,8 +211,12 @@ export class TranscriptWatcher {
           mode,
         });
       }
+    } else if (entry.type === "system") {
+      this.handleSystem(entry as SystemEntry);
+    } else {
+      this.flushPendingSlashCommand();
     }
-    // other types (system, attachment, file-history-snapshot) aren't surfaced.
+    // other types (attachment, file-history-snapshot) aren't surfaced.
   }
 
   private handleAssistant(entry: AssistantEntry): void {
@@ -198,6 +252,21 @@ export class TranscriptWatcher {
     }
   }
 
+  private handleSystem(entry: SystemEntry): void {
+    if (entry.subtype !== "local_command" || !entry.content) return;
+    const parsed = parseLocalCommand(entry.content);
+    if (!parsed) return;
+    // System local_command entries (e.g. /rename) are self-contained, no stdout.
+    this.flushPendingSlashCommand();
+    this.emitEvent({
+      kind: "slash_command",
+      sessionId: this.bus.sessionId,
+      timestamp: entry.timestamp,
+      name: parsed.name,
+      args: parsed.args,
+    });
+  }
+
   private handleUser(entry: UserEntry): void {
     if (entry.isMeta) return;
     const sessionId = this.bus.sessionId;
@@ -214,10 +283,30 @@ export class TranscriptWatcher {
         });
         return;
       }
-      // Skip command caveats and other meta-text wrappers
+      // Caveats are scaffolding — ignore but don't flush; they appear between
+      // the command-name and stdout entries in the same prompt group.
       if (content.startsWith("<local-command-caveat>")) return;
-      if (content.startsWith("<local-command-stdout>")) return;
-      if (content.startsWith("<command-")) return;
+      // Stdout closes a pending slash command — emit with output attached.
+      if (content.startsWith("<local-command-stdout>")) {
+        const stdout = stripAnsi(
+          content.replace(/^<local-command-stdout>/, "").replace(/<\/local-command-stdout>$/, ""),
+        ).trim();
+        this.flushPendingSlashCommand(stdout || undefined);
+        return;
+      }
+      // <command-name>/X</command-name> opens a slash command — buffer until
+      // we either see the matching stdout or hit something else.
+      if (content.startsWith("<command-")) {
+        const parsed = parseLocalCommand(content);
+        if (parsed) {
+          // Flush any prior unmatched buffer first.
+          this.flushPendingSlashCommand();
+          this.pendingSlashCommand = { ...parsed, timestamp };
+        }
+        return;
+      }
+      // Real chat content — anything pending didn't get a stdout, flush plain.
+      this.flushPendingSlashCommand();
       this.emitEvent({
         kind: "user_prompt",
         sessionId,

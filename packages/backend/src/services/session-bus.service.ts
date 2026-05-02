@@ -66,6 +66,14 @@ export type SessionBusEvent =
       sessionId: string;
       timestamp: string;
       text: string;
+    }
+  | {
+      kind: "slash_command";
+      sessionId: string;
+      timestamp: string;
+      name: string;
+      args?: string;
+      output?: string;
     };
 
 type BusEvents = {

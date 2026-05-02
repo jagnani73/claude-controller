@@ -6,13 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { clampEffort, effortOptionsFor, MODEL_OPTIONS } from "./model-config";
 import { OptionPills } from "./OptionPills";
-
-const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
-  { value: "default", label: "Default" },
-  { value: "acceptEdits", label: "Accept Edits" },
-  { value: "plan", label: "Plan" },
-  { value: "auto", label: "Auto" },
-];
+import { PERMISSION_OPTIONS } from "./permission-config";
 
 interface CreateSessionFormProps {
   cwd: string;

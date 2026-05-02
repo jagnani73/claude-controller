@@ -53,6 +53,15 @@ type StreamItem =
       sessionId: string;
       text: string;
       timestamp: string;
+    }
+  | {
+      kind: "slash_command";
+      id: string;
+      sessionId: string;
+      name: string;
+      args?: string;
+      output?: string;
+      timestamp: string;
     };
 
 type Action =
@@ -100,6 +109,14 @@ type Action =
       type: "compact_summary";
       sessionId: string;
       text: string;
+      timestamp: string;
+    }
+  | {
+      type: "slash_command";
+      sessionId: string;
+      name: string;
+      args?: string;
+      output?: string;
       timestamp: string;
     }
   | { type: "prepend"; items: StreamItem[] };
@@ -203,6 +220,21 @@ function reducer(state: StreamItem[], action: Action): StreamItem[] {
         },
       ];
     }
+    case "slash_command": {
+      const id = `s-${action.timestamp}-${action.name}-${state.length}`;
+      return [
+        ...state,
+        {
+          kind: "slash_command",
+          id,
+          sessionId: action.sessionId,
+          name: action.name,
+          args: action.args,
+          output: action.output,
+          timestamp: action.timestamp,
+        },
+      ];
+    }
     case "prepend": {
       // Deduplicate by id — some older messages may already be in the
       // tail (backend's dedup is per-kind, not per-batch).
@@ -271,6 +303,17 @@ function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem
           id: `c-${e.timestamp}-${slot}`,
           sessionId: e.sessionId,
           text: e.text,
+          timestamp: e.timestamp,
+        });
+        break;
+      case "slash_command":
+        items.push({
+          kind: "slash_command",
+          id: `s-${e.timestamp}-${e.name}-${slot}`,
+          sessionId: e.sessionId,
+          name: e.name,
+          args: e.args,
+          output: e.output,
           timestamp: e.timestamp,
         });
         break;
@@ -375,6 +418,18 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
     });
   });
 
+  useWsMessage("slash_command", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    dispatch({
+      type: "slash_command",
+      sessionId: msg.sessionId,
+      name: msg.name,
+      args: msg.args,
+      output: msg.output,
+      timestamp: msg.timestamp,
+    });
+  });
+
   useWsMessage("approval_request", (msg) => {
     if (msg.sessionId !== sessionId) return;
     dispatch({
@@ -458,9 +513,13 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
 
   const lastItem = items[items.length - 1];
   // Keep the spinner visible while tools are running / approvals are pending —
-  // only a final assistant message (or no activity at all) means "idle".
+  // assistant text, compact summary, and local slash commands are terminal:
+  // slash commands like /rename or /effort don't produce an assistant turn.
   const waitingForReply =
-    !!lastItem && lastItem.kind !== "assistant" && lastItem.kind !== "compact_summary";
+    !!lastItem &&
+    lastItem.kind !== "assistant" &&
+    lastItem.kind !== "compact_summary" &&
+    lastItem.kind !== "slash_command";
 
   const [toolGroupOverride, setToolGroupOverride] = useState<Record<string, "open" | "closed">>({});
   const toggleToolGroup = useCallback((groupId: string, openByDefault: boolean) => {
@@ -604,6 +663,23 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
                       Conversation compacted
                     </div>
                     <Markdown text={item.text} />
+                  </div>
+                );
+              case "slash_command":
+                return (
+                  <div
+                    key={item.id}
+                    className="mx-auto my-3 flex w-full max-w-md flex-col items-center gap-0.5 px-4 text-center font-mono text-[11px]"
+                  >
+                    <span className="text-accent">
+                      <span className="font-semibold">{item.name}</span>
+                      {item.args && <span className="text-accent/80"> {item.args}</span>}
+                    </span>
+                    {item.output && (
+                      <span className="whitespace-pre-wrap text-muted-foreground/80">
+                        {item.output}
+                      </span>
+                    )}
                   </div>
                 );
               default:

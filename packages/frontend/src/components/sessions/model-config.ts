@@ -19,16 +19,19 @@ export function isOpusFamily(model: ClaudeModel): boolean {
 }
 
 /**
- * `/effort` is accepted by Claude 4.6 opus/sonnet; haiku and legacy variants
+ * `/effort` is accepted by Claude 4.6+ opus/sonnet; haiku and legacy variants
  * reject it (see `claude-code-source/src/utils/effort.ts:modelSupportsEffort`).
  */
 export function supportsEffort(model: ClaudeModel): boolean {
   return model !== "haiku";
 }
 
-/**
- * `max` effort is Opus-4.6 only. Disable it for everything else.
- */
+/** `xhigh` is Opus-only (per Claude Code's runtime "Opus 4.7 only" hint). */
+export function supportsXHighEffort(model: ClaudeModel): boolean {
+  return isOpusFamily(model);
+}
+
+/** `max` effort is Opus-only. Disable it for everything else. */
 export function supportsMaxEffort(model: ClaudeModel): boolean {
   return isOpusFamily(model);
 }
@@ -37,11 +40,20 @@ export function effortOptionsFor(
   model: ClaudeModel,
 ): { value: EffortLevel; label: string; hint?: string; disabled?: boolean }[] {
   const effortDisabled = !supportsEffort(model);
+  const xhighDisabled = !supportsXHighEffort(model);
   const maxDisabled = !supportsMaxEffort(model);
   return [
+    // `auto` clears the override — Claude Code falls back to the model default.
+    { value: "auto", label: "Auto", hint: "model default" },
     { value: "low", label: "Low", disabled: effortDisabled },
     { value: "medium", label: "Medium", disabled: effortDisabled },
     { value: "high", label: "High", disabled: effortDisabled },
+    {
+      value: "xhigh",
+      label: "XHigh",
+      hint: xhighDisabled ? "opus only" : undefined,
+      disabled: xhighDisabled || effortDisabled,
+    },
     {
       value: "max",
       label: "Max",
@@ -53,7 +65,9 @@ export function effortOptionsFor(
 
 /** Clamp an effort to one the given model supports. */
 export function clampEffort(model: ClaudeModel, effort: EffortLevel): EffortLevel {
-  if (!supportsEffort(model)) return "medium";
+  if (effort === "auto") return "auto";
+  if (!supportsEffort(model)) return "auto";
   if (effort === "max" && !supportsMaxEffort(model)) return "high";
+  if (effort === "xhigh" && !supportsXHighEffort(model)) return "high";
   return effort;
 }

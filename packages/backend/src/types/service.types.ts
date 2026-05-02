@@ -1,4 +1,4 @@
-import type { ClaudeModel, PermissionMode } from "common/types";
+import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 
 // ─── Config ──────────────────────────────────────────────────────────
 
@@ -26,6 +26,13 @@ export interface PtySpawnOptions {
   settingsJson?: string;
   /** When set, adds `--resume <id>` to pick up an existing session's transcript. */
   resumeSessionId?: string;
+  /**
+   * When set, exports `CLAUDE_CODE_EFFORT_LEVEL` to the PTY's environment so
+   * this child process is isolated from `settings.json` effort changes made
+   * by parallel sessions. Env wins over both AppState and settings.json in
+   * Claude Code's resolve chain (see effort.ts → resolveAppliedEffort).
+   */
+  effort?: EffortLevel;
 }
 
 export interface PtyManagerEvents {

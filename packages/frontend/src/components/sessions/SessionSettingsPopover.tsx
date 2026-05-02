@@ -4,57 +4,22 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { effortOptionsFor, MODEL_OPTIONS } from "./model-config";
 import { OptionPills } from "./OptionPills";
+import { PERMISSION_OPTIONS } from "./permission-config";
 
 interface SessionSettingsPopoverProps {
   session: SessionInfo;
   onSetModel: (model: ClaudeModel) => void;
   onSetEffort: (effort: EffortLevel) => void;
-  /** Sends one Shift+Tab to Claude Code's PTY. */
-  onCyclePermissionMode: () => void;
-}
-
-// Claude Code's standard Shift+Tab cycle. Modes outside this cycle (auto,
-// dontAsk, bypassPermissions) are gated by feature flags / settings; we don't
-// surface them as pills.
-const PERMISSION_CYCLE: PermissionMode[] = ["default", "acceptEdits", "plan"];
-
-const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
-  { value: "default", label: "Default" },
-  { value: "acceptEdits", label: "Accept Edits" },
-  { value: "plan", label: "Plan" },
-];
-
-const CYCLE_STEP_MS = 80;
-
-function cycleDistance(from: PermissionMode, to: PermissionMode): number | null {
-  const fromIdx = PERMISSION_CYCLE.indexOf(from);
-  const toIdx = PERMISSION_CYCLE.indexOf(to);
-  if (fromIdx === -1 || toIdx === -1) return null;
-  return (toIdx - fromIdx + PERMISSION_CYCLE.length) % PERMISSION_CYCLE.length;
+  /** Walks Claude Code's Shift+Tab cycle to land on the target mode. */
+  onSetPermissionMode: (mode: PermissionMode) => void;
 }
 
 export function SessionSettingsPopover({
   session,
   onSetModel,
   onSetEffort,
-  onCyclePermissionMode,
+  onSetPermissionMode,
 }: SessionSettingsPopoverProps) {
-  // Selecting a target mode = sending N Shift+Tabs to walk the cycle.
-  // Tiny delays between sends so the PTY can process each before the next.
-  const handleSetMode = (target: PermissionMode) => {
-    const dist = cycleDistance(session.permissionMode, target);
-    if (dist === 0) return;
-    if (dist === null) {
-      // Current mode is outside the standard cycle (e.g. "auto"). Send one
-      // cycle as a best-effort nudge — user can re-tap if needed.
-      onCyclePermissionMode();
-      return;
-    }
-    for (let i = 0; i < dist; i++) {
-      setTimeout(onCyclePermissionMode, i * CYCLE_STEP_MS);
-    }
-  };
-
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -83,7 +48,7 @@ export function SessionSettingsPopover({
           />
           <OptionPills
             label="Effort"
-            value={session.effort ?? "medium"}
+            value={session.effort ?? "auto"}
             options={effortOptionsFor(session.model)}
             onChange={onSetEffort}
           />
@@ -91,7 +56,7 @@ export function SessionSettingsPopover({
             label="Permission mode"
             value={session.permissionMode}
             options={PERMISSION_OPTIONS}
-            onChange={handleSetMode}
+            onChange={onSetPermissionMode}
           />
         </div>
       </PopoverContent>

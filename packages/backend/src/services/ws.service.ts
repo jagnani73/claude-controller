@@ -188,6 +188,15 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage {
         text: event.text,
         timestamp: event.timestamp,
       };
+    case "slash_command":
+      return {
+        type: "slash_command",
+        sessionId: event.sessionId,
+        name: event.name,
+        args: event.args,
+        output: event.output,
+        timestamp: event.timestamp,
+      };
   }
 }
 
@@ -353,12 +362,8 @@ function handleMessage(
           send(ws, { type: "error", message: `Session crashed during startup: ${message}` });
         },
       );
-
-      if (msg.config.effort) {
-        setTimeout(() => {
-          session.sendSlashCommand(`/effort ${msg.config.effort}`);
-        }, 3000);
-      }
+      // Effort is set via CLAUDE_CODE_EFFORT_LEVEL env on spawn (see
+      // pty.service.ts) — no need for a post-spawn /effort slash command.
       return;
     }
 

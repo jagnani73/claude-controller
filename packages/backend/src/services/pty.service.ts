@@ -59,12 +59,20 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
               .join(" ")}`,
           ];
 
+    const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    if (options.effort && options.effort !== "auto") {
+      // Per-session effort isolation — env wins over settings.json in Claude
+      // Code's resolve chain, so a parallel session's `/effort` won't bleed in.
+      // "auto" means "no override, use the model's default" — leave env unset.
+      env.CLAUDE_CODE_EFFORT_LEVEL = options.effort;
+    }
+
     this.process = pty.spawn(shell, shellArgs, {
       name: "xterm-256color",
       cols: options.cols,
       rows: options.rows,
       cwd: options.cwd,
-      env: process.env as Record<string, string>,
+      env,
     });
 
     this.process.onData((data) => {
