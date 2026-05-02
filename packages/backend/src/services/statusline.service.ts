@@ -135,16 +135,13 @@ export async function resolveStatusLineCommand(cwd: string): Promise<string | nu
     join(cwd, ".claude", "settings.local.json"),
   ];
   let command: string | null = null;
-  let source: string | null = null;
   for (const path of candidates) {
     const parsed = await tryReadSettings(path);
     if (parsed?.statusLine) {
       command =
         typeof parsed.statusLine === "string" ? parsed.statusLine : parsed.statusLine.command;
-      source = path;
     }
   }
-  if (command) log.debug("Resolved statusLine command", { source, command });
   return command;
 }
 
@@ -214,7 +211,6 @@ export async function runStatusLine(
         done(null);
         return;
       }
-      log.debug("status-line ran", { bytes: stdout.length });
       done(stdout);
     });
 

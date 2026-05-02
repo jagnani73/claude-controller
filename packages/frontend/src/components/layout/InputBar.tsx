@@ -1,27 +1,26 @@
 import { ArrowUp } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { wsService } from "@/services/ws.service";
 
 interface InputBarProps {
-  sessionId: string;
+  onSubmit: (text: string) => void;
   /** Optional element rendered to the left of the textarea (e.g. settings popover trigger). */
   settingsSlot?: ReactNode;
 }
 
-export function InputBar({ sessionId, settingsSlot }: InputBarProps) {
+export function InputBar({ onSubmit, settingsSlot }: InputBarProps) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const send = () => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (trimmed.startsWith("/")) {
-      wsService.send({ type: "slash_command", sessionId, command: trimmed });
-    } else {
-      wsService.send({ type: "input", sessionId, text: trimmed });
-    }
+    onSubmit(trimmed);
     setText("");
+    // Reset the auto-grown height — the inline `style.height` set by onChange
+    // persists across the value clearing, so without this the box stays tall
+    // after sending a multi-line message.
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
     textareaRef.current?.focus();
   };
 

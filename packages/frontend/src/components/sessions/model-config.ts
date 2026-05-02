@@ -1,39 +1,41 @@
-import type { ClaudeModel, EffortLevel } from "common/types";
+import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 
 /**
- * Canonical model aliases — mirrors Claude Code's MODEL_ALIASES list.
- * Grouping is purely cosmetic for the picker.
+ * Canonical model aliases — mirrors Claude Code's MODEL_ALIASES list, minus
+ * `best` (loads opus by default — no UI distinction worth surfacing).
  */
 export const MODEL_OPTIONS: { value: ClaudeModel; label: string; hint?: string }[] = [
   { value: "opus", label: "Opus" },
   { value: "opus[1m]", label: "Opus · 1M", hint: "1M context" },
-  { value: "opusplan", label: "Opus Plan", hint: "Opus + plan" },
+  { value: "opusplan", label: "Opus Plan", hint: "opus in plan, sonnet otherwise" },
   { value: "sonnet", label: "Sonnet" },
   { value: "sonnet[1m]", label: "Sonnet · 1M", hint: "1M context" },
   { value: "haiku", label: "Haiku" },
 ];
 
-/** Any Opus-family alias (plain, 1M, or opusplan). */
-export function isOpusFamily(model: ClaudeModel): boolean {
-  return model === "opus" || model === "opus[1m]" || model === "opusplan";
+/** Bare opus aliases (excludes opusplan, which has dual-model semantics). */
+export function isPlainOpus(model: ClaudeModel): boolean {
+  return model === "opus" || model === "opus[1m]";
 }
 
-/**
- * `/effort` is accepted by Claude 4.6+ opus/sonnet; haiku and legacy variants
- * reject it (see `claude-code-source/src/utils/effort.ts:modelSupportsEffort`).
- */
+/** `/effort` is rejected by haiku; everything else accepts low/medium/high. */
 export function supportsEffort(model: ClaudeModel): boolean {
   return model !== "haiku";
 }
 
-/** `xhigh` is Opus-only (per Claude Code's runtime "Opus 4.7 only" hint). */
+/** `xhigh` is new in Opus 4.7 — only the plain opus aliases. */
 export function supportsXHighEffort(model: ClaudeModel): boolean {
-  return isOpusFamily(model);
+  return isPlainOpus(model);
 }
 
-/** `max` effort is Opus-only. Disable it for everything else. */
+/** `max` is supported on opus/sonnet families (incl. opusplan); haiku rejects it. */
 export function supportsMaxEffort(model: ClaudeModel): boolean {
-  return isOpusFamily(model);
+  return model !== "haiku";
+}
+
+/** Auto permission mode is gated to plain opus aliases. */
+export function supportsAutoMode(model: ClaudeModel): boolean {
+  return isPlainOpus(model);
 }
 
 export function effortOptionsFor(
@@ -52,22 +54,92 @@ export function effortOptionsFor(
       value: "xhigh",
       label: "XHigh",
       hint: xhighDisabled ? "opus only" : undefined,
-      disabled: xhighDisabled || effortDisabled,
+      disabled: xhighDisabled,
     },
     {
       value: "max",
       label: "Max",
-      hint: maxDisabled ? "opus only" : undefined,
       disabled: maxDisabled,
     },
   ];
 }
 
-/** Clamp an effort to one the given model supports. */
-export function clampEffort(model: ClaudeModel, effort: EffortLevel): EffortLevel {
-  if (effort === "auto") return "auto";
+/**
+ * Snap `effort` down to the highest tier the new model supports. Order is
+ * low < medium < high < xhigh < max for the "downgrade to nearest" pick.
+ */
+export function clampEffort(model: ClaudeModel, effort: EffortLevel | undefined): EffortLevel {
+  if (!effort || effort === "auto") return "auto";
   if (!supportsEffort(model)) return "auto";
+  if (effort === "xhigh" && !supportsXHighEffort(model)) {
+    return supportsMaxEffort(model) ? "max" : "high";
+  }
   if (effort === "max" && !supportsMaxEffort(model)) return "high";
-  if (effort === "xhigh" && !supportsXHighEffort(model)) return "high";
   return effort;
+}
+
+/** Drop `auto` permission mode when switching to a model that doesn't allow it. */
+export function clampPermissionMode(model: ClaudeModel, mode: PermissionMode): PermissionMode {
+  if (mode === "auto" && !supportsAutoMode(model)) return "default";
+  return mode;
+}
+
+/**
+ * The label to render for the user-set alias, with the active sub-model in
+ * parens when the alias resolves to different runtime models depending on
+ * permission mode (opusplan, haiku-in-plan).
+ *
+ * `displayName` (Claude Code's `model.display_name`, e.g. "Opus 4.7", "Sonnet
+ * 4.6 (1M context)") is the runtime model's name. It only gets used when it
+ * matches the *expected* runtime for `(model, permissionMode)` — otherwise
+ * we're in the gap between a popover change and the next respawn, where the
+ * runtime is still the previous PTY's model and would mislead the user.
+ */
+export function displayedModelLabel(
+  model: ClaudeModel,
+  permissionMode: PermissionMode,
+  displayName?: string,
+): string {
+  const fallback = MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model;
+  const dn =
+    displayName && displayNameMatchesIntent(model, permissionMode, displayName)
+      ? displayName
+      : undefined;
+
+  if (model === "opusplan") {
+    // In plan mode opusplan resolves to opus; otherwise to sonnet.
+    return permissionMode === "plan"
+      ? `Opus Plan · ${dn ?? "Opus"}`
+      : `Opus Plan · ${dn ?? "Sonnet"}`;
+  }
+  if (model === "haiku" && permissionMode === "plan") {
+    return `Haiku · ${dn ?? "Sonnet"}`;
+  }
+  return dn ?? fallback;
+}
+
+/**
+ * Does the runtime display name correspond to what `(model, mode)` should resolve to?
+ *
+ * Couples to Claude Code's `model.display_name` format (e.g. "Opus 4.7", "Sonnet 4.6 (1M context)").
+ * If that format changes, these regex checks silently stop matching and we fall back to the alias label.
+ */
+function displayNameMatchesIntent(
+  model: ClaudeModel,
+  permissionMode: PermissionMode,
+  displayName: string,
+): boolean {
+  const dn = displayName.toLowerCase();
+  switch (model) {
+    case "opus":
+    case "opus[1m]":
+      return /\bopus\b/.test(dn) && !/\bplan\b/.test(dn);
+    case "sonnet":
+    case "sonnet[1m]":
+      return /\bsonnet\b/.test(dn);
+    case "opusplan":
+      return permissionMode === "plan" ? /\bopus\b/.test(dn) : /\bsonnet\b/.test(dn);
+    case "haiku":
+      return permissionMode === "plan" ? /\bsonnet\b/.test(dn) : /\bhaiku\b/.test(dn);
+  }
 }

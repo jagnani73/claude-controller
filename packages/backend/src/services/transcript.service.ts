@@ -1,5 +1,6 @@
-import { createReadStream, type FSWatcher, watch } from "node:fs";
+import { createReadStream, existsSync, type FSWatcher, watch } from "node:fs";
 import { stat } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import type {
   AssistantEntry,
   ContentBlock,
@@ -52,6 +53,7 @@ function parseLocalCommand(content: string): { name: string; args?: string } | n
  */
 export class TranscriptWatcher {
   private watcher: FSWatcher | null = null;
+  private dirWatcher: FSWatcher | null = null;
   private offset = 0;
   private pendingBuffer = "";
   private stopped = false;
@@ -87,7 +89,41 @@ export class TranscriptWatcher {
     await this.drain();
     this.initialScan = false;
     if (this.lastAssistantModel) this.onModelChange?.(this.lastAssistantModel);
-    this.watch();
+    // Claude Code v2.1.126+ doesn't pre-create the transcript JSONL on session
+    // start — it only appears after the first user message. Watch the parent
+    // dir until our file shows up, then attach the file-level watcher.
+    if (existsSync(this.path)) {
+      this.watch();
+      return;
+    }
+    this.watchForFile();
+  }
+
+  private watchForFile(): void {
+    const dir = dirname(this.path);
+    const targetName = basename(this.path);
+    try {
+      this.dirWatcher = watch(dir, (_event, filename) => {
+        if (this.stopped) return;
+        if (filename?.toString() !== targetName) return;
+        if (!existsSync(this.path)) return;
+        this.dirWatcher?.close();
+        this.dirWatcher = null;
+        this.watch();
+        this.scheduleDrain();
+      });
+      this.dirWatcher.on("error", (err) => {
+        log.warn("parent dir watcher error", {
+          dir,
+          error: err.message,
+        });
+      });
+    } catch (err) {
+      log.warn("could not watch parent dir", {
+        dir,
+        error: (err as Error).message,
+      });
+    }
   }
 
   stop(): void {
@@ -95,6 +131,10 @@ export class TranscriptWatcher {
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
+    }
+    if (this.dirWatcher) {
+      this.dirWatcher.close();
+      this.dirWatcher = null;
     }
   }
 

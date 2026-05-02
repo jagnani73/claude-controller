@@ -1,7 +1,7 @@
 // ─── Session metadata ─────────────────────────────────────────────
 
 /** Session permission modes matching Claude Code CLI */
-export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto" | "dontAsk";
+export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto";
 
 /** Session state */
 export type SessionStatus =
@@ -183,10 +183,22 @@ export type ServerMessage =
       query: string;
     };
 
+/**
+ * Settings the client attaches to every `input` / `slash_command` so the
+ * backend can respawn the PTY with the user's latest intent before forwarding.
+ * All three are sent on every message; the backend respawns only when one or
+ * more values actually differ from the running PTY's args/env.
+ */
+export interface RespawnSettings {
+  model: ClaudeModel;
+  effort?: EffortLevel;
+  permissionMode: PermissionMode;
+}
+
 /** Client → Server messages */
 export type ClientMessage =
-  | { type: "input"; sessionId: string; text: string }
-  | { type: "slash_command"; sessionId: string; command: string }
+  | { type: "input"; sessionId: string; text: string; settings?: RespawnSettings }
+  | { type: "slash_command"; sessionId: string; command: string; settings?: RespawnSettings }
   | {
       type: "approval_response";
       sessionId: string;
@@ -218,8 +230,6 @@ export type ClientMessage =
     }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
   | { type: "cycle_permission_mode"; sessionId: string }
-  | { type: "set_model"; sessionId: string; model: ClaudeModel }
-  | { type: "set_effort"; sessionId: string; effort: EffortLevel }
   | {
       type: "fetch_history";
       sessionId: string;

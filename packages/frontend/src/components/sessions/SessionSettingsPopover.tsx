@@ -1,25 +1,15 @@
-import type { ClaudeModel, EffortLevel, PermissionMode, SessionInfo } from "common/types";
+import type { SessionInfo } from "common/types";
 import { Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { effortOptionsFor, MODEL_OPTIONS } from "./model-config";
-import { OptionPills } from "./OptionPills";
-import { PERMISSION_OPTIONS } from "./permission-config";
+import { type SessionSettings, SessionSettingsPanel } from "./SessionSettingsPanel";
 
 interface SessionSettingsPopoverProps {
   session: SessionInfo;
-  onSetModel: (model: ClaudeModel) => void;
-  onSetEffort: (effort: EffortLevel) => void;
-  /** Walks Claude Code's Shift+Tab cycle to land on the target mode. */
-  onSetPermissionMode: (mode: PermissionMode) => void;
+  onChange: (next: SessionSettings) => void;
 }
 
-export function SessionSettingsPopover({
-  session,
-  onSetModel,
-  onSetEffort,
-  onSetPermissionMode,
-}: SessionSettingsPopoverProps) {
+export function SessionSettingsPopover({ session, onChange }: SessionSettingsPopoverProps) {
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -39,24 +29,14 @@ export function SessionSettingsPopover({
         sideOffset={12}
         className="w-[min(28rem,calc(100vw-1.5rem))] border-border/60 bg-popover p-0"
       >
-        <div className="flex flex-col gap-5 p-4">
-          <OptionPills
-            label="Model"
-            value={session.model}
-            options={MODEL_OPTIONS}
-            onChange={onSetModel}
-          />
-          <OptionPills
-            label="Effort"
-            value={session.effort ?? "auto"}
-            options={effortOptionsFor(session.model)}
-            onChange={onSetEffort}
-          />
-          <OptionPills
-            label="Permission mode"
-            value={session.permissionMode}
-            options={PERMISSION_OPTIONS}
-            onChange={onSetPermissionMode}
+        <div className="p-4">
+          <SessionSettingsPanel
+            value={{
+              model: session.model,
+              effort: session.effort ?? "auto",
+              permissionMode: session.permissionMode,
+            }}
+            onChange={onChange}
           />
         </div>
       </PopoverContent>

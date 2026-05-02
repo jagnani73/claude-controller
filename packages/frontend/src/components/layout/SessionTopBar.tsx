@@ -1,5 +1,6 @@
 import type { RateLimitWindow, SessionInfo } from "common/types";
 import { PanelLeftOpen } from "lucide-react";
+import { displayedModelLabel } from "@/components/sessions/model-config";
 import { PERMISSION_LABEL, PERMISSION_TONE } from "@/components/sessions/permission-config";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -72,7 +73,7 @@ function QuotaBadge({ label, window }: { label: string; window: RateLimitWindow 
 
 export function SessionTopBar({ session }: SessionTopBarProps) {
   const { collapsed, expand } = useSidebarShell();
-  const { name: title, cwd, effort, permissionMode, statusSnapshot: status } = session;
+  const { name: title, cwd, model, effort, permissionMode, statusSnapshot: status } = session;
   // Until Claude Code's first dump arrives, every session-detail badge is
   // unreliable (model alias is wrong on resume, effort can be overridden).
   // Show the title alone until we have ground truth.
@@ -80,89 +81,94 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
   const ctxPct = status?.contextUsedPercentage;
   const inTokens = status?.totalInputTokens;
   const outTokens = status?.totalOutputTokens;
+  const modelLabel = displayedModelLabel(model, permissionMode, status?.modelDisplayName);
+  const effortLabel = effort ?? "auto";
 
   return (
-    <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
+    <header
+      className={cn(
+        "grid shrink-0 items-stretch gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur",
+        collapsed ? "grid-cols-[auto_minmax(0,1fr)]" : "grid-cols-1",
+      )}
+    >
       {collapsed && (
         <button
           type="button"
           onClick={expand}
           aria-label="Show sidebar"
-          className="flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-card hover:text-foreground"
+          className="flex size-9 shrink-0 items-center justify-center self-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-card hover:text-foreground"
         >
           <PanelLeftOpen className="size-4" strokeWidth={1.75} />
         </button>
       )}
 
-      <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-2">
-          <h1 className="truncate font-serif text-lg leading-tight text-foreground">{title}</h1>
-          {ready && (
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              {status.modelDisplayName && (
-                <Badge variant="secondary" className="font-mono text-xs tracking-wider">
-                  {status.modelDisplayName}
-                </Badge>
-              )}
-              {effort && (
-                <Badge
-                  variant="outline"
-                  className="border-border/60 font-mono text-xs uppercase tracking-wider text-muted-foreground"
-                >
-                  {effort}
-                </Badge>
-              )}
-              <Badge
-                variant="outline"
-                className={cn(
-                  "font-mono text-xs uppercase tracking-wider",
-                  PERMISSION_TONE[permissionMode],
-                )}
-              >
-                {PERMISSION_LABEL[permissionMode]}
-              </Badge>
-            </div>
-          )}
+      <div className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
+        <h1 className="min-w-0 truncate font-serif text-lg leading-tight text-foreground">
+          {title}
+        </h1>
+        <div
+          className="min-w-0 truncate text-right font-mono text-[11px] text-muted-foreground/60"
+          dir="rtl"
+        >
+          {cwd ?? ""}
         </div>
 
-        {cwd && (
-          <div className="flex min-w-0 max-w-[60%] flex-col items-end gap-2">
-            <div className="truncate font-mono text-[11px] text-muted-foreground/60" dir="rtl">
-              {cwd}
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
-              {ctxPct !== undefined && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        "rounded-md border px-1.5 py-0.5 font-mono tracking-wider tabular-nums",
-                        pctTone(Math.round(ctxPct)),
-                      )}
-                    >
-                      ctx {Math.round(ctxPct)}%
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs">
-                    <div className="space-y-0.5">
-                      <div>Context window: {Math.round(ctxPct)}% used</div>
-                      {inTokens !== undefined && outTokens !== undefined && (
-                        <div className="text-muted-foreground">
-                          ↑ {formatTokens(inTokens)} in · ↓ {formatTokens(outTokens)} out
-                        </div>
-                      )}
-                    </div>
-                  </TooltipContent>
-                </Tooltip>
+        {ready && (
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Badge variant="secondary" className="font-mono text-xs tracking-wider">
+              {modelLabel}
+            </Badge>
+            <Badge
+              variant="outline"
+              className="border-border/60 font-mono text-xs uppercase tracking-wider text-muted-foreground"
+            >
+              {effortLabel}
+            </Badge>
+            <Badge
+              variant="outline"
+              className={cn(
+                "font-mono text-xs uppercase tracking-wider",
+                PERMISSION_TONE[permissionMode],
               )}
-              {status?.fiveHour && <QuotaBadge label="5h" window={status.fiveHour} />}
-              {status?.sevenDay && <QuotaBadge label="wk" window={status.sevenDay} />}
-              {status?.costUsd !== undefined && status.costUsd > 0 && (
-                <span className="rounded-md border border-border/60 bg-card px-1.5 py-0.5 font-mono tabular-nums text-success">
-                  ${status.costUsd.toFixed(2)}
-                </span>
-              )}
-            </div>
+            >
+              {PERMISSION_LABEL[permissionMode]}
+            </Badge>
+          </div>
+        )}
+
+        {ready && (
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+            {ctxPct !== undefined && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className={cn(
+                      "rounded-md border px-1.5 py-0.5 font-mono tracking-wider tabular-nums",
+                      pctTone(Math.round(ctxPct)),
+                    )}
+                  >
+                    ctx {Math.round(ctxPct)}%
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  <div className="space-y-0.5">
+                    <div>Context window: {Math.round(ctxPct)}% used</div>
+                    {inTokens !== undefined && outTokens !== undefined && (
+                      <div className="text-muted-foreground">
+                        ↑ {formatTokens(inTokens)} in · ↓ {formatTokens(outTokens)} out
+                      </div>
+                    )}
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {status?.fiveHour && <QuotaBadge label="5h" window={status.fiveHour} />}
+            {status?.sevenDay && <QuotaBadge label="wk" window={status.sevenDay} />}
+            {status?.costUsd !== undefined && status.costUsd > 0 && (
+              <span className="rounded-md border border-border/60 bg-card px-1.5 py-0.5 font-mono tabular-nums text-success">
+                ${status.costUsd.toFixed(2)}
+              </span>
+            )}
           </div>
         )}
       </div>

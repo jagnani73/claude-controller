@@ -3,8 +3,8 @@ import type { HookEventName } from "../types/hook.types.js";
 /**
  * We only register `PermissionRequest` — a sync (blocking) HTTP hook that
  * lets the phone approve or deny tool calls. `SessionStart` is not HTTP-capable
- * in Claude Code (command-only), so we learn the transcript path by watching
- * the project dir instead — see `transcript-locator.service.ts`.
+ * in Claude Code (command-only), so we learn the session id by reading
+ * `~/.claude/sessions/<pid>.json` — see `session-locator.service.ts`.
  *
  * Assistant text, tool calls, tool results, and user prompts all come from
  * the transcript JSONL tail.

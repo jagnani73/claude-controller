@@ -1,5 +1,6 @@
 import Anser, { type AnserJsonEntry } from "anser";
 import { useMemo } from "react";
+import { cn } from "@/lib/utils";
 
 interface StatusLineProps {
   /** Raw ANSI text from the user's statusline command. */
@@ -21,17 +22,25 @@ export function StatusLine({ text }: StatusLineProps) {
       }),
     [text],
   );
+  const visible = !!text.trim();
 
-  if (!text.trim()) return null;
-
+  // Always rendered with a fixed height so the message stream above doesn't
+  // jump when the statusline first arrives. Content is hidden until then.
   return (
-    <div className="shrink-0 overflow-x-auto whitespace-pre border-t border-border/40 bg-background/60 px-3 py-1.5 font-mono text-xs leading-tight text-muted-foreground/80 backdrop-blur">
-      {parts.map((part, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: ANSI parts have no stable id
-        <span key={i} style={styleFor(part)}>
-          {part.content}
-        </span>
-      ))}
+    <div
+      className={cn(
+        "shrink-0 overflow-x-auto whitespace-pre px-3 py-1.5 font-mono text-xs leading-tight text-muted-foreground/80",
+        visible && "border-t border-border/40 bg-background/60 backdrop-blur",
+      )}
+    >
+      {visible
+        ? parts.map((part, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: ANSI parts have no stable id
+            <span key={i} style={styleFor(part)}>
+              {part.content}
+            </span>
+          ))
+        : " "}
     </div>
   );
 }

@@ -1,29 +1,26 @@
-import type { ClaudeModel, EffortLevel, PermissionMode, SessionConfig } from "common/types";
+import type { SessionConfig } from "common/types";
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { clampEffort, effortOptionsFor, MODEL_OPTIONS } from "./model-config";
-import { OptionPills } from "./OptionPills";
-import { PERMISSION_OPTIONS } from "./permission-config";
+import { type SessionSettings, SessionSettingsPanel } from "./SessionSettingsPanel";
 
 interface CreateSessionFormProps {
   cwd: string;
   onSubmit: (config: SessionConfig) => Promise<void> | void;
 }
 
+const INITIAL_SETTINGS: SessionSettings = {
+  model: "sonnet",
+  effort: "high",
+  permissionMode: "default",
+};
+
 export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
-  const [model, setModel] = useState<ClaudeModel>("sonnet");
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("default");
-  const [effort, setEffort] = useState<EffortLevel>("high");
+  const [settings, setSettings] = useState<SessionSettings>(INITIAL_SETTINGS);
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
-
-  const handleModelChange = (next: ClaudeModel) => {
-    setModel(next);
-    setEffort((prev) => clampEffort(next, prev));
-  };
 
   const handleSubmit = async () => {
     if (pending) return;
@@ -31,9 +28,9 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
     try {
       await onSubmit({
         cwd,
-        model,
-        permissionMode,
-        effort,
+        model: settings.model,
+        permissionMode: settings.permissionMode,
+        effort: settings.effort,
         name: name.trim() || undefined,
       });
       setName("");
@@ -57,24 +54,7 @@ export function CreateSessionForm({ cwd, onSubmit }: CreateSessionFormProps) {
         onChange={(e) => setName(e.target.value)}
       />
 
-      <OptionPills
-        label="Model"
-        value={model}
-        options={MODEL_OPTIONS}
-        onChange={handleModelChange}
-      />
-      <OptionPills
-        label="Permission mode"
-        value={permissionMode}
-        options={PERMISSION_OPTIONS}
-        onChange={setPermissionMode}
-      />
-      <OptionPills
-        label="Effort"
-        value={effort}
-        options={effortOptionsFor(model)}
-        onChange={setEffort}
-      />
+      <SessionSettingsPanel value={settings} onChange={setSettings} />
 
       <Button onClick={handleSubmit} disabled={pending} className="mt-1 h-10 text-base">
         {pending ? (

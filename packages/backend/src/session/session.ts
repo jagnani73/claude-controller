@@ -9,6 +9,7 @@ import type {
   EffortLevel,
   PermissionMode,
   RateLimitWindow,
+  RespawnSettings,
   SessionConfig,
   SessionInfo,
   SessionStatus,
@@ -17,6 +18,7 @@ import type {
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
 import { SessionBus } from "../services/session-bus.service.js";
+import { SessionLocator } from "../services/session-locator.service.js";
 import {
   ensureDumpScript,
   readDumpedPayload,
@@ -25,7 +27,6 @@ import {
   statusLinePayloadPath,
 } from "../services/statusline.service.js";
 import { TranscriptWatcher } from "../services/transcript.service.js";
-import { TranscriptLocator } from "../services/transcript-locator.service.js";
 import type { SessionDeps, SessionEvents } from "../types/index.js";
 import { encodedProjectDir } from "../utils/claude-paths.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
@@ -48,12 +49,11 @@ export class Session extends EventEmitter<SessionEvents> {
   private status: SessionStatus = "running";
   private pty: PtyService;
   private capturePath: string | null = null;
-  private locator: TranscriptLocator;
+  private locator: SessionLocator | null = null;
   private transcript: TranscriptWatcher | null = null;
   private currentModel: ClaudeModel;
   private currentEffort: EffortLevel | undefined;
   private currentPermissionMode: PermissionMode;
-  private lastDisplayName: string | null = null;
   private statusLineTimer: NodeJS.Timeout | null = null;
   private statusLineWatcher: FSWatcher | null = null;
   private statusLineInFlight = false;
@@ -63,6 +63,9 @@ export class Session extends EventEmitter<SessionEvents> {
   /** Latest model id observed in the transcript (e.g. "claude-opus-4-7"). */
   private currentModelId: string | null = null;
   private statusSnapshot: SessionStatusSnapshot | null = null;
+  /** Set during respawn() so the PTY exit handler doesn't propagate "stopped". */
+  private respawning = false;
+  private readonly deps: SessionDeps;
 
   get id(): string {
     if (!this._id) throw new Error("Session id not yet resolved");
@@ -80,6 +83,7 @@ export class Session extends EventEmitter<SessionEvents> {
     super();
     this.spawnToken = randomUUID();
     this.config = config;
+    this.deps = deps;
     this.currentModel = config.model;
     // Fall back to user's global default when config omits effort.
     this.currentEffort = config.effort ?? readGlobalDefaultEffort();
@@ -94,6 +98,7 @@ export class Session extends EventEmitter<SessionEvents> {
     });
 
     this.pty.on("exit", (info) => {
+      if (this.respawning) return;
       this.setStatus("stopped");
       this.transcript?.stop();
       this.emit("exit", info);
@@ -118,22 +123,6 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     this.ready = Promise.all([idResolved, drainDone]).then(() => undefined);
 
-    this.locator = new TranscriptLocator(config.cwd, (path) => {
-      const filename = basename(path);
-      const discoveredId = filename.replace(/\.jsonl$/i, "");
-      if (this._id) {
-        if (this.transcript && path.endsWith(`${this._id}.jsonl`)) return;
-        this.transcript?.stop();
-        this.transcript = new TranscriptWatcher(path, this.bus);
-        void this.transcript.start();
-        return;
-      }
-      this.resolveId(discoveredId);
-      this.transcript = new TranscriptWatcher(path, this.bus, this.handleModelChange);
-      void this.transcript.start();
-    });
-    this.locator.start();
-
     log.info("Created", {
       token: this.spawnToken,
       cwd: config.cwd,
@@ -145,6 +134,7 @@ export class Session extends EventEmitter<SessionEvents> {
     const dumpScriptPath = ensureDumpScript(deps.serverConfig.dumpDir);
     this.statusLinePayloadFile = statusLinePayloadPath(deps.serverConfig.dumpDir, this.spawnToken);
 
+    const spawnedAt = Date.now();
     this.pty.spawn({
       cwd: config.cwd,
       model: config.model,
@@ -158,7 +148,29 @@ export class Session extends EventEmitter<SessionEvents> {
       effort: this.currentEffort,
     });
 
+    // Resume already knows the session id, so skip the locator. For fresh
+    // spawns, watch ~/.claude/sessions/ — Claude Code v2.1.126+ writes
+    // <pid>.json there on startup; we match by cwd + spawnedAt because the
+    // pid in the file is claude.exe's, not the cmd.exe wrapper's pid.
+    if (!config.resumeSessionId) this.startSessionLocator(spawnedAt);
+
     this.startStatusLinePolling();
+  }
+
+  private startSessionLocator(spawnedAt: number): void {
+    this.locator = new SessionLocator(this.config.cwd, spawnedAt, (sessionId) => {
+      if (this._id) return;
+      this.resolveId(sessionId);
+      const path = join(encodedProjectDir(this.config.cwd), `${sessionId}.jsonl`);
+      this.transcript = new TranscriptWatcher(path, this.bus, this.handleModelChange);
+      void this.transcript.start().catch((err) =>
+        log.warn("Transcript watcher start failed", {
+          token: this.spawnToken,
+          error: (err as Error).message,
+        }),
+      );
+    });
+    this.locator.start();
   }
 
   private handleModelChange = (model: string): void => {
@@ -209,15 +221,9 @@ export class Session extends EventEmitter<SessionEvents> {
       sevenDay: window("rate_limits.seven_day"),
     };
 
-    // Reverse-map display name → alias only when it actually changes, since
-    // the dump fires reactively on every Claude Code render.
-    if (snapshot.modelDisplayName && snapshot.modelDisplayName !== this.lastDisplayName) {
-      this.lastDisplayName = snapshot.modelDisplayName;
-      const derived = deriveAliasFromDisplayName(snapshot.modelDisplayName);
-      if (derived && derived !== this.currentModel) {
-        this.currentModel = derived;
-      }
-    }
+    // Don't sync currentModel from runtime display_name — opusplan/haiku-in-plan
+    // swap sub-models per render and would clobber the user's chosen alias.
+    // Live sub-model is tracked separately on currentModelId / snapshot.
 
     if (statusSnapshotsEqual(this.statusSnapshot, snapshot)) return;
     this.statusSnapshot = snapshot;
@@ -286,7 +292,6 @@ export class Session extends EventEmitter<SessionEvents> {
         const trimmed = output.replace(/\r?\n$/, "");
         if (trimmed === this.lastStatusLine) return;
         this.lastStatusLine = trimmed;
-        log.debug("Status line", { token: this.spawnToken, length: trimmed.length });
         this.emit("statusLine", trimmed);
       } finally {
         this.statusLineInFlight = false;
@@ -339,10 +344,15 @@ export class Session extends EventEmitter<SessionEvents> {
 
   sendInput(text: string): void {
     log.debug("Input", { token: this.spawnToken, text: text.slice(0, 500) });
+    // Wrap in bracketed-paste markers so multi-line text isn't split into
+    // multiple submits. Claude Code's Ink UI enables bracketed paste mode
+    // (\x1b[?2004h) on startup and accepts \x1b[200~…\x1b[201~ as a single
+    // paste event — newlines stay intact inside the input textarea instead
+    // of each one acting as Enter.
+    this.pty.write(`\x1b[200~${text}\x1b[201~`);
     // Claude Code's input parser strips trailing `\r` from multi-char chunks
     // (treats it as SSH-coalesced Enter inserted into the textarea). Submission
     // only fires when `\r` arrives as its own keystroke — split into two writes.
-    this.pty.write(text);
     setTimeout(() => this.pty.write("\r"), 30);
   }
 
@@ -353,26 +363,104 @@ export class Session extends EventEmitter<SessionEvents> {
     setTimeout(() => this.pty.write("\r"), 30);
   }
 
-  setModel(model: ClaudeModel): void {
-    if (model === this.currentModel) return;
-    log.info("Set model", { token: this.spawnToken, model });
-    this.currentModel = model;
-    this.sendSlashCommand(`/model ${model}`);
+  /**
+   * Apply a new (model, effort, permissionMode) tuple by killing the PTY and
+   * re-spawning it with `--resume <id>` plus the new args/env. Skips work when
+   * nothing actually differs from the running PTY's spawn args.
+   *
+   * Permission mode preservation: passed explicitly via `--permission-mode`
+   * so the resumed PTY starts in the same mode the user last selected.
+   */
+  async respawn(settings: RespawnSettings): Promise<void> {
+    if (!this._id) {
+      log.warn("Respawn requested before id resolved", { token: this.spawnToken });
+      return;
+    }
+    const modelChanged = settings.model !== this.currentModel;
+    const effortChanged = settings.effort !== this.currentEffort;
+    const modeChanged = settings.permissionMode !== this.currentPermissionMode;
+    if (!modelChanged && !effortChanged && !modeChanged) return;
+
+    this.currentModel = settings.model;
+    this.currentEffort = settings.effort;
+    this.currentPermissionMode = settings.permissionMode;
+
+    log.info("Respawn", {
+      token: this.spawnToken,
+      id: this._id,
+      model: this.currentModel,
+      effort: this.currentEffort,
+      permissionMode: this.currentPermissionMode,
+    });
+
+    this.respawning = true;
+    const exited = new Promise<void>((resolve) => {
+      this.pty.once("exit", () => resolve());
+    });
+    // Immediate SIGKILL — Claude doesn't exit on one Ctrl+C and the 2s grace
+    // is dead time the user sees as respawn latency. We're about to --resume
+    // anyway; nothing graceful to preserve.
+    this.pty.kill({ immediate: true });
+    await exited;
+
+    const dumpScriptPath = ensureDumpScript(this.deps.serverConfig.dumpDir);
+    const spawnedAt = Date.now();
+    this.pty.spawn({
+      cwd: this.config.cwd,
+      model: this.currentModel,
+      permissionMode: this.currentPermissionMode,
+      cols: this.deps.serverConfig.pty.cols,
+      rows: this.deps.serverConfig.pty.rows,
+      settingsJson: buildHooksConfig(this.deps.hooksBaseUrl, this.spawnToken, {
+        statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
+      }),
+      resumeSessionId: this._id,
+      forceModel: true,
+      effort: this.currentEffort,
+    });
+    // Claude Code takes a few seconds to boot before it reads stdin: it writes
+    // a `--resume` synthetic block to the JSONL (continue-from-here marker,
+    // attachments, /remote-control system message, ...) and only attaches its
+    // stdin reader once that's settled. Writing input earlier is silently
+    // dropped — the user sees "I changed settings, sent a message, nothing
+    // happened." Wait for the bus to receive a new transcript event after our
+    // spawnedAt, then for an 800ms quiet period (= Claude stopped writing).
+    await this.waitForReady(spawnedAt);
+    this.respawning = false;
     this.emit("metadataChanged");
   }
 
-  setEffort(effort: EffortLevel): void {
-    if (effort === this.currentEffort) return;
-    log.info("Set effort", { token: this.spawnToken, effort });
-    this.currentEffort = effort;
-    // Deliberately don't send `/effort X`: that slash command persists to
-    // ~/.claude/settings.json which Claude Code reactively propagates to
-    // every running session via useSettingsChange — i.e. it would silently
-    // change effort in parallel sessions (terminal or other PWA tabs).
-    // The CLAUDE_CODE_EFFORT_LEVEL env set at spawn locks this session's
-    // applied effort anyway, so a slash command can't change it mid-process.
-    // To actually change effort for a running session, recreate the session.
-    this.emit("metadataChanged");
+  private waitForReady(spawnedAt: number): Promise<void> {
+    const READY_TIMEOUT_MS = 8_000;
+    const QUIET_MS = 400;
+    const bus = this._bus;
+    if (!bus) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let quietTimer: ReturnType<typeof setTimeout> | null = null;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        bus.off("event", onEvent);
+        if (quietTimer) clearTimeout(quietTimer);
+        clearTimeout(timer);
+        resolve();
+      };
+      const onEvent = (event: { timestamp: string }) => {
+        const ts = Date.parse(event.timestamp);
+        if (!Number.isFinite(ts) || ts < spawnedAt) return;
+        // Reset the quiet timer — Claude is still actively writing the resume block.
+        if (quietTimer) clearTimeout(quietTimer);
+        quietTimer = setTimeout(finish, QUIET_MS);
+      };
+      bus.on("event", onEvent);
+      const timer = setTimeout(() => {
+        log.warn("Respawn ready-wait timed out — forwarding anyway", {
+          token: this.spawnToken,
+        });
+        finish();
+      }, READY_TIMEOUT_MS);
+    });
   }
 
   /** Shift+Tab — cycles Claude Code's permission mode (default → acceptEdits → plan). */
@@ -395,7 +483,7 @@ export class Session extends EventEmitter<SessionEvents> {
       this.statusLineWatcher.close();
       this.statusLineWatcher = null;
     }
-    this.locator.stop();
+    this.locator?.stop();
     this.transcript?.stop();
     this.pty.kill();
     this.setStatus("stopped");
@@ -453,22 +541,6 @@ function rateWindowEqual(a: RateLimitWindow | undefined, b: RateLimitWindow | un
   if (a === b) return true;
   if (!a || !b) return false;
   return a.usedPercentage === b.usedPercentage && a.resetsAt === b.resetsAt;
-}
-
-/**
- * Reverse-maps Claude Code's `model.display_name` (from the dumped statusline
- * payload) back to one of our `ClaudeModel` aliases. Claude Code's display
- * names follow a stable pattern (e.g. "Opus 4.6", "Sonnet 4.6 (1M context)" —
- * see `claude-code-source/src/utils/model/model.ts:getPublicModelDisplayName`).
- * Returns undefined for unrecognized formats; caller leaves currentModel as-is.
- */
-function deriveAliasFromDisplayName(displayName: string): ClaudeModel | undefined {
-  const has1m = /\(1M context\)/i.test(displayName) || /·\s*1M/i.test(displayName);
-  if (/\bplan\b/i.test(displayName) && /opus/i.test(displayName)) return "opusplan";
-  if (/^opus/i.test(displayName)) return has1m ? "opus[1m]" : "opus";
-  if (/^sonnet/i.test(displayName)) return has1m ? "sonnet[1m]" : "sonnet";
-  if (/^haiku/i.test(displayName)) return "haiku";
-  return undefined;
 }
 
 function statusSnapshotsEqual(a: SessionStatusSnapshot | null, b: SessionStatusSnapshot): boolean {

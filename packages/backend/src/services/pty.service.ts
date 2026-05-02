@@ -19,9 +19,11 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
 
     const args = ["--permission-mode", options.permissionMode];
     if (options.resumeSessionId) {
-      // Omit --model on resume so Claude Code keeps the session's last model
-      // (passing --model would force-switch, losing Opus/Sonnet[1m] etc).
       args.push("--resume", options.resumeSessionId);
+      // Omit --model on resume to preserve the session's last model — passing
+      // it would force-switch and lose flavors like Opus[1m]/opusplan. Set
+      // forceModel when the user has explicitly picked a different model.
+      if (options.forceModel) args.push("--model", options.model);
     } else {
       args.push("--model", options.model);
     }
@@ -115,10 +117,22 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
     }
   }
 
-  kill(): void {
+  /**
+   * Default: Ctrl+C then SIGKILL after 2s, giving Claude Code a chance to flush
+   * state. `immediate` skips that grace period — use when no clean shutdown is
+   * needed (e.g. about to respawn with --resume).
+   */
+  kill(opts: { immediate?: boolean } = {}): void {
     if (!this.process) return;
 
-    log.info("Killing PTY process");
+    log.info("Killing PTY process", { immediate: !!opts.immediate });
+    if (opts.immediate) {
+      try {
+        this.process.kill();
+      } catch {}
+      this.process = null;
+      return;
+    }
     this.process.write("\x03");
 
     setTimeout(() => {
@@ -131,5 +145,9 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
 
   get running(): boolean {
     return this.process !== null;
+  }
+
+  get pid(): number | undefined {
+    return this.process?.pid;
   }
 }

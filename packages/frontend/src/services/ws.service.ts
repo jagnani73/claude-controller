@@ -83,6 +83,17 @@ class WsService {
     }
   }
 
+  /**
+   * Dispatch a synthesized server message to local listeners without sending
+   * anything over the wire. Used for optimistic UI: the input bar fires a
+   * `user_prompt` immediately on send so the message appears instantly,
+   * while the real backend echo (via JSONL) arrives later and gets deduped
+   * by the consuming reducer.
+   */
+  dispatchLocal(msg: ServerMessage): void {
+    this.emit(msg);
+  }
+
   on(type: ServerMessage["type"] | "*", handler: AnyHandler): () => void {
     let set = this.listeners.get(type);
     if (!set) {

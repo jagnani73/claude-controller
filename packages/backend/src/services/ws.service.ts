@@ -306,7 +306,15 @@ function handleMessage(
         sessionId: msg.sessionId,
         text: msg.text.slice(0, 500),
       });
-      session.sendInput(msg.text);
+      void (async () => {
+        if (msg.settings) await session.respawn(msg.settings);
+        session.sendInput(msg.text);
+      })().catch((err) => {
+        log.error("Input dispatch failed", {
+          sessionId: msg.sessionId,
+          error: (err as Error).message,
+        });
+      });
       return;
     }
 
@@ -317,7 +325,15 @@ function handleMessage(
         sessionId: msg.sessionId,
         command: msg.command,
       });
-      session.sendSlashCommand(msg.command);
+      void (async () => {
+        if (msg.settings) await session.respawn(msg.settings);
+        session.sendSlashCommand(msg.command);
+      })().catch((err) => {
+        log.error("Slash command dispatch failed", {
+          sessionId: msg.sessionId,
+          error: (err as Error).message,
+        });
+      });
       return;
     }
 
@@ -474,18 +490,6 @@ function handleMessage(
     case "cycle_permission_mode": {
       const session = sessionManager.get(msg.sessionId);
       session?.cyclePermissionMode();
-      return;
-    }
-
-    case "set_model": {
-      const session = sessionManager.get(msg.sessionId);
-      session?.setModel(msg.model);
-      return;
-    }
-
-    case "set_effort": {
-      const session = sessionManager.get(msg.sessionId);
-      session?.setEffort(msg.effort);
       return;
     }
 

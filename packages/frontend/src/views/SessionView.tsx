@@ -14,7 +14,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 export function SessionView() {
   const { sessionId } = useParams({ from: "/session/$sessionId" });
-  const { sessions, subscribe, setPermissionMode, setModel, setEffort } = useSessions();
+  const { sessions, subscribe, updateSettings, submitInput } = useSessions();
   const { requestBrowse } = useWorkspace();
   const [takenOver, setTakenOver] = useState(false);
   const [notFound, setNotFound] = useState(false);
@@ -114,13 +114,11 @@ export function SessionView() {
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <InputBar
-          sessionId={sessionId}
+          onSubmit={(text) => submitInput(sessionId, text)}
           settingsSlot={
             <SessionSettingsPopover
               session={session}
-              onSetModel={(m) => setModel(sessionId, m)}
-              onSetEffort={(e) => setEffort(sessionId, e)}
-              onSetPermissionMode={(mode) => setPermissionMode(sessionId, mode)}
+              onChange={(next) => updateSettings(sessionId, next)}
             />
           }
         />
