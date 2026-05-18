@@ -22,9 +22,12 @@ export function QueuePanel({ queue }: QueuePanelProps) {
           <span className="size-1 rounded-full bg-warning/70" />
           <span>{queue.length} queued</span>
         </div>
-        <ul className="flex flex-col">
+        <ul className="flex max-h-40 flex-col overflow-y-auto">
           {queue.map((q) => (
-            <li key={q.id} className="truncate px-1 py-0.5 text-sm text-foreground/85">
+            <li
+              key={q.id}
+              className="truncate whitespace-nowrap px-1 py-0.5 text-sm text-foreground/85"
+            >
               {q.text}
             </li>
           ))}

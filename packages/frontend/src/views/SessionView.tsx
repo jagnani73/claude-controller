@@ -68,6 +68,12 @@ export function SessionView() {
   const queueRef = useRef<InternalQueueItem[]>([]);
   /** turnIds already counted — first-occurrence per id signals turn boundary. */
   const seenTurnIds = useRef<Set<string>>(new Set());
+  /**
+   * Esc spam gate. After firing a WS interrupt we disarm until the next
+   * user_prompt re-arms — without this, repeated Esc presses stack multiple
+   * "Interrupted" bubbles (the bus echoes one bubble per WS interrupt).
+   */
+  const interruptArmedRef = useRef(true);
 
   const session = sessions.find((s) => s.id === sessionId);
   const sessionRef = useRef(session);
@@ -120,6 +126,7 @@ export function SessionView() {
     setRecallText(null);
     writeQueue([]);
     seenTurnIds.current = new Set();
+    interruptArmedRef.current = true;
     subscribe(sessionId);
     return () => {
       wsService.send({ type: "unsubscribe", sessionId });
@@ -136,6 +143,8 @@ export function SessionView() {
 
   useWsMessage("user_prompt", (msg) => {
     if (msg.sessionId !== sessionId) return;
+    // Fresh turn re-arms Esc — the previous interrupt (if any) is over.
+    interruptArmedRef.current = true;
     if (!msg.text.startsWith("/")) setRecallText(msg.text);
     // Bus echoed our send — flip the in-flight item to bus-acked so we
     // stop drawing it from the queue (MessageStream's reducer now owns
@@ -190,6 +199,37 @@ export function SessionView() {
     .filter((it) => it.status === "pending")
     .map((it) => ({ id: it.id, text: it.text }));
   const isProcessing = hasActiveSend(queue);
+  /** Most recent pending item — Esc pops this back into the input. */
+  const queueTail = pendingItems.length > 0 ? pendingItems[pendingItems.length - 1].text : null;
+
+  /**
+   * Esc with non-empty queue — remove the most recent pending item; InputBar
+   * will fill the textarea with its text so the user can edit/discard.
+   */
+  const handlePopQueueTail = useCallback(() => {
+    const items = queueRef.current;
+    // Find the last pending item by walking from the end. We only pop
+    // pendings — never an in-flight or bus-acked item (those are already
+    // at the backend and can't be unsent).
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].status === "pending") {
+        writeQueue([...items.slice(0, i), ...items.slice(i + 1)]);
+        return;
+      }
+    }
+  }, [writeQueue]);
+
+  /**
+   * Esc with empty queue — interrupt the in-flight turn on the backend.
+   * Gated by `interruptArmedRef` so spamming Esc doesn't stack multiple
+   * "Interrupted" bubbles (one bus-echoed bubble per WS interrupt).
+   */
+  const handleInterrupt = useCallback(() => {
+    if (!interruptArmedRef.current) return;
+    if (!hasActiveSend(queueRef.current)) return;
+    interruptArmedRef.current = false;
+    wsService.send({ type: "interrupt", sessionId });
+  }, [sessionId]);
 
   useEffect(() => {
     if (session?.cwd) requestBrowse(session.cwd);
@@ -269,6 +309,9 @@ export function SessionView() {
         <InputBar
           onSubmit={handleSubmit}
           recallText={recallText}
+          queueTail={queueTail}
+          onPopQueueTail={handlePopQueueTail}
+          onInterrupt={handleInterrupt}
           settingsSlot={
             <SessionSettingsPopover
               session={session}
