@@ -13,6 +13,10 @@
     "./types": {
       "import": "./dist/types/index.js",
       "types": "./dist/types/index.d.ts"
+    },
+    "./permission-cycle": {
+      "import": "./dist/permission-cycle.js",
+      "types": "./dist/permission-cycle.d.ts"
     }
   },
   "scripts": {

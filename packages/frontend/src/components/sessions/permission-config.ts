@@ -1,17 +1,6 @@
 import type { ClaudeModel, PermissionMode } from "common/types";
 import { supportsAutoMode } from "./model-config";
 
-/**
- * Claude Code's Shift+Tab walks `default → acceptEdits → plan → auto → default`
- * when the auto-mode gate is enabled. `bypassPermissions` and `dontAsk` are
- * gated behind feature flags / hidden in upstream and intentionally not surfaced.
- * See `claude-code-source/src/utils/permissions/getNextPermissionMode.ts`.
- */
-export const PERMISSION_CYCLE: PermissionMode[] = ["default", "acceptEdits", "plan", "auto"];
-
-/** Delay between cycle keystrokes so the PTY can process each before the next. */
-export const PERMISSION_CYCLE_STEP_MS = 80;
-
 const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "default", label: "Default" },
   { value: "acceptEdits", label: "Accept Edits" },

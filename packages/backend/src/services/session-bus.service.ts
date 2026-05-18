@@ -159,9 +159,7 @@ export class SessionBus extends EventEmitter<BusEvents> {
     if (priorIdx < 0 || lastIdx < 0) return false;
     const between = this.events.slice(priorIdx + 1, lastIdx);
     const hadInterrupt = between.some((e) => e.kind === "interrupt");
-    const hadOther = between.some(
-      (e) => e.kind !== "interrupt" && e.kind !== "permission_mode",
-    );
+    const hadOther = between.some((e) => e.kind !== "interrupt" && e.kind !== "permission_mode");
     if (!hadInterrupt || hadOther) return false;
     const prior = this.events[priorIdx] as Extract<SessionBusEvent, { kind: "user_prompt" }>;
     const last = this.events[lastIdx] as Extract<SessionBusEvent, { kind: "user_prompt" }>;

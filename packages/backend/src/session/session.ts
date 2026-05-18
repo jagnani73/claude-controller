@@ -4,6 +4,7 @@ import { type FSWatcher, mkdirSync, readFileSync, watch } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { cycleCanIncludeAuto, cycleDistance } from "common/permission-cycle";
 import type {
   ClaudeModel,
   EffortLevel,
@@ -32,6 +33,9 @@ import { encodedProjectDir } from "../utils/claude-paths.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
 
 const log = LoggerService.scoped("session");
+
+/** Delay between Shift+Tab keystrokes so Ink can process each before the next. */
+const PERMISSION_CYCLE_STEP_MS = 80;
 
 export class Session extends EventEmitter<SessionEvents> {
   /**
@@ -510,10 +514,37 @@ export class Session extends EventEmitter<SessionEvents> {
     });
   }
 
-  /** Shift+Tab — cycles Claude Code's permission mode (default → acceptEdits → plan). */
-  cyclePermissionMode(): void {
-    log.debug("Cycle permission mode", { token: this.spawnToken });
-    this.pty.write("\x1b[Z");
+  /**
+   * Walk Claude Code's permission-mode cycle to `target` by writing the
+   * right number of Shift+Tab keystrokes (`\x1b[Z`) into the PTY, paced
+   * so Ink can process each before the next arrives. Sets
+   * `currentPermissionMode` optimistically and emits `metadataChanged`
+   * so concurrent `session_metadata` broadcasts (e.g. statusline
+   * re-renders triggered by the same keystrokes) carry the intended
+   * value rather than the pre-cycle one. JSONL's `permission-mode`
+   * entry still arrives via the transcript watcher and is the
+   * canonical correction if reality diverges.
+   */
+  setPermissionMode(target: PermissionMode): void {
+    const from = this.currentPermissionMode;
+    if (from === target) return;
+    const autoAvailable = cycleCanIncludeAuto(this.currentModel);
+    const steps = cycleDistance(from, target, { autoAvailable });
+    if (steps === 0) {
+      log.warn("Permission mode target unreachable from current", {
+        token: this.spawnToken,
+        from,
+        target,
+        model: this.currentModel,
+      });
+      return;
+    }
+    log.debug("Set permission mode", { token: this.spawnToken, from, target, steps });
+    this.currentPermissionMode = target;
+    this.emit("metadataChanged");
+    for (let i = 0; i < steps; i++) {
+      setTimeout(() => this.pty.write("\x1b[Z"), i * PERMISSION_CYCLE_STEP_MS);
+    }
   }
 
   /**

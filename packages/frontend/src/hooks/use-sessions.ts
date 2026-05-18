@@ -10,10 +10,6 @@ import type {
 } from "common/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clampEffort, clampPermissionMode } from "@/components/sessions/model-config";
-import {
-  PERMISSION_CYCLE,
-  PERMISSION_CYCLE_STEP_MS,
-} from "@/components/sessions/permission-config";
 import { wsService } from "@/services/ws.service";
 import { useWsMessage } from "./use-ws";
 
@@ -26,8 +22,7 @@ import { useWsMessage } from "./use-ws";
  * so the change is per-session and applied via respawn on next message.
  */
 const EFFORT_SLASH_RE = /^\/effort\s+(auto|low|medium|high|xhigh|max)\s*$/i;
-const MODEL_SLASH_RE =
-  /^\/model\s+(opus|opus\[1m\]|opusplan|sonnet|sonnet\[1m\]|haiku)\s*$/i;
+const MODEL_SLASH_RE = /^\/model\s+(opus|opus\[1m\]|opusplan|sonnet|sonnet\[1m\]|haiku)\s*$/i;
 
 function parseSettingsSlash(text: string): SettingsPatch | null {
   const trimmed = text.trim();
@@ -107,8 +102,6 @@ export function useSessions() {
   const pendingCreate = useRef<PendingCreate | null>(null);
   /** Latest sessions reachable from non-React-state callbacks (e.g. send). */
   const sessionsRef = useRef<SessionInfo[]>(sessions);
-  /** Pending Shift+Tab cycle keystroke timers, keyed by sessionId. */
-  const cycleTimers = useRef<Map<string, ReturnType<typeof setTimeout>[]>>(new Map());
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -121,13 +114,6 @@ export function useSessions() {
     clearTimeout(p.timer);
     if (kind === "resolve") p.resolve(value as SessionInfo);
     else p.reject(value as Error);
-  }, []);
-
-  const cancelCycle = useCallback((sessionId: string) => {
-    const timers = cycleTimers.current.get(sessionId);
-    if (!timers) return;
-    for (const t of timers) clearTimeout(t);
-    cycleTimers.current.delete(sessionId);
   }, []);
 
   useWsMessage("connected", (msg) => {
@@ -168,8 +154,10 @@ export function useSessions() {
       // Preserve local model/effort — they're user-set values applied via
       // respawn-on-input. Backend echoes its `currentX` here, but in the gap
       // between user click and next message-send the local value is the
-      // intent. Permission mode is backend-authoritative (JSONL is source of
-      // truth; cycle keystrokes confirm via the `permission_mode` ws message).
+      // intent. Permission mode comes from the backend: it sets
+      // `currentPermissionMode` optimistically when handling
+      // `set_permission_mode` and corrects from JSONL's `permission-mode`
+      // entry on divergence, so this broadcast is always self-consistent.
       const next = [...prev];
       next[idx] = {
         ...msg.session,
@@ -195,72 +183,47 @@ export function useSessions() {
   /**
    * Atomically apply a partial settings update — model change clamps effort
    * and permission mode if the new model doesn't support the current values
-   * (handled upstream in SessionSettingsPanel). Permission-mode changes also
-   * walk Claude Code's Shift+Tab cycle so mid-task mode flips take effect on
-   * the running PTY without a respawn.
+   * (handled upstream in SessionSettingsPanel). Permission-mode changes are
+   * declared via `set_permission_mode`; the backend walks Claude Code's
+   * Shift+Tab cycle so mid-task mode flips take effect on the running PTY
+   * without a respawn.
    */
-  const updateSettings = useCallback(
-    (sessionId: string, patch: SettingsPatch) => {
-      let cycleFromTo: { from: PermissionMode; to: PermissionMode } | null = null;
-      setSessions((prev) => {
-        const idx = prev.findIndex((s) => s.id === sessionId);
-        if (idx < 0) return prev;
-        const cur = prev[idx];
-        const nextModel = patch.model ?? cur.model;
-        const nextEffort = patch.effort ?? cur.effort;
-        const nextMode = patch.permissionMode ?? cur.permissionMode;
-        if (
-          nextModel === cur.model &&
-          nextEffort === cur.effort &&
-          nextMode === cur.permissionMode
-        ) {
-          return prev;
-        }
-        if (nextMode !== cur.permissionMode) {
-          cycleFromTo = { from: cur.permissionMode, to: nextMode };
-        }
-        const updated: SessionInfo = {
-          ...cur,
-          model: nextModel,
-          effort: nextEffort,
-          permissionMode: nextMode,
-        };
-        persistSessionConfig(updated);
-        const next = [...prev];
-        next[idx] = updated;
-        return next;
-      });
+  const updateSettings = useCallback((sessionId: string, patch: SettingsPatch) => {
+    let modeChangedTo: PermissionMode | null = null;
+    setSessions((prev) => {
+      const idx = prev.findIndex((s) => s.id === sessionId);
+      if (idx < 0) return prev;
+      const cur = prev[idx];
+      const nextModel = patch.model ?? cur.model;
+      const nextEffort = patch.effort ?? cur.effort;
+      const nextMode = patch.permissionMode ?? cur.permissionMode;
+      if (nextModel === cur.model && nextEffort === cur.effort && nextMode === cur.permissionMode) {
+        return prev;
+      }
+      if (nextMode !== cur.permissionMode) {
+        modeChangedTo = nextMode;
+      }
+      const updated: SessionInfo = {
+        ...cur,
+        model: nextModel,
+        effort: nextEffort,
+        permissionMode: nextMode,
+      };
+      persistSessionConfig(updated);
+      const next = [...prev];
+      next[idx] = updated;
+      return next;
+    });
 
-      if (!cycleFromTo) return;
-      cancelCycle(sessionId);
-      const { from, to } = cycleFromTo;
-      const fromIdx = PERMISSION_CYCLE.indexOf(from);
-      const toIdx = PERMISSION_CYCLE.indexOf(to);
-      if (fromIdx < 0 || toIdx < 0) {
-        // Out-of-cycle target (shouldn't happen with current modes) — single nudge.
-        wsService.send({ type: "cycle_permission_mode", sessionId });
-        return;
-      }
-      const dist = (toIdx - fromIdx + PERMISSION_CYCLE.length) % PERMISSION_CYCLE.length;
-      const timers: ReturnType<typeof setTimeout>[] = [];
-      for (let i = 0; i < dist; i++) {
-        timers.push(
-          setTimeout(() => {
-            wsService.send({ type: "cycle_permission_mode", sessionId });
-          }, i * PERMISSION_CYCLE_STEP_MS),
-        );
-      }
-      cycleTimers.current.set(sessionId, timers);
-    },
-    [cancelCycle],
-  );
+    if (modeChangedTo) {
+      wsService.send({ type: "set_permission_mode", sessionId, mode: modeChangedTo });
+    }
+  }, []);
 
   /**
    * Submit user input to the session, attaching the current settings tuple so
    * the backend can respawn the PTY with the user's latest intent before
-   * forwarding. Cancels any in-flight cycle keystrokes — the respawn applies
-   * the final permission mode via `--permission-mode`, so stale cycle
-   * keystrokes hitting the new PTY would just push it off the intended mode.
+   * forwarding.
    *
    * Optimistically dispatches a local `user_prompt` so the user's message
    * appears instantly. The real event arrives later (after respawn + Claude
@@ -270,7 +233,6 @@ export function useSessions() {
     (sessionId: string, text: string) => {
       const target = sessionsRef.current.find((s) => s.id === sessionId);
       if (!target) return;
-      cancelCycle(sessionId);
 
       // Intercept `/effort` and `/model`. Claude Code's native handlers write
       // to ~/.claude/settings.json AND collide with our per-session env var
@@ -287,10 +249,7 @@ export function useSessions() {
           const clamped: SettingsPatch = { ...settingsPatch };
           if (settingsPatch.model) {
             clamped.effort = clampEffort(settingsPatch.model, s.effort);
-            clamped.permissionMode = clampPermissionMode(
-              settingsPatch.model,
-              s.permissionMode,
-            );
+            clamped.permissionMode = clampPermissionMode(settingsPatch.model, s.permissionMode);
           } else if (settingsPatch.effort) {
             clamped.effort = clampEffort(s.model, settingsPatch.effort);
           }
@@ -327,7 +286,7 @@ export function useSessions() {
       // the in-flight bubble itself until the bus echo arrives.
       wsService.send({ type: "input", sessionId, text, settings });
     },
-    [cancelCycle, updateSettings],
+    [updateSettings],
   );
 
   /** Send create_session and resolve with the new SessionInfo once the server broadcasts. */

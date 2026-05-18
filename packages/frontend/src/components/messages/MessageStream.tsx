@@ -788,7 +788,7 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
                     key={item.id}
                     className="mx-auto my-3 flex w-full max-w-md items-center justify-center px-4 text-center font-mono text-[11px] text-warning/80"
                   >
-                    <span>⎿  Interrupted · What should Claude do instead?</span>
+                    <span>⎿ Interrupted · What should Claude do instead?</span>
                   </div>
                 );
               default:

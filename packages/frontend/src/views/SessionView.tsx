@@ -2,7 +2,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { Loader2, SearchX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { InputBar } from "@/components/layout/InputBar";
-import { QueuePanel, type QueueItem } from "@/components/layout/QueuePanel";
+import { type QueueItem, QueuePanel } from "@/components/layout/QueuePanel";
 import { SessionTopBar } from "@/components/layout/SessionTopBar";
 import { StatusLine } from "@/components/layout/StatusLine";
 import { MessageStream } from "@/components/messages/MessageStream";
@@ -94,30 +94,27 @@ export function SessionView() {
    * next state but does NOT call setQueue — caller is responsible for that
    * so we don't trigger multiple re-renders per event.
    */
-  const dispatchHeadIfIdle = useCallback(
-    (current: InternalQueueItem[]): InternalQueueItem[] => {
-      if (hasActiveSend(current)) return current;
-      const idx = current.findIndex((it) => it.status === "pending");
-      if (idx === -1) return current;
-      const target = sessionRef.current;
-      if (!target) return current;
-      const head = current[idx];
-      const next = [...current];
-      next[idx] = { ...head, status: "in-flight" };
-      wsService.send({
-        type: "input",
-        sessionId: head.sessionId,
-        text: head.text,
-        settings: {
-          model: target.model,
-          effort: target.effort,
-          permissionMode: target.permissionMode,
-        },
-      });
-      return next;
-    },
-    [],
-  );
+  const dispatchHeadIfIdle = useCallback((current: InternalQueueItem[]): InternalQueueItem[] => {
+    if (hasActiveSend(current)) return current;
+    const idx = current.findIndex((it) => it.status === "pending");
+    if (idx === -1) return current;
+    const target = sessionRef.current;
+    if (!target) return current;
+    const head = current[idx];
+    const next = [...current];
+    next[idx] = { ...head, status: "in-flight" };
+    wsService.send({
+      type: "input",
+      sessionId: head.sessionId,
+      text: head.text,
+      settings: {
+        model: target.model,
+        effort: target.effort,
+        permissionMode: target.permissionMode,
+      },
+    });
+    return next;
+  }, []);
 
   useEffect(() => {
     setTakenOver(false);

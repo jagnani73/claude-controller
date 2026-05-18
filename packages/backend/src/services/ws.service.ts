@@ -371,9 +371,7 @@ function handleMessage(
       // gets the primary "applied to N sessions" message; siblings get the
       // "applied from another session" hint so the user understands why
       // their model/effort changed without them touching the popover.
-      const active = sessionManager
-        .list()
-        .filter((s: SessionInfo) => s.status !== "stopped");
+      const active = sessionManager.list().filter((s: SessionInfo) => s.status !== "stopped");
       const word = active.length === 1 ? "session" : "sessions";
       const slashName = msg.key === "effortLevel" ? "/effort" : "/model";
       const ts = new Date().toISOString();
@@ -565,9 +563,9 @@ function handleMessage(
       return;
     }
 
-    case "cycle_permission_mode": {
+    case "set_permission_mode": {
       const session = sessionManager.get(msg.sessionId);
-      session?.cyclePermissionMode();
+      session?.setPermissionMode(msg.mode);
       return;
     }
 

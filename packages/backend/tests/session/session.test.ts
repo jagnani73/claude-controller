@@ -37,6 +37,7 @@ const serverConfig: ServerConfig = {
   port: 3000,
   host: "0.0.0.0",
   dataDir: "./data",
+  dumpDir: "./dump",
   workDir: "/tmp",
   pty: { cols: 120, rows: 40 },
 };
@@ -160,5 +161,82 @@ describe("Session", () => {
     const asString = shellArgs.join(" ");
     expect(asString).toContain("--settings");
     expect(asString).toContain("127.0.0.1:9999");
+  });
+
+  describe("setPermissionMode", () => {
+    /**
+     * setPermissionMode schedules paced setTimeouts that outlive the test
+     * if not drained. Without this, prior tests' Shift+Tab writes bleed
+     * into the current test's mockWrite call list.
+     */
+    const drainTimers = () => new Promise((r) => setTimeout(r, 250));
+
+    it("emits metadataChanged exactly once when mode changes", async () => {
+      const session = new Session(testConfig, deps);
+      await drainTimers();
+      let fired = 0;
+      session.on("metadataChanged", () => {
+        fired++;
+      });
+      session.setPermissionMode("plan");
+      expect(fired).toBe(1);
+      await drainTimers();
+    });
+
+    it("is a no-op when target equals current mode", async () => {
+      const session = new Session(testConfig, deps);
+      await drainTimers();
+      let fired = 0;
+      session.on("metadataChanged", () => {
+        fired++;
+      });
+      session.setPermissionMode("default");
+      expect(fired).toBe(0);
+      await drainTimers();
+    });
+
+    it("writes two Shift+Tabs to reach plan on a 3-step model (haiku)", async () => {
+      const session = new Session(
+        { ...testConfig, model: "haiku", permissionMode: "default" },
+        deps,
+      );
+      await drainTimers();
+      mockWrite.mockClear();
+      session.setPermissionMode("plan");
+      await drainTimers();
+      const shiftTabCalls = mockWrite.mock.calls.filter((c) => c[0] === "\x1b[Z");
+      expect(shiftTabCalls.length).toBe(2);
+    });
+
+    it("writes three Shift+Tabs to reach auto on plain opus", async () => {
+      const session = new Session(
+        { ...testConfig, model: "opus", permissionMode: "default" },
+        deps,
+      );
+      await drainTimers();
+      mockWrite.mockClear();
+      session.setPermissionMode("auto");
+      await drainTimers();
+      const shiftTabCalls = mockWrite.mock.calls.filter((c) => c[0] === "\x1b[Z");
+      expect(shiftTabCalls.length).toBe(3);
+    });
+
+    it("ignores unreachable targets (auto on haiku) without scheduling writes", async () => {
+      const session = new Session(
+        { ...testConfig, model: "haiku", permissionMode: "default" },
+        deps,
+      );
+      await drainTimers();
+      mockWrite.mockClear();
+      let fired = 0;
+      session.on("metadataChanged", () => {
+        fired++;
+      });
+      session.setPermissionMode("auto");
+      await drainTimers();
+      const shiftTabCalls = mockWrite.mock.calls.filter((c) => c[0] === "\x1b[Z");
+      expect(shiftTabCalls.length).toBe(0);
+      expect(fired).toBe(0);
+    });
   });
 });

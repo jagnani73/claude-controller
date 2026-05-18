@@ -256,7 +256,7 @@ export type ClientMessage =
       query?: string;
     }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
-  | { type: "cycle_permission_mode"; sessionId: string }
+  | { type: "set_permission_mode"; sessionId: string; mode: PermissionMode }
   | {
       type: "fetch_history";
       sessionId: string;
