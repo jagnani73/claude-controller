@@ -15,7 +15,8 @@ const SEARCH_DEBOUNCE_MS = 250;
 
 export function Sidebar() {
   const connectionState = useWsState();
-  const { workDir, createSession } = useSessions();
+  const { workDir, createSession, sessions } = useSessions();
+  const activeCount = sessions.filter((s) => s.status !== "stopped").length;
   const { selectedPath, setSelectedPath, searchQuery, setSearchQuery, requestBrowse } =
     useWorkspace();
   const { collapse } = useSidebarShell();
@@ -149,6 +150,14 @@ export function Sidebar() {
       <div className="flex shrink-0 flex-col gap-1 border-t border-sidebar-border/60 px-3 py-3">
         <StatusDot tone={connectionTone} pulse={connectionState === "connecting"}>
           <span>{connectionLabel}</span>
+          {connectionState === "connected" && activeCount > 0 && (
+            <>
+              <span className="text-muted-foreground/40 mx-1">·</span>
+              <span className="font-mono tabular-nums text-muted-foreground/80">
+                {activeCount.toLocaleString()} active
+              </span>
+            </>
+          )}
         </StatusDot>
         {workDir && (
           <div className="truncate font-mono text-xs text-muted-foreground/50">{workDir}</div>

@@ -62,6 +62,12 @@ type StreamItem =
       args?: string;
       output?: string;
       timestamp: string;
+    }
+  | {
+      kind: "interrupt";
+      id: string;
+      sessionId: string;
+      timestamp: string;
     };
 
 type Action =
@@ -119,128 +125,183 @@ type Action =
       output?: string;
       timestamp: string;
     }
+  | {
+      type: "interrupt";
+      sessionId: string;
+      timestamp: string;
+    }
   | { type: "prepend"; items: StreamItem[] };
 
-function reducer(state: StreamItem[], action: Action): StreamItem[] {
+interface State {
+  items: StreamItem[];
+}
+
+const INITIAL_STATE: State = { items: [] };
+
+function makeUserItem(
+  args: { text: string; timestamp: string; sessionId: string },
+  slot: number,
+): Extract<StreamItem, { kind: "user" }> {
+  return {
+    kind: "user",
+    id: `u-${args.timestamp}-${slot}`,
+    sessionId: args.sessionId,
+    text: args.text,
+    timestamp: args.timestamp,
+  };
+}
+
+function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "clear":
-      return [];
-    case "user_prompt":
-      if (
-        state.some(
-          (it) =>
-            it.kind === "user" && it.text === action.text && it.sessionId === action.sessionId,
-        )
-      ) {
-        return state;
-      }
-      return [
+      return INITIAL_STATE;
+    case "user_prompt": {
+      // Identity dedup defends against the bus replaying the same event
+      // (reconnect / re-subscribe); two intentional same-text sends have
+      // distinct backend timestamps so both pass through.
+      const dup = state.items.some(
+        (it) =>
+          it.kind === "user" &&
+          it.text === action.text &&
+          it.timestamp === action.timestamp &&
+          it.sessionId === action.sessionId,
+      );
+      if (dup) return state;
+      return {
         ...state,
-        {
-          kind: "user",
-          id: `u-${action.timestamp}-${state.length}`,
-          sessionId: action.sessionId,
-          text: action.text,
-          timestamp: action.timestamp,
-        },
-      ];
+        items: [...state.items, makeUserItem(action, state.items.length)],
+      };
+    }
     case "assistant_text": {
-      const id = `a-${action.turnId}-${state.length}`;
       if (
-        state.some(
+        state.items.some(
           (it) =>
             it.kind === "assistant" && it.text === action.text && it.sessionId === action.sessionId,
         )
       ) {
         return state;
       }
-      return [
+      return {
         ...state,
-        {
-          kind: "assistant",
-          id,
-          sessionId: action.sessionId,
-          text: action.text,
-          timestamp: action.timestamp,
-        },
-      ];
+        items: [
+          ...state.items,
+          {
+            kind: "assistant",
+            id: `a-${action.turnId}-${state.items.length}`,
+            sessionId: action.sessionId,
+            text: action.text,
+            timestamp: action.timestamp,
+          },
+        ],
+      };
     }
     case "tool_call":
-      if (state.some((it) => it.kind === "tool" && it.id === action.toolUseId)) {
+      if (state.items.some((it) => it.kind === "tool" && it.id === action.toolUseId)) {
         return state;
       }
-      return [
+      return {
         ...state,
-        {
-          kind: "tool",
-          id: action.toolUseId,
-          sessionId: action.sessionId,
-          toolName: action.toolName,
-          input: action.input,
-          result: null,
-        },
-      ];
+        items: [
+          ...state.items,
+          {
+            kind: "tool",
+            id: action.toolUseId,
+            sessionId: action.sessionId,
+            toolName: action.toolName,
+            input: action.input,
+            result: null,
+          },
+        ],
+      };
     case "tool_result":
-      return state.map((it) =>
-        it.kind === "tool" && it.id === action.toolUseId
-          ? { ...it, result: { value: action.result, isError: action.isError } }
-          : it,
-      );
+      return {
+        ...state,
+        items: state.items.map((it) =>
+          it.kind === "tool" && it.id === action.toolUseId
+            ? { ...it, result: { value: action.result, isError: action.isError } }
+            : it,
+        ),
+      };
     case "approval_request":
-      if (state.some((it) => it.kind === "approval" && it.id === action.toolUseId)) {
+      if (state.items.some((it) => it.kind === "approval" && it.id === action.toolUseId)) {
         return state;
       }
-      return [
+      return {
         ...state,
-        {
-          kind: "approval",
-          id: action.toolUseId,
-          sessionId: action.sessionId,
-          toolName: action.toolName,
-          toolInput: action.toolInput,
-        },
-      ];
+        items: [
+          ...state.items,
+          {
+            kind: "approval",
+            id: action.toolUseId,
+            sessionId: action.sessionId,
+            toolName: action.toolName,
+            toolInput: action.toolInput,
+          },
+        ],
+      };
     case "approval_resolved":
-      return state.map((it) =>
-        it.kind === "approval" && it.id === action.toolUseId
-          ? { ...it, resolved: action.decision }
-          : it,
-      );
+      return {
+        ...state,
+        items: state.items.map((it) =>
+          it.kind === "approval" && it.id === action.toolUseId
+            ? { ...it, resolved: action.decision }
+            : it,
+        ),
+      };
     case "compact_summary": {
-      const id = `c-${action.timestamp}-${state.length}`;
-      if (state.some((it) => it.kind === "compact_summary" && it.id === id)) return state;
-      return [
+      const id = `c-${action.timestamp}-${state.items.length}`;
+      if (state.items.some((it) => it.kind === "compact_summary" && it.id === id)) return state;
+      return {
         ...state,
-        {
-          kind: "compact_summary",
-          id,
-          sessionId: action.sessionId,
-          text: action.text,
-          timestamp: action.timestamp,
-        },
-      ];
+        items: [
+          ...state.items,
+          {
+            kind: "compact_summary",
+            id,
+            sessionId: action.sessionId,
+            text: action.text,
+            timestamp: action.timestamp,
+          },
+        ],
+      };
     }
-    case "slash_command": {
-      const id = `s-${action.timestamp}-${action.name}-${state.length}`;
-      return [
+    case "slash_command":
+      return {
         ...state,
-        {
-          kind: "slash_command",
-          id,
-          sessionId: action.sessionId,
-          name: action.name,
-          args: action.args,
-          output: action.output,
-          timestamp: action.timestamp,
-        },
-      ];
+        items: [
+          ...state.items,
+          {
+            kind: "slash_command",
+            id: `s-${action.timestamp}-${action.name}-${state.items.length}`,
+            sessionId: action.sessionId,
+            name: action.name,
+            args: action.args,
+            output: action.output,
+            timestamp: action.timestamp,
+          },
+        ],
+      };
+    case "interrupt": {
+      // Defensive de-dup against back-to-back interrupt events.
+      const last = state.items[state.items.length - 1];
+      if (last && last.kind === "interrupt") return state;
+      return {
+        ...state,
+        items: [
+          ...state.items,
+          {
+            kind: "interrupt",
+            id: `int-${action.timestamp}-${state.items.length}`,
+            sessionId: action.sessionId,
+            timestamp: action.timestamp,
+          },
+        ],
+      };
     }
     case "prepend": {
-      // Deduplicate by id — some older messages may already be in the
-      // tail (backend's dedup is per-kind, not per-batch).
-      const existingIds = new Set(state.map((s) => s.id));
+      const existingIds = new Set(state.items.map((s) => s.id));
       const fresh = action.items.filter((it) => !existingIds.has(it.id));
-      return fresh.length > 0 ? [...fresh, ...state] : state;
+      return fresh.length > 0 ? { ...state, items: [...fresh, ...state.items] } : state;
     }
   }
 }
@@ -317,6 +378,14 @@ function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem
           timestamp: e.timestamp,
         });
         break;
+      case "interrupt":
+        items.push({
+          kind: "interrupt",
+          id: `int-${e.timestamp}-${slot}`,
+          sessionId: e.sessionId,
+          timestamp: e.timestamp,
+        });
+        break;
       default:
         break;
     }
@@ -326,10 +395,27 @@ function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem
 
 interface MessageStreamProps {
   sessionId: string;
+  /**
+   * If non-null, the in-flight queue item drawn as a preview bubble at the
+   * end of the stream. This is the optimistic rendering — the user sees
+   * their message instantly even before the bus echo arrives. Once the bus
+   * echoes the prompt (and the canonical bubble lands in `items`),
+   * SessionView clears this prop so the preview goes away without leaving
+   * a duplicate.
+   */
+  inFlightPreview?: { text: string; timestamp: string } | null;
+  /**
+   * True whenever the frontend queue has work in-flight (sent or bus-acked,
+   * waiting for assistant_text). Drives the thinking indicator independently
+   * of whether the bus has echoed the user_prompt yet — without it the
+   * loader would flicker off during the ~100ms gap before the echo lands.
+   */
+  isProcessing?: boolean;
 }
 
-export function MessageStream({ sessionId }: MessageStreamProps) {
-  const [items, dispatch] = useReducer(reducer, []);
+export function MessageStream({ sessionId, inFlightPreview, isProcessing }: MessageStreamProps) {
+  const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
+  const items = state.items;
   const scrollRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
 
@@ -343,7 +429,9 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
   const prevFirstIdRef = useRef<string | undefined>(undefined);
   const pendingAnchorRef = useRef<{ height: number; top: number } | null>(null);
 
-  // Reset when switching sessions
+  // Reset when switching sessions. The component instance is reused across
+  // /session/$id route changes, so without `sessionId` in the dep list the
+  // previous session's stream items leak into the new one.
   useEffect(() => {
     dispatch({ type: "clear" });
     setEarliestIndex(null);
@@ -353,7 +441,7 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
     prevFirstIdRef.current = undefined;
     prevScrollHeightRef.current = 0;
     pendingAnchorRef.current = null;
-  }, []);
+  }, [sessionId]);
 
   useWsMessage("user_prompt", (msg) => {
     if (msg.sessionId !== sessionId) return;
@@ -426,6 +514,15 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
       name: msg.name,
       args: msg.args,
       output: msg.output,
+      timestamp: msg.timestamp,
+    });
+  });
+
+  useWsMessage("interrupt", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    dispatch({
+      type: "interrupt",
+      sessionId: msg.sessionId,
       timestamp: msg.timestamp,
     });
   });
@@ -513,13 +610,16 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
 
   const lastItem = items[items.length - 1];
   // Keep the spinner visible while tools are running / approvals are pending —
-  // assistant text, compact summary, and local slash commands are terminal:
-  // slash commands like /rename or /effort don't produce an assistant turn.
+  // assistant text, compact summary, local slash commands, and interrupts are
+  // terminal. `isProcessing` from SessionView covers the gap between submit
+  // and the bus echo arriving (no items yet but a turn is in flight).
   const waitingForReply =
-    !!lastItem &&
-    lastItem.kind !== "assistant" &&
-    lastItem.kind !== "compact_summary" &&
-    lastItem.kind !== "slash_command";
+    isProcessing ||
+    (!!lastItem &&
+      lastItem.kind !== "assistant" &&
+      lastItem.kind !== "compact_summary" &&
+      lastItem.kind !== "slash_command" &&
+      lastItem.kind !== "interrupt");
 
   const [toolGroupOverride, setToolGroupOverride] = useState<Record<string, "open" | "closed">>({});
   const toggleToolGroup = useCallback((groupId: string, openByDefault: boolean) => {
@@ -682,10 +782,22 @@ export function MessageStream({ sessionId }: MessageStreamProps) {
                     )}
                   </div>
                 );
+              case "interrupt":
+                return (
+                  <div
+                    key={item.id}
+                    className="mx-auto my-3 flex w-full max-w-md items-center justify-center px-4 text-center font-mono text-[11px] text-warning/80"
+                  >
+                    <span>⎿  Interrupted · What should Claude do instead?</span>
+                  </div>
+                );
               default:
                 return null;
             }
           })
+        )}
+        {inFlightPreview && (
+          <UserMessage text={inFlightPreview.text} timestamp={inFlightPreview.timestamp} />
         )}
         {compacting && (
           <div className="mx-4 my-2 flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/6 px-3 py-2 text-sm text-warning">

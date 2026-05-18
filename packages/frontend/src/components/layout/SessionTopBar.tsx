@@ -82,6 +82,7 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
   const inTokens = status?.totalInputTokens;
   const outTokens = status?.totalOutputTokens;
   const modelLabel = displayedModelLabel(model, permissionMode, status?.modelDisplayName);
+  // `auto` is a meaningful state ("use the model default"), not absence — render it explicitly.
   const effortLabel = effort ?? "auto";
 
   return (
@@ -113,6 +114,7 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
           {cwd ?? ""}
         </div>
 
+        {/* Hidden until the first status dump — alias/effort would be unreliable before then. */}
         {ready && (
           <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <Badge variant="secondary" className="font-mono text-xs tracking-wider">

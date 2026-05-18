@@ -16,6 +16,15 @@ const log = LoggerService.scoped("transcript");
 const COMMAND_NAME_RE = /<command-name>([^<]+)<\/command-name>/;
 const COMMAND_ARGS_RE = /<command-args>([^<]*)<\/command-args>/;
 
+/**
+ * Markers Claude Code injects on `--resume` to bridge the previous session's
+ * last turn to the next user input. They land in the JSONL as a paired user +
+ * assistant entry but represent no real conversation, so we filter them out
+ * before they hit the bus and end up rendered in the UI as fake messages.
+ */
+const SYNTHETIC_RESUME_USER_TEXT = "Continue from where you left off.";
+const SYNTHETIC_ASSISTANT_MODEL = "<synthetic>";
+
 // Constructed via `new RegExp` to keep raw control bytes out of source.
 // Mirrors the `strip-ansi` package's CSI/SGR coverage.
 const ANSI_RE = new RegExp(
@@ -260,6 +269,8 @@ export class TranscriptWatcher {
   }
 
   private handleAssistant(entry: AssistantEntry): void {
+    // Synthetic assistant turn from `--resume` scaffolding — filter out.
+    if (entry.message.model === SYNTHETIC_ASSISTANT_MODEL) return;
     const sessionId = this.bus.sessionId;
     const timestamp = entry.timestamp;
     const turnId = entry.message.id;
@@ -323,6 +334,9 @@ export class TranscriptWatcher {
         });
         return;
       }
+      // Synthetic --resume bridge prompt — Claude Code's internal scaffolding,
+      // not a user-typed message.
+      if (content === SYNTHETIC_RESUME_USER_TEXT) return;
       // Caveats are scaffolding — ignore but don't flush; they appear between
       // the command-name and stdout entries in the same prompt group.
       if (content.startsWith("<local-command-caveat>")) return;
@@ -347,12 +361,7 @@ export class TranscriptWatcher {
       }
       // Real chat content — anything pending didn't get a stdout, flush plain.
       this.flushPendingSlashCommand();
-      this.emitEvent({
-        kind: "user_prompt",
-        sessionId,
-        timestamp,
-        text: content,
-      });
+      this.emitEvent({ kind: "user_prompt", sessionId, timestamp, text: content });
       return;
     }
 
@@ -368,12 +377,10 @@ export class TranscriptWatcher {
           isError: block.is_error ?? false,
         });
       } else if (block.type === "text") {
-        this.emitEvent({
-          kind: "user_prompt",
-          sessionId,
-          timestamp,
-          text: block.text,
-        });
+        // Synthetic --resume bridge prompt arrives as an array-form text block
+        // when Claude Code uses the structured user-content shape.
+        if (block.text === SYNTHETIC_RESUME_USER_TEXT) continue;
+        this.emitEvent({ kind: "user_prompt", sessionId, timestamp, text: block.text });
       }
     }
   }

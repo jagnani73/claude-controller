@@ -74,6 +74,11 @@ export type SessionBusEvent =
       name: string;
       args?: string;
       output?: string;
+    }
+  | {
+      kind: "interrupt";
+      sessionId: string;
+      timestamp: string;
     };
 
 type BusEvents = {
@@ -111,6 +116,19 @@ export class SessionBus extends EventEmitter<BusEvents> {
       if (this.seenToolUseIds.has(event.toolUseId)) return false;
       this.seenToolUseIds.add(event.toolUseId);
     }
+    // Drop the concat echo Claude Code writes after an Esc + redirect.
+    // After interrupt + new input, the JSONL gets a single `user_prompt` whose
+    // text is `<interrupted text><redirect>` — but the original and redirect
+    // are already represented as separate events (the redirect is synthesized
+    // by Session.sendInput). Without this drop, the UI would show three user
+    // bubbles for what was conceptually two messages.
+    if (event.kind === "user_prompt" && this.isInterruptConcatEcho(event)) {
+      log.debug("Dropping interrupt-concat echo", {
+        sessionId: this.sessionId,
+        textLength: event.text.length,
+      });
+      return false;
+    }
     this.events.push(event);
     log.debug("Event", {
       sessionId: this.sessionId,
@@ -118,6 +136,40 @@ export class SessionBus extends EventEmitter<BusEvents> {
       logSize: this.events.length,
     });
     return true;
+  }
+
+  /**
+   * True when `event` is the JSONL "combined" user_prompt that Claude Code
+   * writes after Esc + redirect. Pattern: the prior two user_prompts in the
+   * log are separated by ONLY interrupt/permission_mode events, and the new
+   * text equals priorUser.text + lastUser.text (Claude Code concatenates
+   * the interrupted prompt with the redirect verbatim).
+   */
+  private isInterruptConcatEcho(event: SessionBusEvent & { kind: "user_prompt" }): boolean {
+    let lastIdx = -1;
+    let priorIdx = -1;
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      if (this.events[i].kind !== "user_prompt") continue;
+      if (lastIdx === -1) lastIdx = i;
+      else {
+        priorIdx = i;
+        break;
+      }
+    }
+    if (priorIdx < 0 || lastIdx < 0) return false;
+    const between = this.events.slice(priorIdx + 1, lastIdx);
+    const hadInterrupt = between.some((e) => e.kind === "interrupt");
+    const hadOther = between.some(
+      (e) => e.kind !== "interrupt" && e.kind !== "permission_mode",
+    );
+    if (!hadInterrupt || hadOther) return false;
+    const prior = this.events[priorIdx] as Extract<SessionBusEvent, { kind: "user_prompt" }>;
+    const last = this.events[lastIdx] as Extract<SessionBusEvent, { kind: "user_prompt" }>;
+    return (
+      event.text.startsWith(prior.text) &&
+      event.text.endsWith(last.text) &&
+      event.text.length > last.text.length
+    );
   }
 
   /** Replay all prior events to a new subscriber. */

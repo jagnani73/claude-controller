@@ -342,8 +342,18 @@ export class Session extends EventEmitter<SessionEvents> {
     this.statusLineTimer = setInterval(safeTick, SAFETY_INTERVAL_MS);
   }
 
-  sendInput(text: string): void {
+  async sendInput(text: string): Promise<void> {
     log.debug("Input", { token: this.spawnToken, text: text.slice(0, 500) });
+    // Post-interrupt redirect: when the prior turn was Esc'd before completion,
+    // Claude Code's textarea retains the interrupted text and any new input gets
+    // *appended* to it — the model then sees `<interrupted><redirect>` instead
+    // of just the redirect. Ink ignores backspace bursts and readline shortcuts
+    // here, so the only reliable way to get a clean textarea is to kill+respawn
+    // the PTY (still --resumes the same session id, A stays in JSONL history).
+    if (this.shouldSynthRedirect()) {
+      log.debug("Force respawn for redirect", { token: this.spawnToken });
+      await this._doRespawn();
+    }
     // Wrap in bracketed-paste markers so multi-line text isn't split into
     // multiple submits. Claude Code's Ink UI enables bracketed paste mode
     // (\x1b[?2004h) on startup and accepts \x1b[200~…\x1b[201~ as a single
@@ -356,9 +366,36 @@ export class Session extends EventEmitter<SessionEvents> {
     setTimeout(() => this.pty.write("\r"), 30);
   }
 
-  sendSlashCommand(command: string): void {
+  /** True when the most recent user_prompt was interrupted with no assistant since. */
+  private shouldSynthRedirect(): boolean {
+    if (!this._bus) return false;
+    const events = this._bus.getEventLog();
+    let lastUserIdx = -1;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].kind === "user_prompt") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return false;
+    const after = events.slice(lastUserIdx + 1);
+    const hadInterrupt = after.some((e) => e.kind === "interrupt");
+    const hadAssistant = after.some((e) => e.kind === "assistant_text");
+    return hadInterrupt && !hadAssistant;
+  }
+
+  async sendSlashCommand(command: string): Promise<void> {
     const cmd = command.startsWith("/") ? command : `/${command}`;
     log.debug("Slash command", { token: this.spawnToken, command: cmd });
+    // Same post-interrupt textarea problem as sendInput — without a respawn,
+    // the slash command appends to leftover interrupted text and Claude Code
+    // submits the whole concat as a regular user_prompt instead of parsing
+    // the slash. (Verified in 99369e68: "<spam>/effort high" landed as one
+    // entry, model treated it as a paste-buffer issue.)
+    if (this.shouldSynthRedirect()) {
+      log.debug("Force respawn for slash redirect", { token: this.spawnToken });
+      await this._doRespawn();
+    }
     this.pty.write(cmd);
     setTimeout(() => this.pty.write("\r"), 30);
   }
@@ -392,7 +429,17 @@ export class Session extends EventEmitter<SessionEvents> {
       effort: this.currentEffort,
       permissionMode: this.currentPermissionMode,
     });
+    await this._doRespawn();
+  }
 
+  /**
+   * Kill+respawn the PTY with `--resume <id>` and the current settings. Used
+   * by the public respawn() (after the diff check) and by sendInput's
+   * post-interrupt redirect path (forced — Claude Code's textarea would
+   * otherwise prepend the interrupted text to the new input).
+   */
+  private async _doRespawn(): Promise<void> {
+    if (!this._id) return;
     this.respawning = true;
     const exited = new Promise<void>((resolve) => {
       this.pty.once("exit", () => resolve());
@@ -467,6 +514,56 @@ export class Session extends EventEmitter<SessionEvents> {
   cyclePermissionMode(): void {
     log.debug("Cycle permission mode", { token: this.spawnToken });
     this.pty.write("\x1b[Z");
+  }
+
+  /**
+   * Single Esc — interrupts Claude's current turn at the PTY (writes `\x1b`)
+   * and pushes a synthesized `interrupt` event onto the bus so subscribers
+   * (and reload/replay) see the terminal marker. Claude Code itself doesn't
+   * write anything we can parse into the JSONL on Esc, so without this the
+   * thinking spinner would keep spinning forever after an interrupt and a
+   * page refresh would lose the visual entirely.
+   *
+   * Idle gate: only push the bubble if there's actually an in-flight turn
+   * (most recent user_prompt has no terminal event after it). Otherwise an
+   * idle Esc — e.g. on the home screen, or right after switching to a
+   * settled session — would strand an "Interrupted" marker. The PTY write
+   * still fires either way; it's a no-op for Claude when nothing's running.
+   */
+  interrupt(): void {
+    log.debug("Interrupt", { token: this.spawnToken });
+    this.pty.write("\x1b");
+    if (!this._bus) return;
+    if (!this.hasInFlightTurn()) return;
+    this._bus.push({
+      kind: "interrupt",
+      sessionId: this._bus.sessionId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /** True iff the most recent user_prompt has no terminal event after it. */
+  private hasInFlightTurn(): boolean {
+    if (!this._bus) return false;
+    const events = this._bus.getEventLog();
+    let lastUserIdx = -1;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].kind === "user_prompt") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return false;
+    const TERMINAL: ReadonlySet<string> = new Set([
+      "assistant_text",
+      "compact_summary",
+      "slash_command",
+      "interrupt",
+    ]);
+    for (let i = lastUserIdx + 1; i < events.length; i++) {
+      if (TERMINAL.has(events[i].kind)) return false;
+    }
+    return true;
   }
 
   resize(cols: number, rows: number): void {
@@ -560,21 +657,16 @@ function statusSnapshotsEqual(a: SessionStatusSnapshot | null, b: SessionStatusS
 // "skip env var" branch.
 const VALID_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "high", "xhigh", "max"]);
 
-// Cached: settings.json doesn't change mid-process, so a single sync read
-// at first access beats a fresh read on every Session construction.
-let cachedDefaultEffort: EffortLevel | undefined | null = null;
-
+// Read fresh on every call — settings.json *can* change mid-process now that
+// the controller mirrors `/effort` writes back to disk. settings.json is small,
+// the read is sync and cheap, and stale cached values would silently ignore
+// the user's slash-command updates for new sessions.
 function readGlobalDefaultEffort(): EffortLevel | undefined {
-  if (cachedDefaultEffort !== null) return cachedDefaultEffort;
   try {
     const raw = readFileSync(join(homedir(), ".claude", "settings.json"), "utf8");
     const parsed = JSON.parse(raw) as { effortLevel?: unknown };
     const v = parsed.effortLevel;
-    if (typeof v === "string" && VALID_EFFORTS.has(v)) {
-      cachedDefaultEffort = v as EffortLevel;
-      return cachedDefaultEffort;
-    }
+    if (typeof v === "string" && VALID_EFFORTS.has(v)) return v as EffortLevel;
   } catch {}
-  cachedDefaultEffort = undefined;
   return undefined;
 }

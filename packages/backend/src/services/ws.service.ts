@@ -1,4 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, normalize, relative, resolve, sep } from "node:path";
 import type {
   ClientMessage,
@@ -197,6 +199,12 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage {
         output: event.output,
         timestamp: event.timestamp,
       };
+    case "interrupt":
+      return {
+        type: "interrupt",
+        sessionId: event.sessionId,
+        timestamp: event.timestamp,
+      };
   }
 }
 
@@ -308,7 +316,7 @@ function handleMessage(
       });
       void (async () => {
         if (msg.settings) await session.respawn(msg.settings);
-        session.sendInput(msg.text);
+        await session.sendInput(msg.text);
       })().catch((err) => {
         log.error("Input dispatch failed", {
           sessionId: msg.sessionId,
@@ -327,10 +335,80 @@ function handleMessage(
       });
       void (async () => {
         if (msg.settings) await session.respawn(msg.settings);
-        session.sendSlashCommand(msg.command);
+        await session.sendSlashCommand(msg.command);
       })().catch((err) => {
         log.error("Slash command dispatch failed", {
           sessionId: msg.sessionId,
+          error: (err as Error).message,
+        });
+      });
+      return;
+    }
+
+    case "interrupt": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) return;
+      log.debug("Interrupt", { sessionId: msg.sessionId });
+      session.interrupt();
+      return;
+    }
+
+    case "unsubscribe": {
+      const state = clients.get(ws);
+      if (!state) return;
+      if (state.subscribedSessionId !== msg.sessionId) return;
+      log.info("Client unsubscribing from session", { sessionId: msg.sessionId });
+      state.cleanup?.();
+      state.subscribedSessionId = null;
+      state.cleanup = null;
+      return;
+    }
+
+    case "update_global_setting": {
+      const settingsPath = join(homedir(), ".claude", "settings.json");
+      // Fan a `slash_command` bubble onto every active session's bus so the
+      // change is visible in each stream (and survives reload). The origin
+      // gets the primary "applied to N sessions" message; siblings get the
+      // "applied from another session" hint so the user understands why
+      // their model/effort changed without them touching the popover.
+      const active = sessionManager
+        .list()
+        .filter((s: SessionInfo) => s.status !== "stopped");
+      const word = active.length === 1 ? "session" : "sessions";
+      const slashName = msg.key === "effortLevel" ? "/effort" : "/model";
+      const ts = new Date().toISOString();
+      for (const info of active) {
+        const session = sessionManager.get(info.id);
+        if (!session?.resolved) continue;
+        const isOrigin = info.id === msg.originSessionId;
+        session.bus.push({
+          kind: "slash_command",
+          sessionId: info.id,
+          timestamp: ts,
+          name: slashName,
+          args: msg.value,
+          output: isOrigin
+            ? `applied to ${active.length} active ${word} and saved as global default`
+            : "applied from another session",
+        });
+      }
+      void (async () => {
+        const raw = await readFile(settingsPath, "utf8").catch(() => "{}");
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(raw) as Record<string, unknown>;
+        } catch (err) {
+          log.warn("Could not parse settings.json — refusing to overwrite", {
+            error: (err as Error).message,
+          });
+          return;
+        }
+        parsed[msg.key] = msg.value;
+        await writeFile(settingsPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+        log.info("Updated global setting", { key: msg.key, value: msg.value });
+      })().catch((err) => {
+        log.warn("Failed to update global setting", {
+          key: msg.key,
           error: (err as Error).message,
         });
       });

@@ -157,6 +157,7 @@ export type ServerMessage =
   | { type: "compact_start"; sessionId: string; trigger: "manual" | "auto" }
   | { type: "compact_end"; sessionId: string; trigger: "manual" | "auto" }
   | { type: "compact_summary"; sessionId: string; text: string; timestamp: string }
+  | { type: "interrupt"; sessionId: string; timestamp: string }
   | {
       type: "slash_command";
       sessionId: string;
@@ -199,6 +200,22 @@ export interface RespawnSettings {
 export type ClientMessage =
   | { type: "input"; sessionId: string; text: string; settings?: RespawnSettings }
   | { type: "slash_command"; sessionId: string; command: string; settings?: RespawnSettings }
+  | { type: "interrupt"; sessionId: string }
+  | {
+      /**
+       * Mirror Claude Code's `/effort` / `/model` slash commands on the
+       * controller side: write the new value to `~/.claude/settings.json` so
+       * future sessions and external `claude` invocations inherit it, and
+       * push a notification bubble onto every active session's bus so
+       * sessions other than the originating one see why their settings
+       * changed. Per-session env-var update is handled by the frontend via
+       * `updateSettings` and applied on each session's next respawn.
+       */
+      type: "update_global_setting";
+      key: "effortLevel" | "model";
+      value: string;
+      originSessionId: string;
+    }
   | {
       type: "approval_response";
       sessionId: string;
@@ -217,6 +234,16 @@ export type ClientMessage =
        * session id.
        */
       resumeConfig?: Omit<SessionConfig, "resumeSessionId">;
+    }
+  | {
+      /**
+       * Detach this WS from a session's event stream without stopping the
+       * session itself. Sent by the frontend when SessionView unmounts (e.g.
+       * navigating back to `/`). Without it, the backend keeps streaming
+       * bus events over the WS to a viewer that has nothing rendered.
+       */
+      type: "unsubscribe";
+      sessionId: string;
     }
   | { type: "create_session"; config: SessionConfig }
   | { type: "stop_session"; sessionId: string }

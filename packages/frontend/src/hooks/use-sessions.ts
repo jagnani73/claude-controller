@@ -9,12 +9,34 @@ import type {
   SessionInfo,
 } from "common/types";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { clampEffort, clampPermissionMode } from "@/components/sessions/model-config";
 import {
   PERMISSION_CYCLE,
   PERMISSION_CYCLE_STEP_MS,
 } from "@/components/sessions/permission-config";
 import { wsService } from "@/services/ws.service";
 import { useWsMessage } from "./use-ws";
+
+/**
+ * Slash commands whose Claude Code native handlers conflict with our
+ * per-session env-based settings: `/effort` and `/model` write to the
+ * GLOBAL `~/.claude/settings.json`, then collide with our env var
+ * (CLAUDE_CODE_EFFORT_LEVEL wins → user sees the "overrides this session"
+ * warning). Intercept them in submitInput and route through updateSettings
+ * so the change is per-session and applied via respawn on next message.
+ */
+const EFFORT_SLASH_RE = /^\/effort\s+(auto|low|medium|high|xhigh|max)\s*$/i;
+const MODEL_SLASH_RE =
+  /^\/model\s+(opus|opus\[1m\]|opusplan|sonnet|sonnet\[1m\]|haiku)\s*$/i;
+
+function parseSettingsSlash(text: string): SettingsPatch | null {
+  const trimmed = text.trim();
+  const effort = trimmed.match(EFFORT_SLASH_RE);
+  if (effort) return { effort: effort[1].toLowerCase() as EffortLevel };
+  const model = trimmed.match(MODEL_SLASH_RE);
+  if (model) return { model: model[1].toLowerCase() as ClaudeModel };
+  return null;
+}
 
 /**
  * Per-session config cache in localStorage. Keyed by the Claude Code session
@@ -249,6 +271,49 @@ export function useSessions() {
       const target = sessionsRef.current.find((s) => s.id === sessionId);
       if (!target) return;
       cancelCycle(sessionId);
+
+      // Intercept `/effort` and `/model`. Claude Code's native handlers write
+      // to ~/.claude/settings.json AND collide with our per-session env var
+      // (CLAUDE_CODE_EFFORT_LEVEL wins → "overrides this session" warning).
+      // Mirror the *intent* (global write + cross-session propagation) without
+      // the conflict: update every active session's local settings (popover +
+      // top bar reflect it via SessionInfo state), and send a single WS message
+      // so the backend persists settings.json and pushes a notification bubble
+      // onto each session's bus.
+      const settingsPatch = parseSettingsSlash(text);
+      if (settingsPatch) {
+        const alive = sessionsRef.current.filter((s) => s.status !== "stopped");
+        for (const s of alive) {
+          const clamped: SettingsPatch = { ...settingsPatch };
+          if (settingsPatch.model) {
+            clamped.effort = clampEffort(settingsPatch.model, s.effort);
+            clamped.permissionMode = clampPermissionMode(
+              settingsPatch.model,
+              s.permissionMode,
+            );
+          } else if (settingsPatch.effort) {
+            clamped.effort = clampEffort(s.model, settingsPatch.effort);
+          }
+          updateSettings(s.id, clamped);
+        }
+        if (settingsPatch.effort) {
+          wsService.send({
+            type: "update_global_setting",
+            key: "effortLevel",
+            value: settingsPatch.effort,
+            originSessionId: sessionId,
+          });
+        } else if (settingsPatch.model) {
+          wsService.send({
+            type: "update_global_setting",
+            key: "model",
+            value: settingsPatch.model,
+            originSessionId: sessionId,
+          });
+        }
+        return;
+      }
+
       const settings: RespawnSettings = {
         model: target.model,
         effort: target.effort,
@@ -258,15 +323,11 @@ export function useSessions() {
         wsService.send({ type: "slash_command", sessionId, command: text, settings });
         return;
       }
-      wsService.dispatchLocal({
-        type: "user_prompt",
-        sessionId,
-        text,
-        timestamp: new Date().toISOString(),
-      });
+      // No optimistic dispatch — the frontend queue (in SessionView) draws
+      // the in-flight bubble itself until the bus echo arrives.
       wsService.send({ type: "input", sessionId, text, settings });
     },
-    [cancelCycle],
+    [cancelCycle, updateSettings],
   );
 
   /** Send create_session and resolve with the new SessionInfo once the server broadcasts. */
