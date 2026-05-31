@@ -1,4 +1,4 @@
-import type { ServerMessage } from "common/types";
+import type { ServerMessage, ToolResult } from "common/types";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
@@ -16,7 +16,7 @@ const TOOL_GROUP_COLLAPSE_THRESHOLD = 3;
 
 const HISTORY_PAGE_SIZE = 20;
 
-type StreamItem =
+export type StreamItem =
   | {
       kind: "user";
       id: string;
@@ -34,6 +34,15 @@ type StreamItem =
   | {
       kind: "tool";
       id: string;
+      /**
+       * Stable identity for React keys. `id` gets promoted from a
+       * content-hashed `pr:` placeholder to the real `toolu_` id once the JSONL
+       * flushes, and two AskUserQuestion calls with identical question/options
+       * share a content-hashed id — so keying on `id`/content collides. `uid`
+       * is assigned once at creation and never changes, keeping same-text
+       * questions distinct and surviving id promotion without remounting.
+       */
+      uid: string;
       sessionId: string;
       toolName: string;
       input: unknown;
@@ -70,7 +79,7 @@ type StreamItem =
       timestamp: string;
     };
 
-type Action =
+export type Action =
   | { type: "clear" }
   | {
       type: "user_prompt";
@@ -130,13 +139,38 @@ type Action =
       sessionId: string;
       timestamp: string;
     }
-  | { type: "prepend"; items: StreamItem[] };
+  | { type: "prepend"; items: StreamItem[]; results?: Record<string, ToolResult> };
 
-interface State {
+export interface State {
   items: StreamItem[];
+  /** Monotonic counter for minting stable tool `uid`s (see StreamItem.tool). */
+  seq: number;
+  /**
+   * tool_use_id → result, kept independently of `items` so a tool_result can
+   * land on its tool card regardless of arrival order. The live `tool_result`
+   * path and the history-pagination path deliver call and result in separate
+   * batches; without this map, a result whose tool_call isn't yet present (or
+   * is in a different page) would attach to nothing and the card would render
+   * as unanswered. `fuseResults` reconciles the map onto items on every change.
+   */
+  results: Record<string, ToolResult>;
 }
 
-const INITIAL_STATE: State = { items: [] };
+export const INITIAL_STATE: State = { items: [], seq: 0, results: {} };
+
+/** Attach known results to any tool item still missing one. Returns the same
+ *  array reference when nothing changed so React bail-outs still work. */
+function fuseResults(items: StreamItem[], results: Record<string, ToolResult>): StreamItem[] {
+  let changed = false;
+  const next = items.map((it) => {
+    if (it.kind === "tool" && !it.result && results[it.id]) {
+      changed = true;
+      return { ...it, result: results[it.id] };
+    }
+    return it;
+  });
+  return changed ? next : items;
+}
 
 function makeUserItem(
   args: { text: string; timestamp: string; sessionId: string },
@@ -151,7 +185,7 @@ function makeUserItem(
   };
 }
 
-function reducer(state: State, action: Action): State {
+export function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "clear":
       return INITIAL_STATE;
@@ -195,50 +229,123 @@ function reducer(state: State, action: Action): State {
         ],
       };
     }
-    case "tool_call":
+    case "tool_call": {
       if (state.items.some((it) => it.kind === "tool" && it.id === action.toolUseId)) {
         return state;
       }
-      return {
-        ...state,
-        items: [
-          ...state.items,
-          {
-            kind: "tool",
-            id: action.toolUseId,
-            sessionId: action.sessionId,
-            toolName: action.toolName,
-            input: action.input,
-            result: null,
-          },
-        ],
-      };
-    case "tool_result":
-      return {
-        ...state,
-        items: state.items.map((it) =>
-          it.kind === "tool" && it.id === action.toolUseId
-            ? { ...it, result: { value: action.result, isError: action.isError } }
-            : it,
-        ),
-      };
-    case "approval_request":
-      if (state.items.some((it) => it.kind === "approval" && it.id === action.toolUseId)) {
-        return state;
+      // AskUserQuestion is pre-populated from the approval_request (which fires
+      // before the JSONL flushes tool_call) under a synthesized id of the form
+      // `pr:<tool>:<hash>`, because the PermissionRequest hook payload doesn't
+      // include the real tool_use_id. When the real tool_call finally arrives,
+      // promote the existing item's id to the real one so the eventual
+      // tool_result (keyed by real id) lands on the right item.
+      //
+      // We match by id prefix rather than by serialized input — the controller
+      // only ever has one pending AskUserQuestion at a time, and JSON.stringify
+      // equality is fragile (object key order can differ between the hook's
+      // parsed input and the JSONL's parsed input).
+      if (action.toolName === "AskUserQuestion") {
+        // Promote the OLDEST un-resolved placeholder (FIFO) — only one
+        // AskUserQuestion is pending at a time, so the oldest still-pending
+        // `pr:` placeholder is the one this real tool_call corresponds to.
+        // Preserve its `uid` so the card doesn't remount (keeping in-progress
+        // input) and so two same-text questions stay distinct.
+        const existingIdx = state.items.findIndex(
+          (it) =>
+            it.kind === "tool" &&
+            it.toolName === "AskUserQuestion" &&
+            it.id.startsWith("pr:") &&
+            !it.result,
+        );
+        if (existingIdx >= 0) {
+          // Relocate the placeholder to the tail rather than promoting in
+          // place. The approval_request hook fires (and creates the card)
+          // before the transcript watcher tails the assistant_text that
+          // precedes this tool call in the JSONL — so the card was inserted
+          // one slot too early, above its own "Round N" announcement. By the
+          // time this real tool_call arrives, that assistant_text has already
+          // been pushed (the drain parses text before tool_use, in file
+          // order), so re-appending the card here lands it after its
+          // announcement. Preserve `uid` so the card doesn't remount.
+          const existing = state.items[existingIdx] as Extract<StreamItem, { kind: "tool" }>;
+          const rest = state.items.filter((_it, i) => i !== existingIdx);
+          const promoted = [...rest, { ...existing, id: action.toolUseId }];
+          return { ...state, items: fuseResults(promoted, state.results) };
+        }
       }
       return {
         ...state,
-        items: [
-          ...state.items,
-          {
-            kind: "approval",
-            id: action.toolUseId,
-            sessionId: action.sessionId,
-            toolName: action.toolName,
-            toolInput: action.toolInput,
-          },
-        ],
+        seq: state.seq + 1,
+        items: fuseResults(
+          [
+            ...state.items,
+            {
+              kind: "tool",
+              id: action.toolUseId,
+              uid: `t${state.seq}`,
+              sessionId: action.sessionId,
+              toolName: action.toolName,
+              input: action.input,
+              result: null,
+            },
+          ],
+          state.results,
+        ),
       };
+    }
+    case "tool_result": {
+      // Record in the map first so the result survives even if its tool_call
+      // hasn't arrived (or is in a not-yet-loaded history page), then fuse.
+      const results = {
+        ...state.results,
+        [action.toolUseId]: { value: action.result, isError: action.isError },
+      };
+      return { ...state, results, items: fuseResults(state.items, results) };
+    }
+    case "approval_request": {
+      const added: StreamItem[] = [];
+      if (!state.items.some((it) => it.kind === "approval" && it.id === action.toolUseId)) {
+        added.push({
+          kind: "approval",
+          id: action.toolUseId,
+          sessionId: action.sessionId,
+          toolName: action.toolName,
+          toolInput: action.toolInput,
+        });
+      }
+      // AskUserQuestion: the PermissionRequest hook normally fires before the
+      // transcript JSONL records the tool_call, so without this the UI sits
+      // blank between "user prompt sent" and "tool_call arrives". Pre-populate
+      // the tool item from the approval payload.
+      //
+      // Dedupe against ANY pending (un-resulted) AskUserQuestion card, not just
+      // one sharing this approval's synthesized `pr:` id. Only one
+      // AskUserQuestion is pending at a time, so a pending card already
+      // represents this question — whether it was created by an earlier
+      // approval_request (`pr:` id) or by the real tool_call (`toolu_` id),
+      // whichever the bus delivered first. Matching on the `pr:` id alone misses
+      // the tool_call-first ordering (fs.watch can beat the hook), which spawned
+      // an orphan duplicate card that never resolved — visible as editable
+      // "already answered" questions after a mid-interview reload.
+      let seq = state.seq;
+      const pendingQuestionExists = state.items.some(
+        (it) => it.kind === "tool" && it.toolName === "AskUserQuestion" && !it.result,
+      );
+      if (action.toolName === "AskUserQuestion" && !pendingQuestionExists) {
+        added.push({
+          kind: "tool",
+          id: action.toolUseId,
+          uid: `t${seq}`,
+          sessionId: action.sessionId,
+          toolName: action.toolName,
+          input: action.toolInput,
+          result: null,
+        });
+        seq += 1;
+      }
+      if (added.length === 0) return state;
+      return { ...state, seq, items: fuseResults([...state.items, ...added], state.results) };
+    }
     case "approval_resolved":
       return {
         ...state,
@@ -301,14 +408,26 @@ function reducer(state: State, action: Action): State {
     case "prepend": {
       const existingIds = new Set(state.items.map((s) => s.id));
       const fresh = action.items.filter((it) => !existingIds.has(it.id));
-      return fresh.length > 0 ? { ...state, items: [...fresh, ...state.items] } : state;
+      // Merge any results carried by this history page into the map, then fuse
+      // across the whole list: a prepended tool_call may have its result in an
+      // already-loaded page (now in the map), and a prepended result may belong
+      // to a tool_call already in the stream.
+      const results = action.results ? { ...state.results, ...action.results } : state.results;
+      if (fresh.length === 0 && results === state.results) return state;
+      return { ...state, results, items: fuseResults([...fresh, ...state.items], results) };
     }
   }
 }
 
-/** Convert a batch of ServerMessages (a history page) into StreamItems. */
-function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem[] {
+/** Convert a batch of ServerMessages (a history page) into StreamItems plus a
+ *  map of every tool_result seen — including ones whose tool_call lives in a
+ *  different page, which the reducer fuses globally once that call loads. */
+export function eventsToItems(
+  events: ServerMessage[],
+  startOffset: number,
+): { items: StreamItem[]; results: Record<string, ToolResult> } {
   const items: StreamItem[] = [];
+  const results: Record<string, ToolResult> = {};
   let idx = 0;
   for (const e of events) {
     const slot = startOffset + idx++;
@@ -335,6 +454,7 @@ function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem
         items.push({
           kind: "tool",
           id: e.toolUseId,
+          uid: `h-${e.toolUseId}`,
           sessionId: e.sessionId,
           toolName: e.name,
           input: e.input,
@@ -342,10 +462,12 @@ function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem
         });
         break;
       case "tool_result": {
-        // Fuse into the matching tool_call if it's in the same batch.
+        // Record every result; the reducer fuses it onto the tool card whether
+        // or not the matching tool_call is in this same page.
+        results[e.toolUseId] = { value: e.result, isError: e.isError };
         const match = items.find((it) => it.kind === "tool" && it.id === e.toolUseId);
         if (match && match.kind === "tool") {
-          match.result = { value: e.result, isError: e.isError };
+          match.result = results[e.toolUseId];
         }
         break;
       }
@@ -390,7 +512,7 @@ function eventsToItems(events: ServerMessage[], startOffset: number): StreamItem
         break;
     }
   }
-  return items;
+  return { items, results };
 }
 
 interface MessageStreamProps {
@@ -411,11 +533,32 @@ interface MessageStreamProps {
    * loader would flicker off during the ~100ms gap before the echo lands.
    */
   isProcessing?: boolean;
+  /**
+   * Reports whether any AskUserQuestion is still awaiting an answer. Computed
+   * here (not in SessionView) because the reducer is the single source of truth
+   * that reconciles the synthesized `pr:` approval id with the real
+   * tool_use_id — the raw WS events alone can't be matched reliably.
+   */
+  onPendingQuestionChange?: (pending: boolean) => void;
 }
 
-export function MessageStream({ sessionId, inFlightPreview, isProcessing }: MessageStreamProps) {
+export function MessageStream({
+  sessionId,
+  inFlightPreview,
+  isProcessing,
+  onPendingQuestionChange,
+}: MessageStreamProps) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const items = state.items;
+
+  // An AskUserQuestion is pending while its tool item has no result yet.
+  const hasPendingQuestion = items.some(
+    (it) => it.kind === "tool" && it.toolName === "AskUserQuestion" && !it.result,
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fire only when the flag flips
+  useEffect(() => {
+    onPendingQuestionChange?.(hasPendingQuestion);
+  }, [hasPendingQuestion]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
 
@@ -554,8 +697,8 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
         top: el.scrollTop,
       };
     }
-    const newItems = eventsToItems(msg.events, msg.fromIndex);
-    dispatch({ type: "prepend", items: newItems });
+    const { items: newItems, results } = eventsToItems(msg.events, msg.fromIndex);
+    dispatch({ type: "prepend", items: newItems, results });
     setEarliestIndex(msg.fromIndex);
     setHasMore(msg.hasMore);
     setLoadingHistory(false);
@@ -608,18 +751,36 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
     prevFirstIdRef.current = items[0]?.id;
   }, [items]);
 
-  const lastItem = items[items.length - 1];
+  // Walk past AskUserQuestion approval items — they're suppressed in render
+  // (the QuestionCard owns the UI), and they never resolve, so they'd
+  // otherwise pin "last item" to a pseudo-pending state forever.
+  let effectiveLastItem: StreamItem | undefined;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "approval" && it.toolName === "AskUserQuestion") continue;
+    effectiveLastItem = it;
+    break;
+  }
   // Keep the spinner visible while tools are running / approvals are pending —
   // assistant text, compact summary, local slash commands, and interrupts are
   // terminal. `isProcessing` from SessionView covers the gap between submit
   // and the bus echo arriving (no items yet but a turn is in flight).
+  // AskUserQuestion is special: when waiting on the user (no result yet) or
+  // after a cancel (result.isError), the CLI's turn is not in flight — the
+  // spinner would mislead. A successful answer (result.isError === false)
+  // still falls through to the regular "tool returned, Claude is thinking" path.
+  const askUserQuestionUnresolved =
+    effectiveLastItem?.kind === "tool" &&
+    effectiveLastItem.toolName === "AskUserQuestion" &&
+    (!effectiveLastItem.result || effectiveLastItem.result.isError);
   const waitingForReply =
-    isProcessing ||
-    (!!lastItem &&
-      lastItem.kind !== "assistant" &&
-      lastItem.kind !== "compact_summary" &&
-      lastItem.kind !== "slash_command" &&
-      lastItem.kind !== "interrupt");
+    !askUserQuestionUnresolved &&
+    (isProcessing ||
+      (!!effectiveLastItem &&
+        effectiveLastItem.kind !== "assistant" &&
+        effectiveLastItem.kind !== "compact_summary" &&
+        effectiveLastItem.kind !== "slash_command" &&
+        effectiveLastItem.kind !== "interrupt"));
 
   const [toolGroupOverride, setToolGroupOverride] = useState<Record<string, "open" | "closed">>({});
   const toggleToolGroup = useCallback((groupId: string, openByDefault: boolean) => {
@@ -632,13 +793,18 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
   type RenderEntry =
     | { kind: "single"; item: StreamItem }
     | { kind: "tool-group"; groupId: string; items: Extract<StreamItem, { kind: "tool" }>[] };
+  // AskUserQuestion cards are interactive and must never be collapsed into the
+  // tool-group toggle — a pending question hidden behind "Show N tool calls" is
+  // unanswerable. They break a tool run and always render standalone.
+  const isGroupable = (it: StreamItem): boolean =>
+    it.kind === "tool" && it.toolName !== "AskUserQuestion";
   const renderEntries: RenderEntry[] = [];
   let cursor = 0;
   while (cursor < items.length) {
     const item = items[cursor];
-    if (item.kind === "tool") {
+    if (isGroupable(item)) {
       const start = cursor;
-      while (cursor < items.length && items[cursor].kind === "tool") cursor++;
+      while (cursor < items.length && isGroupable(items[cursor])) cursor++;
       const run = items.slice(start, cursor) as Extract<StreamItem, { kind: "tool" }>[];
       if (run.length >= TOOL_GROUP_COLLAPSE_THRESHOLD) {
         renderEntries.push({ kind: "tool-group", groupId: run[0].id, items: run });
@@ -696,7 +862,8 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
                       {entry.items.map((it) =>
                         it.toolName === "AskUserQuestion" ? (
                           <QuestionCard
-                            key={it.id}
+                            key={questionCardKey(it)}
+                            sessionId={it.sessionId}
                             toolUseId={it.id}
                             input={it.input}
                             result={it.result}
@@ -727,7 +894,8 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
                 if (item.toolName === "AskUserQuestion") {
                   return (
                     <QuestionCard
-                      key={item.id}
+                      key={questionCardKey(item)}
+                      sessionId={item.sessionId}
                       toolUseId={item.id}
                       input={item.input}
                       result={item.result}
@@ -743,6 +911,9 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
                   />
                 );
               case "approval":
+                // AskUserQuestion fires its own interactive UI via QuestionCard
+                // — the parallel approval card would just be a redundant prompt.
+                if (item.toolName === "AskUserQuestion") return null;
                 return (
                   <ApprovalCard
                     key={item.id}
@@ -809,4 +980,13 @@ export function MessageStream({ sessionId, inFlightPreview, isProcessing }: Mess
       </div>
     </div>
   );
+}
+
+// Stable React key for AskUserQuestion cards. Keying on `uid` (assigned once,
+// never mutated) rather than `id` (which flips from the `pr:` placeholder to
+// the real tool_use_id) or content (which collides when the model asks the
+// same question twice) keeps the component mounted across id promotion AND
+// keeps two same-text questions rendered as distinct cards.
+function questionCardKey(it: Extract<StreamItem, { kind: "tool" }>): string {
+  return `q-${it.uid}`;
 }

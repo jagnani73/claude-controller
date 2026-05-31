@@ -17,6 +17,7 @@ import { findSessionByTranscript } from "../utils/find-session.js";
 import { listProjectSessions } from "../utils/project-sessions.js";
 import type { HooksService } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
+import { buildKeystrokes } from "./question.input.js";
 import type { SessionBus, SessionBusEvent } from "./session-bus.service.js";
 import type { SessionManager } from "./session-manager.service.js";
 
@@ -426,6 +427,49 @@ function handleMessage(
           toolUseId: msg.toolUseId,
         });
       }
+      return;
+    }
+
+    case "question_response": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) {
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          message: "Session not found",
+        });
+        return;
+      }
+      const { chunks } = buildKeystrokes({
+        questions: msg.questions ?? [],
+        answers: msg.answers ?? [],
+        cancel: msg.cancel,
+      });
+      if (chunks.length === 0) {
+        // A non-cancel answer that resolved to no keystrokes (e.g. labels that
+        // matched no option) would otherwise leave the card locked forever.
+        // Surface it so the card unlocks and the input bar returns.
+        log.warn("Empty keystroke script — nothing to send", {
+          sessionId: msg.sessionId,
+          toolUseId: msg.toolUseId,
+        });
+        if (!msg.cancel)
+          session.failQuestion(msg.toolUseId, "Couldn't build keystrokes for this answer.");
+        return;
+      }
+      // Drive the picker with the paced keystroke script. For a normal submit
+      // the session confirms the answer registered in the transcript and
+      // resends Enter if the multi-select submit raced ink's focus flush. Cancel
+      // is a terminal footer action — don't resend Enter into it.
+      void session.answerQuestion(chunks, !msg.cancel, msg.toolUseId).catch((err) => {
+        log.error("Question answer dispatch failed", {
+          sessionId: msg.sessionId,
+          error: (err as Error).message,
+        });
+        // Don't leave the card locked on a dispatch error.
+        if (!msg.cancel)
+          session.failQuestion(msg.toolUseId, "Failed to deliver answer to the CLI.");
+      });
       return;
     }
 

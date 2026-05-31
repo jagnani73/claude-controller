@@ -18,7 +18,8 @@ import type {
 } from "common/types";
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
-import { SessionBus } from "../services/session-bus.service.js";
+import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.js";
+import { SessionBus, type SessionBusEvent } from "../services/session-bus.service.js";
 import { SessionLocator } from "../services/session-locator.service.js";
 import {
   ensureDumpScript,
@@ -36,6 +37,20 @@ const log = LoggerService.scoped("session");
 
 /** Delay between Shift+Tab keystrokes so Ink can process each before the next. */
 const PERMISSION_CYCLE_STEP_MS = 80;
+
+/** How many times sendInput resends the submit `\r` while waiting for the
+ *  prompt to register in the transcript (see submitWithConfirmation). */
+const SUBMIT_MAX_ATTEMPTS = 5;
+/** Pacing between submit `\r` resends — retry cadence, not a correctness knob. */
+const SUBMIT_RETRY_MS = 250;
+
+/** Resend cadence for confirming an AskUserQuestion answer landed (see
+ *  answerQuestion). A bit longer than the prompt path — the submit closes the
+ *  picker, then Claude writes the tool_result and the watcher tails it. */
+const QUESTION_SUBMIT_ATTEMPTS = 4;
+const QUESTION_SUBMIT_RETRY_MS = 500;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class Session extends EventEmitter<SessionEvents> {
   /**
@@ -364,10 +379,164 @@ export class Session extends EventEmitter<SessionEvents> {
     // paste event — newlines stay intact inside the input textarea instead
     // of each one acting as Enter.
     this.pty.write(`\x1b[200~${text}\x1b[201~`);
-    // Claude Code's input parser strips trailing `\r` from multi-char chunks
-    // (treats it as SSH-coalesced Enter inserted into the textarea). Submission
-    // only fires when `\r` arrives as its own keystroke — split into two writes.
-    setTimeout(() => this.pty.write("\r"), 30);
+    await this.submitWithConfirmation();
+  }
+
+  /**
+   * Submit the just-pasted textarea with `\r`, confirming the prompt actually
+   * registered before giving up.
+   *
+   * Why this isn't a fixed delay: Claude Code's input parser strips a trailing
+   * `\r` that arrives in the same stdin read as other bytes (treats it as
+   * SSH-coalesced Enter), so the submit `\r` must land as its own keystroke.
+   * A large bracketed paste is split across multiple ConPTY reads, so a single
+   * fixed-delay `\r` can be coalesced into the paste's tail chunk and silently
+   * fail to submit. node-pty's write is fire-and-forget (no drain signal) and
+   * we don't parse PTY output, so there's no send-side ack to wait on.
+   *
+   * Instead we key correctness on a structured signal: the transcript watcher
+   * emits a `user_prompt` bus event once Claude writes the message to the
+   * JSONL. We send `\r`, wait for that echo, and resend the lone `\r` if it
+   * doesn't arrive. A resent `\r` is always safe — while still inside paste
+   * mode it's buffered as content (never a partial submit), and on an
+   * empty/idle textarea it's a no-op. The interval only paces retries; whether
+   * it works depends on the echo, not on guessing how long the paste takes to
+   * drain.
+   */
+  private async submitWithConfirmation(): Promise<void> {
+    const bus = this._bus;
+    for (let attempt = 0; attempt < SUBMIT_MAX_ATTEMPTS; attempt++) {
+      const landed = bus
+        ? this.waitForBusEvent(bus, (e) => e.kind === "user_prompt", SUBMIT_RETRY_MS)
+        : delay(SUBMIT_RETRY_MS).then(() => false);
+      this.pty.write("\r");
+      if (await landed) return;
+    }
+    log.warn("Input submit not confirmed by transcript after retries", {
+      token: this.spawnToken,
+    });
+  }
+
+  /**
+   * Drive the AskUserQuestion picker with a pre-built keystroke script, then
+   * (for submitting answers, not cancels) confirm the answer actually
+   * registered and resend the trailing Enter if it didn't.
+   *
+   * Why the resend is needed *and* safe: for multi-select the picker submits
+   * only after the cursor lands on "Submit", which flips an `isFooterFocused`
+   * React state — an async re-render. The `\r` that follows ~one CHUNK_DELAY
+   * later can arrive before that flush and get dropped, leaving the question
+   * open with the correct boxes already checked and the cursor parked on
+   * Submit (confirmed in PTY captures). A resent `\r` then submits the
+   * already-correct selection — it never re-toggles (that would need Space),
+   * so it can't corrupt the answer. We only resend while no matching
+   * `tool_result` has landed, so a successful submit is never double-fired into
+   * the next prompt.
+   *
+   * Confirmation is keyed to THIS question's `toolUseId` (not just any
+   * tool_result), so an unrelated tool finishing nearby can't falsely confirm
+   * or cut the resend loop short. If the id is still the synthesized `pr:`
+   * placeholder (real tool_call not yet seen — rare by answer time), we fall
+   * back to matching any tool_result since we can't filter reliably.
+   *
+   * If the answer is never confirmed after all retries, we surface it via
+   * `failQuestion` rather than leaving the card locked and the input bar
+   * hidden forever (a silent dead-end).
+   */
+  async answerQuestion(
+    chunks: KeystrokeChunk[],
+    confirm: boolean,
+    toolUseId: string,
+  ): Promise<void> {
+    for (let i = 0; i < chunks.length; i++) {
+      // Honor the previous chunk's settle override (heavier ink transitions ask
+      // for more than the default); plain keystrokes use CHUNK_DELAY_MS.
+      // NB: the final chunk's settleMs is intentionally not awaited — the
+      // confirm loop follows immediately and no script relies on a tail settle.
+      if (i > 0) await delay(chunks[i - 1].settleMs ?? CHUNK_DELAY_MS);
+      this.sendKeystrokes(chunks[i].bytes);
+    }
+    if (!confirm) return;
+    const bus = this._bus;
+    if (!bus) return;
+    const matches = (e: SessionBusEvent): boolean =>
+      e.kind === "tool_result" && (toolUseId.startsWith("pr:") || e.toolUseId === toolUseId);
+    for (let attempt = 0; attempt < QUESTION_SUBMIT_ATTEMPTS; attempt++) {
+      // Wait first: the initial Enter (or a prior resend) may already have
+      // landed. Only resend when the window elapses with no tool_result.
+      if (await this.waitForBusEvent(bus, matches, QUESTION_SUBMIT_RETRY_MS)) return;
+      log.debug("Question answer unconfirmed — resending Enter", {
+        token: this.spawnToken,
+        attempt,
+      });
+      this.pty.write("\r");
+    }
+    log.warn("Question answer not confirmed by transcript after retries", {
+      token: this.spawnToken,
+      toolUseId,
+    });
+    this.failQuestion(toolUseId, "Answer could not be confirmed by the CLI after retries.");
+  }
+
+  /**
+   * Surface an undeliverable AskUserQuestion answer to the client by pushing a
+   * synthetic error `tool_result` onto the bus. Without this the question card
+   * stays locked and the input bar stays hidden (it's gated on "no pending
+   * question"), leaving a failed relay as a silent dead-end. The synthetic
+   * result fuses onto the card, flipping it to an error state and restoring the
+   * input bar so the user can interrupt/retype. Frontend-only — the CLI's
+   * question may still be open; this just unblocks the UI.
+   */
+  failQuestion(toolUseId: string, message: string): void {
+    if (!this._bus) return;
+    this._bus.push({
+      kind: "tool_result",
+      sessionId: this._bus.sessionId,
+      timestamp: new Date().toISOString(),
+      toolUseId,
+      result: message,
+      isError: true,
+    });
+  }
+
+  /** Resolve true when a bus event matching `predicate` lands, false on timeout. */
+  private waitForBusEvent(
+    bus: SessionBus,
+    predicate: (event: SessionBusEvent) => boolean,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        bus.off("event", onEvent);
+      };
+      const onEvent = (event: SessionBusEvent): void => {
+        if (!predicate(event)) return;
+        cleanup();
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, timeoutMs);
+      bus.on("event", onEvent);
+    });
+  }
+
+  /**
+   * Write raw bytes straight to PTY stdin — no bracketed-paste wrap, no
+   * trailing `\r`. Used for driving Claude Code's interactive sub-UIs (e.g.
+   * the AskUserQuestion picker) with arrow keys, Space, Enter, Tab, Esc.
+   */
+  sendKeystrokes(bytes: string): void {
+    log.debug("Keystrokes", {
+      token: this.spawnToken,
+      hex: Array.from(bytes)
+        .map((c) => c.charCodeAt(0).toString(16).padStart(2, "0"))
+        .join(" ")
+        .slice(0, 200),
+    });
+    this.pty.write(bytes);
   }
 
   /** True when the most recent user_prompt was interrupted with no assistant since. */

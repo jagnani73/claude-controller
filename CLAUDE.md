@@ -28,8 +28,8 @@ Use `pnpm lint` to verify correctness — not full builds. For TypeScript projec
 
 pnpm monorepo with 3 packages:
 
-- **`packages/backend`** — Node.js runtime. Spawns Claude Code via `node-pty` with `--settings '{"hooks":{...}}'` inline JSON injecting two HTTP hooks (`SessionStart`, `PermissionRequest`) to a loopback endpoint. A `TranscriptWatcher` tails the per-session JSONL transcript (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) for content. All events normalize into a per-session `SessionBus`, which the WS service forwards as typed messages. Dependencies: `node-pty`, `ws`.
-- **`packages/frontend`** — React 19 + Vite + Tailwind CSS 4. Mobile-first PWA that renders structured message cards (`AssistantMessage`, `UserMessage`, `ToolCallCard`, `ApprovalCard`) in `MessageStream`. Connects to backend via WebSocket.
+- **`packages/backend`** — Node.js runtime. Spawns Claude Code via `node-pty` with `--settings` JSON (written to a temp file, not inline) injecting blocking HTTP hooks to a loopback endpoint: `PermissionRequest` (tool approvals + AskUserQuestion) and `PreCompact`/`PostCompact` (compaction). `SessionStart` is *not* HTTP-capable in Claude Code, so the session id is learned by watching `~/.claude/sessions/<pid>.json` (`session-locator.service.ts`) — `Session.id` resolves asynchronously, so use `await session.ready` before relying on it. A `TranscriptWatcher` tails the per-session JSONL transcript (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) for content. All events normalize into a per-session `SessionBus`, which the WS service forwards as typed messages. Dependencies: `node-pty`, `ws`.
+- **`packages/frontend`** — React 19 + Vite + Tailwind CSS 4. Mobile-first PWA that renders structured message cards (`AssistantMessage`, `UserMessage`, `ToolCallCard`, `ApprovalCard`, `QuestionCard`) in `MessageStream`. Connects to backend via WebSocket.
 - **`packages/common`** — Shared TypeScript types used by both backend and frontend. Defines `ServerMessage`, `ClientMessage` (typed WS protocol), `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`, `EffortLevel`. Import as `common` or `common/types`.
 
 ### Data flow
@@ -56,7 +56,17 @@ Phone ──▶ WebSocket ──▶ Backend ──▶ PTY stdin (input only)
 ```
 
 - PTY stdout is captured to `data/captures/<session>.raw` for debugging only — nothing parses it.
-- Input flows in reverse: phone taps Send → `{type:"input"}` → PTY stdin (`text\r`). Approvals flow via `{type:"approval_response"}` → `hooks.service.resolveApproval()` which unblocks the pending `PermissionRequest` HTTP response.
+- Input flows in reverse: phone taps Send → `{type:"input"}` → PTY stdin. Text is wrapped in bracketed-paste (`\x1b[200~…\x1b[201~`) and the submit `\r` is sent separately and **confirmed** against the transcript (resent if the prompt doesn't register) — see `Session.sendInput`/`submitWithConfirmation`, because a trailing `\r` coalesced into a large paste gets stripped. Approvals flow via `{type:"approval_response"}` → `hooks.service.resolveApproval()` which unblocks the pending `PermissionRequest` HTTP response.
+
+### AskUserQuestion relay
+
+Claude Code's `AskUserQuestion` is an interactive ink picker, not structured input — so the controller renders it as a `QuestionCard` and drives the CLI's picker over the PTY with **timed keystrokes** (the one place we synthesize navigation rather than relay structured data).
+
+- `QuestionCard` (frontend) renders the questions/options/preview from the tool-call input, collects the answer locally, and sends `{type:"question_response", questions, answers, cancel?}` over WS. `questions`/`answers` are positional; shared shapes (`QuestionSchema`, `AnswerEntry`) live in `common`.
+- `question.input.ts` `buildKeystrokes(...)` is a **pure** function translating an answer into a `KeystrokeChunk[]` script (each chunk = bytes + optional `settleMs`). Navigation rules were reverse-engineered from `claude-code-source/` and verified against PTY captures: single-select commits with `Enter` (auto-advances in a batch); multi-select toggles with `Space`; a preview-question note is `n` → type → `Esc` (NOT Enter) → select; a batched call ends on a review screen confirmed with one `Enter`.
+- `Session.answerQuestion(chunks, confirm, toolUseId)` paces the writes (`CHUNK_DELAY_MS`, honoring per-chunk `settleMs`), then confirms the answer landed via the bus `tool_result` for that `toolUseId`, resending `Enter` if a multi-select submit raced ink's focus flush. If it never confirms (or the script is empty / dispatch throws), `Session.failQuestion` pushes a synthetic error `tool_result` so the card unlocks instead of stranding the UI.
+- The reducer in `MessageStream.tsx` keeps a `results` map so a `tool_result` fuses onto its card regardless of arrival order (live vs. history pagination), and dedupes the eager `approval_request` card against the real `tool_call` (the `pr:` → `toolu_` promotion).
+- Pure logic is unit-tested: `buildKeystrokes`, the reducer, and the reload parsers (`question-result.ts`).
 
 ## Code Style
 

@@ -173,6 +173,13 @@ export function SessionView() {
     if (msg.sessionId === sessionId && msg.code === "session_not_found") setNotFound(true);
   });
 
+  // Hide the chat input while an AskUserQuestion is unanswered — the CLI is
+  // waiting on a structured answer, not free text, and two competing input
+  // surfaces is confusing. MessageStream owns this signal because its reducer
+  // is the only place that correctly reconciles the synthesized approval id
+  // with the real tool_use_id.
+  const [hasPendingQuestion, setHasPendingQuestion] = useState(false);
+
   const handleSubmit = useCallback(
     (text: string) => {
       if (text.startsWith("/")) {
@@ -299,23 +306,26 @@ export function SessionView() {
             inFlightItem ? { text: inFlightItem.text, timestamp: inFlightItem.timestamp } : null
           }
           isProcessing={isProcessing}
+          onPendingQuestionChange={setHasPendingQuestion}
         />
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <QueuePanel queue={pendingItems} />
-        <InputBar
-          onSubmit={handleSubmit}
-          recallText={recallText}
-          queueTail={queueTail}
-          onPopQueueTail={handlePopQueueTail}
-          onInterrupt={handleInterrupt}
-          settingsSlot={
-            <SessionSettingsPopover
-              session={session}
-              onChange={(next) => updateSettings(sessionId, next)}
-            />
-          }
-        />
+        {!hasPendingQuestion && (
+          <InputBar
+            onSubmit={handleSubmit}
+            recallText={recallText}
+            queueTail={queueTail}
+            onPopQueueTail={handlePopQueueTail}
+            onInterrupt={handleInterrupt}
+            settingsSlot={
+              <SessionSettingsPopover
+                session={session}
+                onChange={(next) => updateSettings(sessionId, next)}
+              />
+            }
+          />
+        )}
         <StatusLine text={statusLine} />
       </div>
     </div>

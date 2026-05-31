@@ -196,6 +196,42 @@ export interface RespawnSettings {
   permissionMode: PermissionMode;
 }
 
+// ─── AskUserQuestion relay ────────────────────────────────────────
+// Shared shapes for relaying an AskUserQuestion answer from the client to the
+// backend keystroke driver. Single source of truth — the backend imports these
+// rather than re-declaring them (avoids the wire/driver shapes silently
+// drifting).
+
+/** Schema of one original tool-call question, in order. Passed through by the
+ *  client so the backend can compute keystroke navigation without caching
+ *  state. `optionLabels` must match `options[].label` from the tool input. */
+export interface QuestionSchema {
+  multiSelect: boolean;
+  optionLabels: string[];
+  /** True when the question renders the preview view (a single-select whose
+   *  options carry preview content). Gates the notes (`n`) keystroke path —
+   *  notes only exist on that view. */
+  hasPreview?: boolean;
+}
+
+/** One answer, positional with `QuestionSchema[]`. */
+export interface AnswerEntry {
+  /** Labels matching `options[].label`. One entry for single-select;
+   *  zero-or-more for multi-select; empty if only `customText` is used. */
+  selectedLabels?: string[];
+  /** Free-text typed into the "Type something" slot. */
+  customText?: string;
+  /** Note attached to the selected option (`n` key) — only honored for a
+   *  single-select question whose options carry previews. */
+  notes?: string;
+}
+
+/** A tool result projected for rendering: the raw value plus the error flag. */
+export interface ToolResult {
+  value: unknown;
+  isError: boolean;
+}
+
 /** Client → Server messages */
 export type ClientMessage =
   | { type: "input"; sessionId: string; text: string; settings?: RespawnSettings }
@@ -222,6 +258,24 @@ export type ClientMessage =
       toolUseId: string;
       decision: "allow" | "deny";
       reason?: string;
+    }
+  | {
+      /**
+       * Reply to an `AskUserQuestion` tool call. The CLI's interactive
+       * permission UI doesn't go through HTTP hooks — answers are driven by
+       * synthesizing keystrokes into the PTY stdin. The backend translates
+       * this message into a sequence of bytes that navigates the ink UI and
+       * submits. `questions` and `answers` are positional and must line up.
+       */
+      type: "question_response";
+      sessionId: string;
+      toolUseId: string;
+      /** When true, send Esc to the CLI and ignore `answers`. */
+      cancel?: boolean;
+      /** Question schema in order (see QuestionSchema). */
+      questions?: QuestionSchema[];
+      /** Answers, positional with `questions`. */
+      answers?: AnswerEntry[];
     }
   | {
       type: "subscribe";
