@@ -16,9 +16,6 @@ export const DEFAULT_HOOKS_PORT = 0;
  */
 export const DEFAULT_HOST = "127.0.0.1";
 
-/** Default data directory for session persistence */
-export const DEFAULT_DATA_DIR = "./data";
-
 /** Default dump directory for PTY captures and statusline payloads (gitignored). */
 export const DEFAULT_DUMP_DIR = "./dump";
 

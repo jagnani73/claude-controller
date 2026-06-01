@@ -24,7 +24,7 @@ sources** — never by scraping the terminal:
 
 Both normalize into a per-session **`SessionBus`**, which the WS service forwards
 as typed messages. **PTY stdin is used for input only**; PTY stdout is dumped to
-`data/captures/<session>.raw` for debugging and is **never parsed**.
+`dump/captures/<session>.raw` for debugging and is **never parsed**.
 
 > Hard invariant: **no regex parsing of PTY output.** Content comes from hooks +
 > JSONL. The `.raw` dump exists only for debugging.

@@ -55,7 +55,7 @@ cp .env.example .env                                     # Caddy vars (root)
 Find this machine's values and fill them in:
 
 ```bash
-tailscale ip -4           # -> TAILSCALE_IP   (e.g. 100.x.x.x)
+tailscale ip -4           # -> TAILSCALE_IP (e.g. 100.x.x.x)
 tailscale status --json   # Self.DNSName -> CONTROLLER_HOST (drop the trailing dot)
 ```
 
@@ -83,7 +83,6 @@ Launches the backend + Caddy together (Ctrl+C stops both). On your phone (Tailsc
 | `PORT` | no | `4577` | Backend port. |
 | `HOOKS_PORT` | no | `0` (auto) | Loopback hooks-listener port. `0` lets the OS pick a free port (collision-proof); set a number to pin it. |
 | `LOG_LEVEL` | no | all | Comma-separated levels to emit (`debug,info,warn,error`). |
-| `DATA_DIR` | no | `./data` | Session-capture directory. |
 | `DUMP_DIR` | no | `./dump` | Debug-dump directory (PTY `.raw` captures, statusline payloads). |
 | `PTY_COLS` | no | `120` | PTY width for the spawned CLI. |
 | `PTY_ROWS` | no | `40` | PTY height for the spawned CLI. |
@@ -154,6 +153,8 @@ What works today: session control, the hardened Tailscale + Caddy transport, one
 - **Subagents (agents) view** — nested, collapsible rendering of `Task`-spawned subagents so a fanned-out run stays legible on a phone.
 - **File-diff rendering** — mobile-friendly diffs for `Edit`/`Write` in the tool cards (currently raw tool I/O).
 - **Image / attachment send** — snap or paste a screenshot straight into a session.
+- **File browser / viewer** — open and read actual project files from the phone, beyond the diffs shown in tool cards.
+- **Port tunneling** — reach a dev server a session starts (e.g. `localhost:3000`) through the tunnel and open it on your phone.
 - *Internal:* a shared "drive-an-ink-picker + confirm" helper to de-risk the timing-fragile keystroke flows that plan approval and the slash menu inherit.
 
 ### Multi-session
@@ -165,9 +166,16 @@ What works today: session control, the hardened Tailscale + Caddy transport, one
 - **Run as a durable service** — wrap `pnpm start` so the backend + Caddy start on boot and survive sleep (Windows service via NSSM, a logon Scheduled Task, or pm2).
 - **Session-registry persistence** — state is in-memory, so a backend restart loses the session list (transcripts persist on disk). A small persisted registry removes the "restarted and my sessions vanished" cliff.
 - **Adaptive history replay** — the reconnect replays only the recent transcript tail; long sessions need a bigger/adaptive window.
+- **Test suite** — to be built from scratch.
 
 ### Hardening (optional)
 
 - **Tailnet lock + device approval** in the Tailscale admin (2FA + HTTPS certs already enabled).
 - **PWA idle timeout** — auto-disconnect after inactivity.
+
+---
+
+## License
+
+[MIT](LICENSE) © Yashvardhan Jagnani
 

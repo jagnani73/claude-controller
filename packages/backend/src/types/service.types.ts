@@ -6,7 +6,6 @@ export interface ServerConfig {
   port: number;
   host: string;
   hooksPort: number;
-  dataDir: string;
   dumpDir: string;
   workDir: string;
   pty: {

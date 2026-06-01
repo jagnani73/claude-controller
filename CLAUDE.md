@@ -56,7 +56,7 @@ Phone ──▶ WebSocket ──▶ Backend ──▶ PTY stdin (input only)
                               ws.service ──▶ typed WsMessage ──▶ Phone
 ```
 
-- PTY stdout is captured to `data/captures/<session>.raw` for debugging only — nothing parses it.
+- PTY stdout is captured to `dump/captures/<session>.raw` for debugging only — nothing parses it.
 - Input flows in reverse: phone taps Send → `{type:"input"}` → PTY stdin. Text is wrapped in bracketed-paste (`\x1b[200~…\x1b[201~`) and the submit `\r` is sent separately and **confirmed** against the transcript (resent if the prompt doesn't register) — see `Session.sendInput`/`submitWithConfirmation`, because a trailing `\r` coalesced into a large paste gets stripped. Approvals flow via `{type:"approval_response"}` → `hooks.service.resolveApproval()` which unblocks the pending `PermissionRequest` HTTP response.
 - The frontend (`SessionView`/`QueuePanel`) **queues inputs locally** while Claude is busy and dispatches them in order — there is no optimistic echo; the queue is the source of truth for pending prompts.
 
@@ -68,7 +68,6 @@ Claude Code's `AskUserQuestion` is an interactive ink picker, not structured inp
 - `question.input.ts` `buildKeystrokes(...)` is a **pure** function translating an answer into a `KeystrokeChunk[]` script (each chunk = bytes + optional `settleMs`). Navigation rules were reverse-engineered from `claude-code-source/` and verified against PTY captures: single-select commits with `Enter` (auto-advances in a batch); multi-select toggles with `Space`; a preview-question note is `n` → type → `Esc` (NOT Enter) → select; a batched call ends on a review screen confirmed with one `Enter`.
 - `Session.answerQuestion(chunks, confirm, toolUseId)` paces the writes (`CHUNK_DELAY_MS`, honoring per-chunk `settleMs`), then confirms the answer landed via the bus `tool_result` for that `toolUseId`, resending `Enter` if a multi-select submit raced ink's focus flush. If it never confirms (or the script is empty / dispatch throws), `Session.failQuestion` pushes a synthetic error `tool_result` so the card unlocks instead of stranding the UI.
 - The reducer in `MessageStream.tsx` keeps a `results` map so a `tool_result` fuses onto its card regardless of arrival order (live vs. history pagination), and dedupes the eager `approval_request` card against the real `tool_call` (the `pr:` → `toolu_` promotion).
-- Pure logic is unit-tested: `buildKeystrokes`, the reducer, and the reload parsers (`question-result.ts`).
 
 ## Code Style
 
