@@ -22,9 +22,6 @@ bun.lockb
 .DS_Store
 Thumbs.db
 
-# ngrok
-ngrok.yml
-
 # Controller config (local paths)
 controller.config.json
 

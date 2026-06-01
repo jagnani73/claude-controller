@@ -6,25 +6,18 @@ import { LoggerService } from "./services/logger.service.js";
 import type { SessionManager } from "./services/session-manager.service.js";
 import { handleConnection } from "./services/ws.service.js";
 import type { ServerConfig } from "./types/index.js";
-import { getAllowedOrigins } from "./utils/constants.js";
+import { getAllowedOrigins, isOriginAllowed, isProduction } from "./utils/constants.js";
 
 const log = LoggerService.scoped("server");
 
 function handleCors(req: IncomingMessage, res: ServerResponse): boolean {
   const origin = req.headers.origin;
-  const allowed = getAllowedOrigins();
 
-  if (origin) {
-    const isAllowed = allowed.some((o) => (typeof o === "string" ? o === origin : o.test(origin)));
-    if (isAllowed) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, ngrok-skip-browser-warning",
-      );
-    }
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   }
 
   if (req.method === "OPTIONS") {
@@ -59,13 +52,15 @@ export function startServer(
     res.end("Not found");
   });
 
-  const allowed = getAllowedOrigins();
+  if (isProduction() && getAllowedOrigins().length === 0) {
+    log.warn(
+      "Running in production with no ALLOWED_ORIGINS set — all cross-origin WebSocket connections will be rejected. Set ALLOWED_ORIGINS to your tailnet hostname (e.g. https://laptop.tailnet-name.ts.net).",
+    );
+  }
+
   const wss = new WebSocketServer({
     server: httpServer,
-    verifyClient: ({ origin }: { origin?: string }) => {
-      if (!origin || allowed.length === 0) return true;
-      return allowed.some((o) => (typeof o === "string" ? o === origin : o.test(origin)));
-    },
+    verifyClient: ({ origin }: { origin?: string }) => isOriginAllowed(origin),
   });
 
   wss.on("connection", (ws) => {

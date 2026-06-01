@@ -1,0 +1,47 @@
+# Caddyfile — Claude Controller reverse proxy
+#
+# Terminates HTTPS on the Tailscale interface and fronts the loopback-bound
+# backend. Caddy 2.5+ automatically obtains the TLS certificate for a *.ts.net
+# site from the local Tailscale daemon — no ACME, no cert files, no renewal job.
+# Requires "HTTPS Certificates" enabled in the tailnet admin console.
+#
+# Values come from the environment (see .env.example), supplied by scripts/start.ts:
+#   CONTROLLER_HOST  your tailnet hostname, e.g. laptop.tailnet-name.ts.net
+#   TAILSCALE_IP     this machine's tailnet IP, e.g. 100.x.x.x
+#   BACKEND_ADDR     backend address (default 127.0.0.1:4577)
+#   FRONTEND_DIST    path to the built PWA (default ./packages/frontend/dist)
+#
+# Run via the launcher (sets the env, then `caddy run` here):  pnpm start
+
+{$CONTROLLER_HOST} {
+	# Listen ONLY on the Tailscale address — never the LAN or public interface.
+	bind {$TAILSCALE_IP}
+
+	encode zstd gzip
+
+	header {
+		# HTTPS-only, no MIME sniffing, no framing, minimal referrer leakage.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# WebSocket relay + health check are served by the backend (loopback only).
+	# reverse_proxy upgrades WebSocket connections automatically.
+	handle /ws* {
+		reverse_proxy {$BACKEND_ADDR:127.0.0.1:4577}
+	}
+	handle /health {
+		reverse_proxy {$BACKEND_ADDR:127.0.0.1:4577}
+	}
+
+	# Everything else: the built PWA. Unknown paths fall back to index.html so
+	# the single-page app's client-side routing works.
+	handle {
+		root * {$FRONTEND_DIST:./packages/frontend/dist}
+		try_files {path} /index.html
+		file_server
+	}
+}

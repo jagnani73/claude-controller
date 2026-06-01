@@ -5,6 +5,7 @@ import type { ServerConfig } from "./types/index.js";
 import {
   DEFAULT_DATA_DIR,
   DEFAULT_DUMP_DIR,
+  DEFAULT_HOOKS_PORT,
   DEFAULT_HOST,
   DEFAULT_PORT,
   DEFAULT_PTY_COLS,
@@ -36,6 +37,7 @@ export function loadConfig(): ServerConfig {
   return {
     port: Number(process.env.PORT || DEFAULT_PORT),
     host: process.env.HOST || DEFAULT_HOST,
+    hooksPort: Number(process.env.HOOKS_PORT || DEFAULT_HOOKS_PORT),
     dataDir: resolve(rootDir, process.env.DATA_DIR || DEFAULT_DATA_DIR),
     dumpDir: resolve(rootDir, process.env.DUMP_DIR || DEFAULT_DUMP_DIR),
     workDir: resolve(controller.workDir),

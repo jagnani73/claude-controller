@@ -5,6 +5,7 @@ import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 export interface ServerConfig {
   port: number;
   host: string;
+  hooksPort: number;
   dataDir: string;
   dumpDir: string;
   workDir: string;

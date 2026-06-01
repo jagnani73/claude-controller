@@ -32,8 +32,12 @@ export class HooksService {
 
   constructor(private readonly busLookup: BusLookup) {}
 
-  /** Start listening on an ephemeral loopback port; returns the assigned port. */
-  async start(): Promise<number> {
+  /**
+   * Start the loopback hooks listener; returns the actually-bound port.
+   * `port` 0 (default) lets the OS pick a free port (collision-proof); pass a
+   * fixed port (via `HOOKS_PORT`) to pin it.
+   */
+  async start(port = 0): Promise<number> {
     return await new Promise((resolve, reject) => {
       const server = createServer((req, res) => {
         this.handleRequest(req, res).catch((err) => {
@@ -42,7 +46,7 @@ export class HooksService {
         });
       });
       server.once("error", reject);
-      server.listen(0, LOOPBACK_HOST, () => {
+      server.listen(port, LOOPBACK_HOST, () => {
         const addr = server.address();
         if (!addr || typeof addr === "string") {
           reject(new Error("failed to bind hooks listener"));

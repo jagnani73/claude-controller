@@ -1,5 +1,5 @@
 import { Link, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
-import { PanelLeftClose, Plus, Search, Sparkles } from "lucide-react";
+import { PanelLeftClose, Plus, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { SidebarFolderPicker } from "@/components/sessions/SidebarFolderPicker";
@@ -81,9 +81,7 @@ export function Sidebar() {
           onClick={() => workDir && requestBrowse(workDir)}
           className="flex min-w-0 items-center gap-2 text-left transition-opacity duration-150 ease-out hover:opacity-90"
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent">
-            <Sparkles className="size-3.5" strokeWidth={2} />
-          </span>
+          <img src="/logo.png" alt="Claude Controller logo" className="size-7 shrink-0" />
           <span className="truncate font-serif text-base leading-none text-foreground">
             Claude Controller
           </span>

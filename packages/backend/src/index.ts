@@ -1,8 +1,15 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as loadDotenv } from "dotenv";
 import { loadConfig } from "./config.js";
 import { startServer } from "./server.js";
 import { HooksService } from "./services/hooks.service.js";
 import { LoggerService } from "./services/logger.service.js";
 import { SessionManager } from "./services/session-manager.service.js";
+
+// Load packages/backend/.env relative to the compiled file (dist/index.js ->
+// ../.env), so the vars apply regardless of cwd. Must run before loadConfig().
+loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
 
 const log = LoggerService.scoped("init");
 
@@ -11,7 +18,7 @@ const sessionManager = new SessionManager(config);
 
 const hooksService = new HooksService((sessionId) => sessionManager.getBus(sessionId));
 
-const hooksPort = await hooksService.start();
+const hooksPort = await hooksService.start(config.hooksPort);
 sessionManager.setHooksBaseUrl(hooksService.baseUrl());
 
 const server = startServer(config, sessionManager, hooksService);
