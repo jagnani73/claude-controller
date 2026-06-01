@@ -48,10 +48,13 @@ export class LoggerService {
     return process.env.NODE_ENV !== "production";
   }
 
+  /** Levels emitted when LOG_LEVEL is unset. */
+  private static defaultLevels: LogLevel[] = ["info", "error"];
+
   private static isLogLevelEnabled(level: LogLevel): boolean {
     const envLevels = process.env.LOG_LEVEL;
     if (!envLevels) {
-      return true;
+      return LoggerService.defaultLevels.includes(level);
     }
 
     const enabledLevels = envLevels

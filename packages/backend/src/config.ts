@@ -7,6 +7,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_PTY_COLS,
   DEFAULT_PTY_ROWS,
+  isProduction,
 } from "./utils/constants.js";
 
 export function loadConfig(): ServerConfig {
@@ -21,6 +22,8 @@ export function loadConfig(): ServerConfig {
     host: process.env.HOST || DEFAULT_HOST,
     hooksPort: Number(process.env.HOOKS_PORT || DEFAULT_HOOKS_PORT),
     dumpDir: resolve(process.env.DUMP_DIR || DEFAULT_DUMP_DIR),
+    // PTY captures are a debug aid only — never write them in production.
+    capturePty: !isProduction(),
     workDir: resolve(workDir),
     pty: {
       cols: Number(process.env.PTY_COLS || DEFAULT_PTY_COLS),

@@ -112,8 +112,8 @@ function shutdown(code: number): void {
   process.exit(code);
 }
 
-function run(label: string, command: string, args: string[]): void {
-  const child = spawn(command, args, { cwd: root, env: process.env });
+function run(label: string, command: string, args: string[], extraEnv?: NodeJS.ProcessEnv): void {
+  const child = spawn(command, args, { cwd: root, env: { ...process.env, ...extraEnv } });
   const forward = (stream: Readable, sink: (line: string) => void): void => {
     stream.setEncoding("utf8");
     let buffer = "";
@@ -142,7 +142,12 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => shutdown(0));
 
 console.log("[start] launching backend + Caddy (Ctrl+C stops both)\n");
-run("backend", process.execPath, [backendEntry]);
+// `pnpm start` is the production run (built bundle behind Caddy over Tailscale).
+// Force NODE_ENV=production so the backend's fail-closed CORS check and the
+// dev-only PTY capture gate engage — unless the operator set it explicitly.
+run("backend", process.execPath, [backendEntry], {
+  NODE_ENV: process.env.NODE_ENV ?? "production",
+});
 run("caddy", caddy, ["run", "--config", join(root, "Caddyfile"), "--adapter", "caddyfile"]);
 
 console.log(

@@ -85,8 +85,8 @@ Launches the backend + Caddy together (Ctrl+C stops both). On your phone (Tailsc
 | `HOST` | no | `127.0.0.1` | Bind address. **Loopback only** — Caddy is the sole process facing the tailnet; never `0.0.0.0`. |
 | `PORT` | no | `4577` | Backend port. |
 | `HOOKS_PORT` | no | `0` (auto) | Loopback hooks-listener port. `0` lets the OS pick a free port (collision-proof); set a number to pin it. |
-| `LOG_LEVEL` | no | all | Comma-separated levels to emit (`debug,info,warn,error`). |
-| `DUMP_DIR` | no | `./dump` | Debug-dump directory (PTY `.raw` captures, statusline payloads). |
+| `LOG_LEVEL` | no | `info,error` | Comma-separated levels to emit (`debug,info,warn,error`). Unset emits `info` + `error` only; set explicitly to include `debug`/`warn`. |
+| `DUMP_DIR` | no | `./dump` | Dump dir. Holds per-session statusline payloads (always — the backend reads these) and, in dev only, debug PTY `.raw` captures (skipped when `NODE_ENV=production`; nothing reads them). |
 | `PTY_COLS` | no | `120` | PTY width for the spawned CLI. |
 | `PTY_ROWS` | no | `40` | PTY height for the spawned CLI. |
 
@@ -182,4 +182,10 @@ What works today: session control, the hardened Tailscale + Caddy transport, one
 ## License
 
 [MIT](LICENSE) © Yashvardhan Jagnani
+
+---
+
+## Special thanks
+
+Special thanks to [Ratanshi Puri](https://in.linkedin.com/in/ratanshi) for the idea and security analysis.
 

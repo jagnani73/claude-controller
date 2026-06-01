@@ -1,6 +1,11 @@
-import { ArrowUp } from "lucide-react";
-import { type ReactNode, useRef, useState } from "react";
+import { ArrowUp, Square } from "lucide-react";
+import { forwardRef, type ReactNode, useImperativeHandle, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+
+export interface InputBarHandle {
+  /** Replace the textarea contents and focus it. Used by QueuePanel "edit" taps. */
+  loadDraft: (text: string) => void;
+}
 
 interface InputBarProps {
   onSubmit: (text: string) => void;
@@ -22,6 +27,14 @@ interface InputBarProps {
   onPopQueueTail?: () => void;
   /** Esc keystroke when the queue is empty — interrupts Claude's current turn. */
   onInterrupt?: () => void;
+  /**
+   * Whether a send is in-flight. When true and the input is empty, the send
+   * button morphs into a Stop button that calls `onInterrupt` — the on-screen
+   * equivalent of Esc-to-interrupt (so phones, which have no Esc key, can stop
+   * a running turn). Typing flips it back to Send, since text takes priority
+   * (the message queues without interrupting).
+   */
+  isProcessing?: boolean;
 }
 
 /**
@@ -35,14 +48,10 @@ interface InputBarProps {
  */
 const SAME_TEXT_DEDUP_MS = 500;
 
-export function InputBar({
-  onSubmit,
-  settingsSlot,
-  recallText,
-  queueTail,
-  onPopQueueTail,
-  onInterrupt,
-}: InputBarProps) {
+export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar(
+  { onSubmit, settingsSlot, recallText, queueTail, onPopQueueTail, onInterrupt, isProcessing },
+  ref,
+) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastSentRef = useRef<{ text: string; at: number } | null>(null);
@@ -53,6 +62,24 @@ export function InputBar({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   };
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      loadDraft: (draft: string) => {
+        setText(draft);
+        const el = textareaRef.current;
+        if (!el) return;
+        // Defer the resize until the value commits, then focus for editing.
+        requestAnimationFrame(() => {
+          el.style.height = "auto";
+          el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+        });
+        el.focus();
+      },
+    }),
+    [],
+  );
 
   const send = () => {
     const trimmed = text.trim();
@@ -74,6 +101,10 @@ export function InputBar({
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     textareaRef.current?.focus();
   };
+
+  const hasText = text.trim().length > 0;
+  // Empty box + a live turn → the button stops generation instead of sending.
+  const showStop = !hasText && !!isProcessing;
 
   return (
     <div className="mb-2 shrink-0 px-3 pb-2 pt-1">
@@ -123,14 +154,14 @@ export function InputBar({
         <Button
           type="button"
           size="icon-sm"
-          onClick={send}
-          disabled={!text.trim()}
-          aria-label="Send"
+          onClick={showStop ? () => onInterrupt?.() : send}
+          disabled={!hasText && !isProcessing}
+          aria-label={showStop ? "Stop generating" : "Send"}
           className="shrink-0"
         >
-          <ArrowUp className="size-4" />
+          {showStop ? <Square className="size-3.5 fill-current" /> : <ArrowUp className="size-4" />}
         </Button>
       </div>
     </div>
   );
-}
+});

@@ -16,7 +16,11 @@ export const DEFAULT_HOOKS_PORT = 0;
  */
 export const DEFAULT_HOST = "127.0.0.1";
 
-/** Default dump directory for PTY captures and statusline payloads (gitignored). */
+/**
+ * Default dump directory (gitignored). Contains two subdirs: `statusline/` — the
+ * per-session payloads Claude Code dumps for us to read (always written —
+ * load-bearing); and `captures/` — debug PTY `.raw` captures (dev only).
+ */
 export const DEFAULT_DUMP_DIR = "./dump";
 
 /** Default PTY terminal dimensions */

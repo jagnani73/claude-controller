@@ -6,7 +6,10 @@ export interface ServerConfig {
   port: number;
   host: string;
   hooksPort: number;
+  /** Dump dir root: `statusline/` payloads (always) + `captures/` PTY `.raw` (dev only). */
   dumpDir: string;
+  /** Whether to write PTY `.raw` captures — dev only, off in production. */
+  capturePty: boolean;
   workDir: string;
   pty: {
     cols: number;

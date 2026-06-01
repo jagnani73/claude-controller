@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { type FSWatcher, mkdirSync, readFileSync, watch } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import type { WriteStream } from "node:fs";
+import { createWriteStream, type FSWatcher, mkdirSync, readFileSync, watch } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { cycleCanIncludeAuto, cycleDistance } from "common/permission-cycle";
@@ -22,10 +23,10 @@ import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.
 import { SessionBus, type SessionBusEvent } from "../services/session-bus.service.js";
 import { SessionLocator } from "../services/session-locator.service.js";
 import {
-  ensureDumpScript,
   readDumpedPayload,
   resolveStatusLineCommand,
   runStatusLine,
+  statusLineDumpScriptPath,
   statusLinePayloadPath,
 } from "../services/statusline.service.js";
 import { TranscriptWatcher } from "../services/transcript.service.js";
@@ -68,6 +69,7 @@ export class Session extends EventEmitter<SessionEvents> {
   private status: SessionStatus = "running";
   private pty: PtyService;
   private capturePath: string | null = null;
+  private captureStream: WriteStream | null = null;
   private locator: SessionLocator | null = null;
   private transcript: TranscriptWatcher | null = null;
   private currentModel: ClaudeModel;
@@ -78,6 +80,10 @@ export class Session extends EventEmitter<SessionEvents> {
   private statusLineInFlight = false;
   private statusLinePending = false;
   private lastStatusLine = "";
+  /** Last raw payload processed — skip redundant absorb + statusline spawn. */
+  private lastDumpedPayload: string | null = null;
+  /** Resolved statusline command, cached after first non-null lookup. */
+  private cachedStatusLineCommand: string | null = null;
   private statusLinePayloadFile: string;
   /** Latest model id observed in the transcript (e.g. "claude-opus-4-7"). */
   private currentModelId: string | null = null;
@@ -110,7 +116,9 @@ export class Session extends EventEmitter<SessionEvents> {
     this.createdAt = Date.now();
     this.pty = new PtyService();
 
-    this.initCapture(deps.serverConfig.dumpDir);
+    if (deps.serverConfig.capturePty) {
+      this.initCapture(deps.serverConfig.dumpDir);
+    }
 
     this.pty.on("data", (data) => {
       this.captureRaw(data);
@@ -118,6 +126,7 @@ export class Session extends EventEmitter<SessionEvents> {
 
     this.pty.on("exit", (info) => {
       if (this.respawning) return;
+      this.teardownStatusLineAndCapture();
       this.setStatus("stopped");
       this.transcript?.stop();
       this.emit("exit", info);
@@ -150,7 +159,7 @@ export class Session extends EventEmitter<SessionEvents> {
       resume: config.resumeSessionId,
     });
 
-    const dumpScriptPath = ensureDumpScript(deps.serverConfig.dumpDir);
+    const dumpScriptPath = statusLineDumpScriptPath();
     this.statusLinePayloadFile = statusLinePayloadPath(deps.serverConfig.dumpDir, this.spawnToken);
 
     const spawnedAt = Date.now();
@@ -292,7 +301,10 @@ export class Session extends EventEmitter<SessionEvents> {
       }
       this.statusLineInFlight = true;
       try {
-        const command = await resolveStatusLineCommand(this.config.cwd);
+        // Settings rarely change mid-session, so resolve once and reuse for the
+        // session's lifetime — a statusLine config edit needs a restart to apply.
+        const command =
+          this.cachedStatusLineCommand ?? (await resolveStatusLineCommand(this.config.cwd));
         if (!command) {
           if (!warnedMissing) {
             log.info("No statusLine configured", { token: this.spawnToken });
@@ -300,14 +312,23 @@ export class Session extends EventEmitter<SessionEvents> {
           }
           return;
         }
+        this.cachedStatusLineCommand = command;
         const dumped = await readDumpedPayload(this.statusLinePayloadFile);
         // Refuse to render until Claude Code's first authoritative payload
         // lands — anything earlier would be synthesized from create-time
         // defaults (model alias, ctx 0%) and mislead the user.
         if (!dumped) return;
+        // Claude rewrites the payload on every render; when the content is
+        // byte-identical to the last *successfully rendered* one there's nothing
+        // new, so skip the parse + subprocess spawn entirely.
+        if (dumped === this.lastDumpedPayload) return;
         this.absorbDumpedPayload(dumped);
         const output = await runStatusLine(command, dumped);
+        // Mark the payload as seen only after a successful render — a transient
+        // failure (timeout/spawn) must retry on the next identical tick, not be
+        // permanently swallowed.
         if (output == null) return;
+        this.lastDumpedPayload = dumped;
         const trimmed = output.replace(/\r?\n$/, "");
         if (trimmed === this.lastStatusLine) return;
         this.lastStatusLine = trimmed;
@@ -623,7 +644,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.pty.kill({ immediate: true });
     await exited;
 
-    const dumpScriptPath = ensureDumpScript(this.deps.serverConfig.dumpDir);
+    const dumpScriptPath = statusLineDumpScriptPath();
     const spawnedAt = Date.now();
     this.pty.spawn({
       cwd: this.config.cwd,
@@ -770,8 +791,15 @@ export class Session extends EventEmitter<SessionEvents> {
     this.pty.resize(cols, rows);
   }
 
-  stop(): void {
-    log.info("Stopping", { token: this.spawnToken });
+  /**
+   * Release per-session resources that must not outlive the PTY: the statusline
+   * poll timer + fs watcher, the capture write stream, and the transient payload
+   * file. Idempotent (null-safe), so it's safe to call from both `stop()` and the
+   * PTY `exit` handler — natural exits (Claude `/exit`, crash) bypass `stop()`,
+   * and without this they'd leak the interval, the watcher, and the open fd.
+   * Any dev-only `.raw` capture is intentionally left on disk for post-mortem.
+   */
+  private teardownStatusLineAndCapture(): void {
     if (this.statusLineTimer) {
       clearInterval(this.statusLineTimer);
       this.statusLineTimer = null;
@@ -780,6 +808,14 @@ export class Session extends EventEmitter<SessionEvents> {
       this.statusLineWatcher.close();
       this.statusLineWatcher = null;
     }
+    this.captureStream?.end();
+    this.captureStream = null;
+    unlink(this.statusLinePayloadFile).catch(() => {});
+  }
+
+  stop(): void {
+    log.info("Stopping", { token: this.spawnToken });
+    this.teardownStatusLineAndCapture();
     this.locator?.stop();
     this.transcript?.stop();
     this.pty.kill();
@@ -816,12 +852,18 @@ export class Session extends EventEmitter<SessionEvents> {
     const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").replace("Z", "");
     const base = `${ts}_${this.spawnToken.slice(0, 8)}`;
     this.capturePath = join(dir, `${base}.raw`);
+    // One long-lived append stream — far cheaper than open+write+close per PTY
+    // chunk under high terminal throughput. Failures are non-fatal (dev-only
+    // debug aid) but we warn once so an empty/truncated capture isn't a mystery.
+    this.captureStream = createWriteStream(this.capturePath, { flags: "a" });
+    this.captureStream.on("error", (err) => {
+      log.warn("PTY capture write failed", { raw: this.capturePath, error: err.message });
+    });
     log.info("Capture file", { raw: this.capturePath });
   }
 
   private captureRaw(data: string): void {
-    if (!this.capturePath) return;
-    appendFile(this.capturePath, data).catch(() => {});
+    this.captureStream?.write(data);
   }
 
   private setStatus(status: SessionStatus): void {

@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { LoggerService } from "./logger.service.js";
 
 const log = LoggerService.scoped("statusline");
@@ -61,33 +62,25 @@ export interface StatusLinePayload {
 const RUN_TIMEOUT_MS = 5000;
 
 /**
- * Tiny Node script Claude Code invokes as its statusLine command. It reads the
- * authoritative payload from stdin and writes it to disk so the backend can
- * feed that same payload to the user's real statusLine script — avoids having
- * to recompute cost/context/model ourselves (which we don't have visibility
- * into, since we're a PTY relay, not an API client).
+ * Absolute path to the committed `statusline-dump.cjs` bridge script that Claude
+ * Code runs as its statusLine command (see scripts/statusline-dump.cjs). Resolved
+ * relative to this compiled module (dist/services/ -> ../../scripts) and memoized
+ * — the location is fixed for the process lifetime.
  */
-const DUMP_SCRIPT_SOURCE = `const fs = require('fs');
-const path = process.argv[2];
-let data = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (c) => { data += c; });
-process.stdin.on('end', () => {
-  try {
-    fs.mkdirSync(require('path').dirname(path), { recursive: true });
-    fs.writeFileSync(path, data);
-  } catch {}
-});
-`;
-
-export function ensureDumpScript(dumpDir: string): string {
-  const path = join(dumpDir, "statusline-dump.cjs");
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    if (!existsSync(path)) writeFileSync(path, DUMP_SCRIPT_SOURCE);
-  } catch (err) {
-    log.warn("Could not write dump script", { path, error: (err as Error).message });
+let cachedScriptPath: string | undefined;
+export function statusLineDumpScriptPath(): string {
+  if (cachedScriptPath !== undefined) return cachedScriptPath;
+  const here = dirname(fileURLToPath(import.meta.url));
+  const path = join(here, "..", "..", "scripts", "statusline-dump.cjs");
+  if (!existsSync(path)) {
+    // error, not warn: this is a packaging/deploy fault that silently breaks all
+    // statusline metadata, and it never self-heals. Must survive the default
+    // info,error log level so the operator actually sees it.
+    log.error("statusline dump script not found — statusline metadata will be unavailable", {
+      path,
+    });
   }
+  cachedScriptPath = path;
   return path;
 }
 

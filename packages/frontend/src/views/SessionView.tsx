@@ -1,7 +1,7 @@
 import { Link, useParams } from "@tanstack/react-router";
 import { Loader2, SearchX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { InputBar } from "@/components/layout/InputBar";
+import { InputBar, type InputBarHandle } from "@/components/layout/InputBar";
 import { type QueueItem, QueuePanel } from "@/components/layout/QueuePanel";
 import { SessionTopBar } from "@/components/layout/SessionTopBar";
 import { StatusLine } from "@/components/layout/StatusLine";
@@ -74,6 +74,8 @@ export function SessionView() {
    * "Interrupted" bubbles (the bus echoes one bubble per WS interrupt).
    */
   const interruptArmedRef = useRef(true);
+  /** Imperative handle to push a queued item's text back into the input bar. */
+  const inputBarRef = useRef<InputBarHandle>(null);
 
   const session = sessions.find((s) => s.id === sessionId);
   const sessionRef = useRef(session);
@@ -224,6 +226,29 @@ export function SessionView() {
   }, [writeQueue]);
 
   /**
+   * Tap a queued row to edit it: remove that pending item and push its text
+   * back into the input bar. The QueuePanel only renders pending items, so the
+   * id is always poppable.
+   */
+  const handleEditQueued = useCallback(
+    (id: string) => {
+      const item = queueRef.current.find((it) => it.id === id && it.status === "pending");
+      if (!item) return;
+      writeQueue(queueRef.current.filter((it) => it.id !== id));
+      inputBarRef.current?.loadDraft(item.text);
+    },
+    [writeQueue],
+  );
+
+  /** Tap × on a queued row to discard it without sending. */
+  const handleRemoveQueued = useCallback(
+    (id: string) => {
+      writeQueue(queueRef.current.filter((it) => !(it.id === id && it.status === "pending")));
+    },
+    [writeQueue],
+  );
+
+  /**
    * Esc with empty queue — interrupt the in-flight turn on the backend.
    * Gated by `interruptArmedRef` so spamming Esc doesn't stack multiple
    * "Interrupted" bubbles (one bus-echoed bubble per WS interrupt).
@@ -310,10 +335,12 @@ export function SessionView() {
         />
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <QueuePanel queue={pendingItems} />
+        <QueuePanel queue={pendingItems} onEdit={handleEditQueued} onRemove={handleRemoveQueued} />
         {!hasPendingQuestion && (
           <InputBar
+            ref={inputBarRef}
             onSubmit={handleSubmit}
+            isProcessing={isProcessing}
             recallText={recallText}
             queueTail={queueTail}
             onPopQueueTail={handlePopQueueTail}
