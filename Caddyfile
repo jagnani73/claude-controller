@@ -28,6 +28,12 @@
 		-Server
 	}
 
+	# Always revalidate the manifest + service worker so a stale copy can never get
+	# pinned in the browser's HTTP cache — a months-old cached manifest.json once
+	# stranded the installed PWA on an old name/icon despite correct files on disk.
+	@nocache path /manifest.json /sw.js
+	header @nocache Cache-Control "no-cache"
+
 	# WebSocket relay + health check are served by the backend (loopback only).
 	# reverse_proxy upgrades WebSocket connections automatically.
 	handle /ws* {
