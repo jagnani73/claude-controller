@@ -74,10 +74,6 @@ function ShellInner({ children }: { children: ReactNode }) {
     else handle.collapse();
   }, [sidebarRef]);
 
-  useEffect(() => {
-    if (!isMobile) setCollapsed(sidebarRef.current?.isCollapsed() ?? false);
-  }, [isMobile, sidebarRef]);
-
   const onLayoutChange = useCallback(
     (next: Layout) => {
       // The mobile layout is a single full-width panel — don't let it clobber
@@ -86,9 +82,8 @@ function ShellInner({ children }: { children: ReactNode }) {
       try {
         localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
       } catch {}
-      setCollapsed(sidebarRef.current?.isCollapsed() ?? false);
     },
-    [isMobile, sidebarRef],
+    [isMobile],
   );
 
   // On mobile the sidebar is an overlay, never docked — so `collapsed` is a
@@ -125,6 +120,12 @@ function ShellInner({ children }: { children: ReactNode }) {
             maxSize={SIDEBAR_MAX}
             collapsible
             collapsedSize={0}
+            // Track collapse state via the panel's own resize callback rather than
+            // reading sidebarRef.current.isCollapsed() in an effect: the imperative
+            // read throws "Panel constraints not found" when fired mid-mount/unmount
+            // (e.g. a resize crossing the mobile breakpoint). onResize only fires
+            // while the panel is mounted + registered.
+            onResize={(size) => setCollapsed(size.inPixels === 0)}
             className="bg-sidebar text-sidebar-foreground"
           >
             <Sidebar />
