@@ -20,6 +20,7 @@ pnpm check                  # Lint + format in one pass (preferred)
 pnpm build                  # Build all packages
 pnpm build:backend          # Build backend only
 pnpm build:frontend         # Build frontend only
+pnpm start                  # Launch built backend + Caddy together (prod run; needs both built)
 ```
 
 Use `pnpm lint` to verify correctness — not full builds. For TypeScript projects, also run `npx tsc --noEmit -p packages/backend` / `packages/frontend`.
@@ -28,7 +29,7 @@ Use `pnpm lint` to verify correctness — not full builds. For TypeScript projec
 
 pnpm monorepo with 3 packages:
 
-- **`packages/backend`** — Node.js runtime. Spawns Claude Code via `node-pty` with `--settings` JSON (written to a temp file, not inline) injecting blocking HTTP hooks to a loopback endpoint: `PermissionRequest` (tool approvals + AskUserQuestion) and `PreCompact`/`PostCompact` (compaction). `SessionStart` is *not* HTTP-capable in Claude Code, so the session id is learned by watching `~/.claude/sessions/<pid>.json` (`session-locator.service.ts`) — `Session.id` resolves asynchronously, so use `await session.ready` before relying on it. A `TranscriptWatcher` tails the per-session JSONL transcript (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) for content. All events normalize into a per-session `SessionBus`, which the WS service forwards as typed messages. Dependencies: `node-pty`, `ws`.
+- **`packages/backend`** — Node.js runtime. Spawns Claude Code via `node-pty` with `--settings` JSON (written to a temp file, not inline) injecting blocking HTTP hooks to a loopback endpoint: `PermissionRequest` (tool approvals + AskUserQuestion) and `PreCompact`/`PostCompact` (compaction). `SessionStart` is *not* HTTP-capable in Claude Code, so the session id is learned by watching `~/.claude/sessions/<pid>.json` (`session-locator.service.ts`) — `Session.id` resolves asynchronously, so use `await session.ready` before relying on it. A `TranscriptWatcher` tails the per-session JSONL transcript (`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`) for content. All events normalize into a per-session `SessionBus`, which the WS service forwards as typed messages. `SessionManager` (`session-manager.service.ts`) runs **multiple concurrent sessions**, keyed two ways: by `id` and by `spawnToken` — a token embedded in the hook URL path so an inbound hook POST routes to the right session's `SessionBus`. Dependencies: `node-pty`, `ws`.
 - **`packages/frontend`** — React 19 + Vite + Tailwind CSS 4. Mobile-first PWA that renders structured message cards (`AssistantMessage`, `UserMessage`, `ToolCallCard`, `ApprovalCard`, `QuestionCard`) in `MessageStream`. Connects to backend via WebSocket.
 - **`packages/common`** — Shared TypeScript types used by both backend and frontend. Defines `ServerMessage`, `ClientMessage` (typed WS protocol), `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`, `EffortLevel`. Import as `common` or `common/types`.
 
@@ -57,6 +58,7 @@ Phone ──▶ WebSocket ──▶ Backend ──▶ PTY stdin (input only)
 
 - PTY stdout is captured to `data/captures/<session>.raw` for debugging only — nothing parses it.
 - Input flows in reverse: phone taps Send → `{type:"input"}` → PTY stdin. Text is wrapped in bracketed-paste (`\x1b[200~…\x1b[201~`) and the submit `\r` is sent separately and **confirmed** against the transcript (resent if the prompt doesn't register) — see `Session.sendInput`/`submitWithConfirmation`, because a trailing `\r` coalesced into a large paste gets stripped. Approvals flow via `{type:"approval_response"}` → `hooks.service.resolveApproval()` which unblocks the pending `PermissionRequest` HTTP response.
+- The frontend (`SessionView`/`QueuePanel`) **queues inputs locally** while Claude is busy and dispatches them in order — there is no optimistic echo; the queue is the source of truth for pending prompts.
 
 ### AskUserQuestion relay
 
@@ -85,6 +87,12 @@ Claude Code's `AskUserQuestion` is an interactive ink picker, not structured inp
 - **No database** — state is in-memory; sessions don't survive backend restart.
 - **Shared types go in `packages/common`** — both backend and frontend import from there.
 - Root `tsconfig.json` is the shared base — packages extend it.
+
+## Environment
+
+- Root `.env` (read by `scripts/start.ts`): `CONTROLLER_HOST` and `TAILSCALE_IP` are **required**; `FRONTEND_DIST` optional. Copy from `.env.example`.
+- Backend loads its own `packages/backend/.env` via dotenv.
+- `pnpm start` serves the static frontend bundle + backend behind Caddy (`Caddyfile`) over Tailscale — so both packages must be built first (`pnpm build`).
 
 ## Reference: Claude Code Source
 

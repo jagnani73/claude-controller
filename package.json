@@ -26,8 +26,7 @@
     "onlyBuiltDependencies": [
       "node-pty",
       "esbuild",
-      "@biomejs/biome",
-      "sharp"
+      "@biomejs/biome"
     ]
   },
   "workspaces": [

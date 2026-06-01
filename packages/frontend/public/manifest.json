@@ -1,6 +1,6 @@
 {
   "name": "Claude Controller",
-  "short_name": "CC",
+  "short_name": "Claude Controller",
   "description": "Remote control for Claude Code CLI sessions",
   "start_url": "/",
   "display": "standalone",
