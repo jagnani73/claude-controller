@@ -1,11 +1,13 @@
 import type { RateLimitWindow, SessionInfo } from "common/types";
-import { PanelLeftOpen } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { useEffect, useState } from "react";
 import { displayedModelLabel } from "@/components/sessions/model-config";
 import { PERMISSION_LABEL, PERMISSION_TONE } from "@/components/sessions/permission-config";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useSidebarShell } from "@/lib/sidebar-shell-context";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
+import { SidebarToggle } from "./SidebarToggle";
 
 interface SessionTopBarProps {
   session: SessionInfo;
@@ -72,7 +74,16 @@ function QuotaBadge({ label, window }: { label: string; window: RateLimitWindow 
 }
 
 export function SessionTopBar({ session }: SessionTopBarProps) {
-  const { collapsed, expand } = useSidebarShell();
+  const isMobile = useIsMobile();
+  const [expanded, setExpanded] = useState(false);
+
+  // The disclosure is mobile-only; always start it collapsed and reset if the
+  // viewport crosses the breakpoint, so returning to mobile never restores a
+  // stale expanded state.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: isMobile is the trigger, not a value read in the body
+  useEffect(() => {
+    setExpanded(false);
+  }, [isMobile]);
   const { name: title, cwd, model, effort, permissionMode, statusSnapshot: status } = session;
   // Until Claude Code's first dump arrives, every session-detail badge is
   // unreliable (model alias is wrong on resume, effort can be overridden).
@@ -85,95 +96,123 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
   // `auto` is a meaningful state ("use the model default"), not absence — render it explicitly.
   const effortLabel = effort ?? "auto";
 
-  return (
-    <header
-      className={cn(
-        "grid shrink-0 items-stretch gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur",
-        collapsed ? "grid-cols-[auto_minmax(0,1fr)]" : "grid-cols-1",
-      )}
-    >
-      {collapsed && (
-        <button
-          type="button"
-          onClick={expand}
-          aria-label="Show sidebar"
-          className="flex size-9 shrink-0 items-center justify-center self-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-card hover:text-foreground"
-        >
-          <PanelLeftOpen className="size-4" strokeWidth={1.75} />
-        </button>
-      )}
+  // On mobile the meta row is a tap-to-reveal disclosure; on md+ it's always
+  // open (and the chevron / tap target don't exist). `metaOpen` drives the
+  // height animation, `canToggle` gates the affordance.
+  const canToggle = isMobile && ready;
+  const metaOpen = !isMobile || expanded;
 
-      <div className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
-        <h1 className="min-w-0 truncate font-serif text-lg leading-tight text-foreground">
+  return (
+    <header className="flex shrink-0 flex-col border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
+      {/* Row 1 — always visible. The sidebar toggle sits inline with the title
+          so they share one center. On mobile the whole row is the tap target
+          that reveals the meta row; on md+ it's inert (canToggle is false). */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: the chevron button below is the keyboard-accessible control; this is a touch-only convenience target */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: see above — accessible control is the chevron button */}
+      <div
+        className={cn("flex min-w-0 items-center gap-3", canToggle && "cursor-pointer")}
+        onClick={canToggle ? () => setExpanded((v) => !v) : undefined}
+      >
+        <SidebarToggle />
+        <h1 className="min-w-0 flex-1 truncate font-serif text-lg leading-tight text-foreground">
           {title}
         </h1>
-        <div
+        <span
           className="min-w-0 truncate text-right font-mono text-[11px] text-muted-foreground/60"
           dir="rtl"
         >
           {cwd ?? ""}
-        </div>
-
-        {/* Hidden until the first status dump — alias/effort would be unreliable before then. */}
-        {ready && (
-          <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant="secondary" className="font-mono text-xs tracking-wider">
-              {modelLabel}
-            </Badge>
-            <Badge
-              variant="outline"
-              className="border-border/60 font-mono text-xs uppercase tracking-wider text-muted-foreground"
-            >
-              {effortLabel}
-            </Badge>
-            <Badge
-              variant="outline"
-              className={cn(
-                "font-mono text-xs uppercase tracking-wider",
-                PERMISSION_TONE[permissionMode],
-              )}
-            >
-              {PERMISSION_LABEL[permissionMode]}
-            </Badge>
-          </div>
-        )}
-
-        {ready && (
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
-            {ctxPct !== undefined && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className={cn(
-                      "rounded-md border px-1.5 py-0.5 font-mono tracking-wider tabular-nums",
-                      pctTone(Math.round(ctxPct)),
-                    )}
-                  >
-                    ctx {Math.round(ctxPct)}%
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-xs">
-                  <div className="space-y-0.5">
-                    <div>Context window: {Math.round(ctxPct)}% used</div>
-                    {inTokens !== undefined && outTokens !== undefined && (
-                      <div className="text-muted-foreground">
-                        ↑ {formatTokens(inTokens)} in · ↓ {formatTokens(outTokens)} out
-                      </div>
-                    )}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            )}
-            {status?.fiveHour && <QuotaBadge label="5h" window={status.fiveHour} />}
-            {status?.sevenDay && <QuotaBadge label="wk" window={status.sevenDay} />}
-            {status?.costUsd !== undefined && status.costUsd > 0 && (
-              <span className="rounded-md border border-border/60 bg-card px-1.5 py-0.5 font-mono tabular-nums text-success">
-                ${status.costUsd.toFixed(2)}
-              </span>
-            )}
-          </div>
+        </span>
+        {canToggle && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Hide session details" : "Show session details"}
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:text-foreground"
+          >
+            <ChevronDown
+              className={cn("size-4 transition-transform duration-150", expanded && "rotate-180")}
+              strokeWidth={1.75}
+            />
+          </button>
         )}
       </div>
+
+      {/* Meta row — hidden until the first status dump (alias/effort would be
+          unreliable before then). Animates open/closed via grid-rows so the
+          collapsed state leaves no residual height; `pt-2` lives inside the
+          clipped area so the gap collapses too. */}
+      {ready && (
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows] duration-150 ease-out",
+            metaOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Badge variant="secondary" className="font-mono text-xs tracking-wider">
+                  {modelLabel}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="border-border/60 font-mono text-xs uppercase tracking-wider text-muted-foreground"
+                >
+                  {effortLabel}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "font-mono text-xs uppercase tracking-wider",
+                    PERMISSION_TONE[permissionMode],
+                  )}
+                >
+                  {PERMISSION_LABEL[permissionMode]}
+                </Badge>
+              </div>
+
+              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+                {ctxPct !== undefined && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className={cn(
+                          "rounded-md border px-1.5 py-0.5 font-mono tracking-wider tabular-nums",
+                          pctTone(Math.round(ctxPct)),
+                        )}
+                      >
+                        ctx {Math.round(ctxPct)}%
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      <div className="space-y-0.5">
+                        <div>Context window: {Math.round(ctxPct)}% used</div>
+                        {inTokens !== undefined && outTokens !== undefined && (
+                          <div className="text-muted-foreground">
+                            ↑ {formatTokens(inTokens)} in · ↓ {formatTokens(outTokens)} out
+                          </div>
+                        )}
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {status?.fiveHour && <QuotaBadge label="5h" window={status.fiveHour} />}
+                {status?.sevenDay && <QuotaBadge label="wk" window={status.sevenDay} />}
+                {status?.costUsd !== undefined && status.costUsd > 0 && (
+                  <span className="rounded-md border border-border/60 bg-card px-1.5 py-0.5 font-mono tabular-nums text-success">
+                    ${status.costUsd.toFixed(2)}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

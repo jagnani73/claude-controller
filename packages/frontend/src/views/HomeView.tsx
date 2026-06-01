@@ -1,18 +1,17 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { SessionConfig } from "common/types";
-import { FolderOpen, PanelLeftOpen } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { toast } from "sonner";
+import { SidebarToggle } from "@/components/layout/SidebarToggle";
 import { CreateSessionForm } from "@/components/sessions/CreateSessionForm";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useSessions } from "@/hooks/use-sessions";
-import { useSidebarShell } from "@/lib/sidebar-shell-context";
 import { useWorkspace } from "@/lib/workspace-context";
 
 export function HomeView() {
   const navigate = useNavigate();
   const { workDir, createSession } = useSessions();
   const { selectedPath } = useWorkspace();
-  const { collapsed, expand } = useSidebarShell();
 
   const isProjectFolder = !!selectedPath && selectedPath !== workDir;
 
@@ -29,18 +28,7 @@ export function HomeView() {
 
   return (
     <div className="flex h-dvh min-h-0 flex-col">
-      {collapsed && (
-        <div className="flex shrink-0 items-center px-3 py-2">
-          <button
-            type="button"
-            onClick={expand}
-            aria-label="Show sidebar"
-            className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-card hover:text-foreground"
-          >
-            <PanelLeftOpen className="size-4" strokeWidth={1.75} />
-          </button>
-        </div>
-      )}
+      <SidebarToggle className="m-2" />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-6 py-12 md:py-20">
           <header className="space-y-2">

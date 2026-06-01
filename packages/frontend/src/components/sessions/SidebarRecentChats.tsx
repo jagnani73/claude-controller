@@ -1,6 +1,6 @@
 import type { ProjectSessionSummary } from "common/types";
 import { Loader2, MessageSquare } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelative } from "@/lib/utils";
@@ -27,21 +27,28 @@ export function SidebarRecentChats({
   activeSessionId,
   resumingId,
 }: SidebarRecentChatsProps) {
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef(onLoadMore);
   loadMoreRef.current = onLoadMore;
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
+  // Callback ref so the observer (re)attaches every time the sentinel mounts.
+  // A useEffect([]) can't work here: on first render the sentinel isn't in the
+  // DOM yet (the initial page is still loading and the sentinel is gated on
+  // `!loading`), so the observer would never attach. The sentinel also unmounts
+  // during each page load and remounts after — re-running this re-checks
+  // intersection, so the list keeps paging until the viewport fills or the
+  // list is exhausted.
+  const sentinelRef = useCallback((node: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    if (!node) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
       },
       { rootMargin: "120px" },
     );
-    io.observe(el);
-    return () => io.disconnect();
+    io.observe(node);
+    observerRef.current = io;
   }, []);
 
   if (sessions.length === 0 && !loading) {

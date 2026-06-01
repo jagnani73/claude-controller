@@ -27,6 +27,10 @@ export function SessionSettingsPopover({ session, onChange }: SessionSettingsPop
         side="top"
         align="start"
         sideOffset={12}
+        // The trigger sits ~9px inside the input card (card border 1px + p-2
+        // 8px). Pull the popover back out so its left edge lines up with the
+        // input box edge instead of the button.
+        alignOffset={-9}
         className="w-[min(28rem,calc(100vw-1.5rem))] border-border/60 bg-popover p-0"
       >
         <div className="p-4">
