@@ -22,9 +22,6 @@ bun.lockb
 .DS_Store
 Thumbs.db
 
-# Controller config (local paths)
-controller.config.json
-
 # Claude Controller
 dump
 config/settings.json

@@ -45,21 +45,23 @@ pnpm build
 
 ### 2. Configure
 
-Two `.env` files (both gitignored) — backend config in the backend package, Caddy config at the root:
+Two `.env` files (both gitignored) — copy the examples and fill them in:
 
 ```bash
 cp packages/backend/.env.example packages/backend/.env   # backend vars
 cp .env.example .env                                     # Caddy vars (root)
 ```
 
-Find this machine's values and fill them in:
+In `packages/backend/.env`, set `WORK_DIR` to the folder your projects live in — sessions spawn there and recent chats are browsed from it. It's **required**; the backend won't start without it.
+
+Find this machine's tailscale values and fill them in:
 
 ```bash
 tailscale ip -4           # -> TAILSCALE_IP (e.g. 100.x.x.x)
 tailscale status --json   # Self.DNSName -> CONTROLLER_HOST (drop the trailing dot)
 ```
 
-At minimum set `CONTROLLER_HOST` + `TAILSCALE_IP` (root `.env`) and `NODE_ENV=production` + `ALLOWED_ORIGINS=https://<your-host>.ts.net` (backend `.env`). Full reference below.
+At minimum set `CONTROLLER_HOST` + `TAILSCALE_IP` (root `.env`) and `WORK_DIR` + `NODE_ENV=production` + `ALLOWED_ORIGINS=https://<your-host>.ts.net` (backend `.env`). Full reference below.
 
 ### 3. Run
 
@@ -77,6 +79,7 @@ Launches the backend + Caddy together (Ctrl+C stops both). On your phone (Tailsc
 
 | Var | Required | Default | Description |
 |-----|----------|---------|-------------|
+| `WORK_DIR` | **yes** | — | The folder your projects live in — sessions spawn here and recent chats are browsed from it. The backend won't start without it. |
 | `NODE_ENV` | for remote | dev | Set to `production` to **fail closed**: the WS/CORS origin check rejects any origin not in `ALLOWED_ORIGINS` (and any request with no `Origin`). Leave unset for local dev (localhost auto-allowed). |
 | `ALLOWED_ORIGINS` | in prod | — | Comma-separated allowed browser origins, e.g. `https://laptop.tailnet.ts.net`. |
 | `HOST` | no | `127.0.0.1` | Bind address. **Loopback only** — Caddy is the sole process facing the tailnet; never `0.0.0.0`. |
@@ -160,6 +163,7 @@ What works today: session control, the hardened Tailscale + Caddy transport, one
 ### Multi-session
 
 - **Attention routing** — fast session switching plus a badge when a backgrounded session needs input.
+- **Push notifications** — alert the phone when a session needs input (a pending approval/question) or finishes a turn, so you don't have to keep the app open.
 
 ### Reliability
 

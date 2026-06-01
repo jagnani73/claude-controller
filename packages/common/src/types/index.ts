@@ -87,11 +87,6 @@ export interface SessionInfo {
   statusSnapshot?: SessionStatusSnapshot;
 }
 
-/** Controller config file shape */
-export interface ControllerConfig {
-  workDir: string;
-}
-
 /** Directory listing entry */
 export interface DirEntry {
   name: string;
