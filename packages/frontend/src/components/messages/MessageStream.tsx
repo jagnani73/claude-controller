@@ -782,6 +782,38 @@ export function MessageStream({
         effectiveLastItem.kind !== "slash_command" &&
         effectiveLastItem.kind !== "interrupt"));
 
+  // Loader elapsed-time anchor: the user's message time, so the timer reflects
+  // real wait and survives a refresh (the last user_prompt reloads from history
+  // with its original timestamp). Prefer the still-in-flight preview when present.
+  let turnStartedAtIso = inFlightPreview?.timestamp;
+  if (!turnStartedAtIso) {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === "user") {
+        turnStartedAtIso = it.timestamp;
+        break;
+      }
+    }
+  }
+  const turnStartedAt = turnStartedAtIso ? Date.parse(turnStartedAtIso) : undefined;
+
+  // The item-list effect above only fires on `items` changes, so the loader and
+  // the optimistic preview (driven by props, rendered outside the list) wouldn't
+  // scroll into view when they appear. Snap to bottom when the loader shows or a
+  // new message is sent — unless the user has scrolled up more than half a
+  // viewport to read, in which case leave them be. Keyed on the in-flight
+  // timestamp (stable per message) rather than the freshly-built preview object,
+  // so consecutive sends each trigger a scroll without firing every re-render.
+  const inFlightTimestamp = inFlightPreview?.timestamp;
+  useLayoutEffect(() => {
+    if (!waitingForReply && !inFlightTimestamp) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom > el.clientHeight * 0.5) return;
+    el.scrollTop = el.scrollHeight;
+  }, [waitingForReply, inFlightTimestamp]);
+
   const [toolGroupOverride, setToolGroupOverride] = useState<Record<string, "open" | "closed">>({});
   const toggleToolGroup = useCallback((groupId: string, openByDefault: boolean) => {
     setToolGroupOverride((prev) => {
@@ -976,7 +1008,7 @@ export function MessageStream({
             Compacting conversation… Claude will be unresponsive until this finishes.
           </div>
         )}
-        {waitingForReply && !compacting && <ThinkingIndicator />}
+        {waitingForReply && !compacting && <ThinkingIndicator startedAt={turnStartedAt} />}
       </div>
     </div>
   );

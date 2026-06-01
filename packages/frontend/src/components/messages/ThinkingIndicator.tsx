@@ -211,18 +211,44 @@ const VERBS = [
   "Zigzagging",
 ];
 
-export function ThinkingIndicator() {
+/** "45s" under a minute, "2m 3s" beyond — mirrors Claude Code's terminal timer. */
+function formatElapsed(totalSeconds: number): string {
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
+interface ThinkingIndicatorProps {
+  /**
+   * Epoch ms the current turn started (the user's message time). Elapsed counts
+   * from here so it reflects real wait time and survives a refresh. Falls back to
+   * mount time when omitted.
+   */
+  startedAt?: number;
+}
+
+export function ThinkingIndicator({ startedAt }: ThinkingIndicatorProps) {
   const [frame, setFrame] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
   const verbRef = useRef<string>(VERBS[Math.floor(Math.random() * VERBS.length)]);
+  const startRef = useRef(startedAt ?? Date.now());
+  const [elapsed, setElapsed] = useState(() =>
+    Math.max(0, Math.floor((Date.now() - startRef.current) / 1000)),
+  );
+
+  // Re-anchor when the turn's start time changes (a new message). Update elapsed
+  // immediately so the readout doesn't flash 0 for a second.
+  useEffect(() => {
+    if (startedAt !== undefined) startRef.current = startedAt;
+    setElapsed(Math.max(0, Math.floor((Date.now() - startRef.current) / 1000)));
+  }, [startedAt]);
 
   useEffect(() => {
-    const startedAt = Date.now();
     const spin = setInterval(() => {
       setFrame((f) => (f + 1) % SPINNER_CHARS.length);
     }, SPINNER_INTERVAL_MS);
     const tick = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+      setElapsed(Math.max(0, Math.floor((Date.now() - startRef.current) / 1000)));
     }, 1000);
     return () => {
       clearInterval(spin);
@@ -237,7 +263,7 @@ export function ThinkingIndicator() {
       </span>
       <span style={{ color: VERB_COLOR }}>{verbRef.current}…</span>
       <span className="font-sans text-[11px] not-italic text-muted-foreground/50">
-        ({elapsed}s)
+        ({formatElapsed(elapsed)})
       </span>
     </div>
   );
