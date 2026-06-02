@@ -15,9 +15,9 @@ const SEARCH_DEBOUNCE_MS = 250;
 
 export function Sidebar() {
   const connectionState = useWsState();
-  const { workDir, createSession, sessions } = useSessions();
+  const { createSession, sessions } = useSessions();
   const activeCount = sessions.filter((s) => s.status !== "stopped").length;
-  const { selectedPath, setSelectedPath, searchQuery, setSearchQuery, requestBrowse } =
+  const { currentPath, workDir, isProjectFolder, searchQuery, setSearchQuery, browse } =
     useWorkspace();
   const { collapse } = useSidebarShell();
   const navigate = useNavigate();
@@ -34,21 +34,20 @@ export function Sidebar() {
     return () => clearTimeout(t);
   }, [searchDraft, searchQuery, setSearchQuery]);
 
-  const isProjectFolder = !!selectedPath && selectedPath !== workDir;
   const {
     sessions: recentChats,
     loading: recentLoading,
     exhausted: recentExhausted,
     loadMore: loadMoreRecent,
     total: recentTotal,
-  } = useProjectSessions(isProjectFolder ? selectedPath : null, searchQuery);
+  } = useProjectSessions(isProjectFolder ? currentPath : null, searchQuery);
 
   const handleResume = async (resumeSessionId: string) => {
     if (resumingId) return;
     setResumingId(resumeSessionId);
     try {
       const session = await createSession({
-        cwd: selectedPath,
+        cwd: currentPath,
         model: "sonnet",
         permissionMode: "default",
         resumeSessionId,
@@ -78,7 +77,7 @@ export function Sidebar() {
       <div className="flex shrink-0 items-center justify-between gap-1 border-b border-sidebar-border/60 px-3 py-3">
         <Link
           to="/"
-          onClick={() => workDir && requestBrowse(workDir)}
+          onClick={() => workDir && browse(workDir)}
           className="flex min-w-0 items-center gap-2 text-left transition-opacity duration-150 ease-out hover:opacity-90"
         >
           <img src="/logo.png" alt="Claude Controller logo" className="size-7 shrink-0" />
@@ -119,7 +118,7 @@ export function Sidebar() {
 
         <div className="flex flex-col gap-1.5">
           <SectionLabel>Directory</SectionLabel>
-          <SidebarFolderPicker workDir={workDir} onPathChange={setSelectedPath} />
+          <SidebarFolderPicker />
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-1.5">

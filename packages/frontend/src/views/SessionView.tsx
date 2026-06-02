@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { InputBar, type InputBarHandle } from "@/components/layout/InputBar";
 import { type QueueItem, QueuePanel } from "@/components/layout/QueuePanel";
 import { SessionTopBar } from "@/components/layout/SessionTopBar";
+import { SidebarToggle } from "@/components/layout/SidebarToggle";
 import { StatusLine } from "@/components/layout/StatusLine";
 import { MessageStream } from "@/components/messages/MessageStream";
 import { SessionSettingsPopover } from "@/components/sessions/SessionSettingsPopover";
@@ -42,7 +43,7 @@ function hasActiveSend(queue: readonly InternalQueueItem[]): boolean {
 export function SessionView() {
   const { sessionId } = useParams({ from: "/session/$sessionId" });
   const { sessions, subscribe, updateSettings, submitInput } = useSessions();
-  const { requestBrowse } = useWorkspace();
+  const { browse } = useWorkspace();
   const [takenOver, setTakenOver] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [statusLine, setStatusLine] = useState("");
@@ -260,9 +261,23 @@ export function SessionView() {
     wsService.send({ type: "interrupt", sessionId });
   }, [sessionId]);
 
+  // Opening a session points the sidebar's shared folder state (WorkspaceContext
+  // currentPath) at that session's cwd, so the picker breadcrumbs and "Recent
+  // chats" reflect the active project. This intentionally wins over a folder you
+  // had browsed to in the sidebar — opening a session re-points it.
   useEffect(() => {
-    if (session?.cwd) requestBrowse(session.cwd);
-  }, [session?.cwd, requestBrowse]);
+    if (session?.cwd) browse(session.cwd);
+  }, [session?.cwd, browse]);
+
+  // Self-heal: an item should only ever be enqueued while `session` is defined
+  // (the InputBar is gated on it), but if one ever lands while `session` is
+  // momentarily undefined, dispatchHeadIfIdle no-ops (it needs sessionRef) and
+  // the head would strand "pending". Re-kick the queue when `session` resolves
+  // so a pending head can't get stuck. No-op when nothing is pending or a send
+  // is already active.
+  useEffect(() => {
+    if (session) writeQueue(dispatchHeadIfIdle(queueRef.current));
+  }, [session, dispatchHeadIfIdle, writeQueue]);
 
   if (notFound) {
     return (
@@ -312,18 +327,31 @@ export function SessionView() {
     );
   }
 
-  if (!session) {
-    return (
-      <div className="flex h-dvh flex-col items-center justify-center text-muted-foreground">
-        <Loader2 className="size-5 animate-spin text-accent" />
-        <p className="mt-3 font-serif text-base italic">Opening session…</p>
-      </div>
-    );
-  }
-
+  // NB: we intentionally do NOT early-return a loader while `session` is
+  // undefined. MessageStream only needs `sessionId`, and the backend's
+  // subscribe replay (the tail of the event log) is one-shot — if the stream
+  // weren't mounted to receive it, re-opening a session created during this WS
+  // connection would drop the replayed transcript and strand the view on a
+  // spinner (session_metadata, which defines `session`, arrives *after* the
+  // replay). Keeping MessageStream mounted means its WS handlers are always
+  // live when the replay arrives: registered before SessionView's subscribe
+  // effect on the initial mount (child effects run before the parent's), and
+  // still registered from a prior commit when navigating session→session (the
+  // subscribe effect re-runs on sessionId change; the stream's handlers don't).
+  // Only the top bar + input — which genuinely need `session` — gate on it.
   return (
     <div className="flex h-dvh flex-col">
-      <SessionTopBar session={session} />
+      {session ? (
+        <SessionTopBar session={session} />
+      ) : (
+        <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
+          <SidebarToggle />
+          <Loader2 className="size-4 animate-spin text-accent" />
+          <span className="font-serif text-base italic text-muted-foreground">
+            Opening session…
+          </span>
+        </header>
+      )}
       <div className="min-h-0 flex-1">
         <MessageStream
           sessionId={sessionId}
@@ -335,23 +363,31 @@ export function SessionView() {
         />
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <QueuePanel queue={pendingItems} onEdit={handleEditQueued} onRemove={handleRemoveQueued} />
-        {!hasPendingQuestion && (
-          <InputBar
-            ref={inputBarRef}
-            onSubmit={handleSubmit}
-            isProcessing={isProcessing}
-            recallText={recallText}
-            queueTail={queueTail}
-            onPopQueueTail={handlePopQueueTail}
-            onInterrupt={handleInterrupt}
-            settingsSlot={
-              <SessionSettingsPopover
-                session={session}
-                onChange={(next) => updateSettings(sessionId, next)}
+        {session && (
+          <>
+            <QueuePanel
+              queue={pendingItems}
+              onEdit={handleEditQueued}
+              onRemove={handleRemoveQueued}
+            />
+            {!hasPendingQuestion && (
+              <InputBar
+                ref={inputBarRef}
+                onSubmit={handleSubmit}
+                isProcessing={isProcessing}
+                recallText={recallText}
+                queueTail={queueTail}
+                onPopQueueTail={handlePopQueueTail}
+                onInterrupt={handleInterrupt}
+                settingsSlot={
+                  <SessionSettingsPopover
+                    session={session}
+                    onChange={(next) => updateSettings(sessionId, next)}
+                  />
+                }
               />
-            }
-          />
+            )}
+          </>
         )}
         <StatusLine text={statusLine} />
       </div>

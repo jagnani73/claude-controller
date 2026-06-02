@@ -13,14 +13,35 @@ import type { ClaudeModel, PermissionMode } from "./types/index.js";
 
 /**
  * Whether auto mode participates in the cycle for a given model alias.
- * Mirrors Claude Code's runtime gate (`canCycleToAuto`), which today
- * requires the auto-mode availability flag — only granted to plain opus
- * in this codebase. When upstream broadens the gate (Sonnet, Max plan
- * tier, classifier rollout), update this predicate and both consumers
- * track automatically.
+ * Mirrors Claude Code's runtime gate (`modelSupportsAutoMode`,
+ * `betas.ts:160`), whose external (firstParty, non-ant) allowlist is
+ * `/^claude-(opus|sonnet)-4-6/` — the plain Opus and Sonnet families.
+ * `opusplan` and `haiku` are deliberately excluded.
+ *
+ * Two caveats this predicate intentionally does NOT encode:
+ *  - The upstream gate is additionally behind the `TRANSCRIPT_CLASSIFIER`
+ *    flag + a GrowthBook config, so a `true` here is the model-family
+ *    *precondition*, not a guarantee auto is live in a given session.
+ *  - We match on the alias family (`opus`/`sonnet`), not the resolved
+ *    canonical id — upstream's regex is pinned to `-4-6`, so a future
+ *    `-4-7`+ could drift past it while this still returns `true`.
+ *
+ * Exhaustive `switch` (no `default`) on purpose: adding a `ClaudeModel`
+ * alias becomes a compile error here rather than silently falling through to
+ * `false`. This is a hand-maintained mirror of a moving upstream gate, and
+ * that silent fall-through is exactly the bug we want the compiler to catch.
  */
 export function cycleCanIncludeAuto(model: ClaudeModel): boolean {
-  return model === "opus" || model === "opus[1m]";
+  switch (model) {
+    case "opus":
+    case "opus[1m]":
+    case "sonnet":
+    case "sonnet[1m]":
+      return true;
+    case "opusplan":
+    case "haiku":
+      return false;
+  }
 }
 
 /** The next mode Claude Code transitions to on a single Shift+Tab. */

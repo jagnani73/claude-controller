@@ -1,6 +1,5 @@
 import type {
   ClaudeModel,
-  DirEntry,
   EffortLevel,
   PermissionMode,
   ProjectSessionSummary,
@@ -98,7 +97,6 @@ export interface SettingsPatch {
 
 export function useSessions() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [workDir, setWorkDir] = useState<string>("");
   const pendingCreate = useRef<PendingCreate | null>(null);
   /** Latest sessions reachable from non-React-state callbacks (e.g. send). */
   const sessionsRef = useRef<SessionInfo[]>(sessions);
@@ -119,7 +117,6 @@ export function useSessions() {
   useWsMessage("connected", (msg) => {
     const merged = msg.sessions.map(mergeWithLocal);
     setSessions(merged);
-    if (msg.workDir) setWorkDir(msg.workDir);
     for (const s of merged) persistSessionConfig(s);
   });
 
@@ -318,29 +315,12 @@ export function useSessions() {
 
   return {
     sessions,
-    workDir,
     createSession,
     stopSession,
     subscribe,
     updateSettings,
     submitInput,
   };
-}
-
-export function useDirBrowser() {
-  const [currentPath, setCurrentPath] = useState<string>("");
-  const [entries, setEntries] = useState<DirEntry[]>([]);
-
-  useWsMessage("dir_list", (msg) => {
-    setCurrentPath(msg.path);
-    setEntries(msg.entries);
-  });
-
-  const browse = useCallback((path: string) => {
-    wsService.send({ type: "list_dirs", path });
-  }, []);
-
-  return { currentPath, entries, browse };
 }
 
 const PROJECT_PAGE_SIZE = 20;

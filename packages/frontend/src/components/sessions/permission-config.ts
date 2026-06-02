@@ -14,7 +14,7 @@ export function permissionOptionsFor(
   const autoDisabled = !supportsAutoMode(model);
   return PERMISSION_OPTIONS.map((opt) =>
     opt.value === "auto"
-      ? { ...opt, disabled: autoDisabled, hint: autoDisabled ? "opus only" : undefined }
+      ? { ...opt, disabled: autoDisabled, hint: autoDisabled ? "opus/sonnet only" : undefined }
       : opt,
   );
 }

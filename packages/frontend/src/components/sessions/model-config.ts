@@ -1,3 +1,4 @@
+import { cycleCanIncludeAuto } from "common/permission-cycle";
 import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 
 /**
@@ -33,9 +34,14 @@ export function supportsMaxEffort(model: ClaudeModel): boolean {
   return model !== "haiku";
 }
 
-/** Auto permission mode is gated to plain opus aliases. */
+/**
+ * Auto permission mode gate. Delegates to the shared `cycleCanIncludeAuto` so
+ * the frontend (enable/disable the option + clamp on model switch) and the
+ * backend (PTY Shift+Tab keystroke math) share one source of truth. Currently
+ * the Opus and Sonnet families (not opusplan/haiku).
+ */
 export function supportsAutoMode(model: ClaudeModel): boolean {
-  return isPlainOpus(model);
+  return cycleCanIncludeAuto(model);
 }
 
 export function effortOptionsFor(

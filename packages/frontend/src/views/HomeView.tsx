@@ -10,10 +10,8 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 export function HomeView() {
   const navigate = useNavigate();
-  const { workDir, createSession } = useSessions();
-  const { selectedPath } = useWorkspace();
-
-  const isProjectFolder = !!selectedPath && selectedPath !== workDir;
+  const { createSession } = useSessions();
+  const { currentPath, isProjectFolder } = useWorkspace();
 
   const handleCreate = async (config: SessionConfig) => {
     try {
@@ -41,7 +39,7 @@ export function HomeView() {
           </header>
 
           {isProjectFolder ? (
-            <CreateSessionForm cwd={selectedPath} onSubmit={handleCreate} />
+            <CreateSessionForm cwd={currentPath} onSubmit={handleCreate} />
           ) : (
             <EmptyState
               icon={FolderOpen}

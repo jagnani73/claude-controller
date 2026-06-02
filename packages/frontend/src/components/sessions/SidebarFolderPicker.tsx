@@ -1,14 +1,8 @@
 import { ChevronRight, Folder } from "lucide-react";
 import { useEffect, useMemo } from "react";
-import { useDirBrowser } from "@/hooks/use-sessions";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 import { Highlight, normalizeSearch } from "./Highlight";
-
-interface SidebarFolderPickerProps {
-  workDir: string;
-  onPathChange: (path: string) => void;
-}
 
 interface Crumb {
   label: string;
@@ -35,29 +29,27 @@ function lastSegment(p: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
-export function SidebarFolderPicker({ workDir, onPathChange }: SidebarFolderPickerProps) {
-  const { currentPath, entries, browse } = useDirBrowser();
-  const { pendingBrowse, searchQuery } = useWorkspace();
+export function SidebarFolderPicker() {
+  const { currentPath, entries, browse, searchQuery, workDir } = useWorkspace();
   const allDirs = entries.filter((e) => e.isDir);
   const normQuery = normalizeSearch(searchQuery);
   const dirs = normQuery
     ? allDirs.filter((d) => normalizeSearch(d.name).includes(normQuery))
     : allDirs;
 
+  // Initial browse only. `currentPath` now lives in WorkspaceContext and
+  // persists across the sidebar unmounting (mobile drawer close / breakpoint
+  // flip), so guarding on `!currentPath` keeps a remount from resetting the
+  // selected folder to the root. The logo button calls browse(workDir) to go
+  // home on demand.
+  //
+  // The guard also means a later `workDir` change won't re-browse once we've
+  // browsed anywhere — acceptable because `workDir` is fixed per backend
+  // instance (it only arrives once, via the `connected` message). If workDir
+  // ever became dynamic (multi-workspace), this would need a didInit ref.
   useEffect(() => {
-    if (workDir) browse(workDir);
-  }, [workDir, browse]);
-
-  // Nonce-keyed so the same path can be requested twice (e.g. clicking the
-  // logo while already at workDir) and still re-trigger this effect.
-  useEffect(() => {
-    if (!pendingBrowse) return;
-    if (pendingBrowse.path) browse(pendingBrowse.path);
-  }, [pendingBrowse, browse]);
-
-  useEffect(() => {
-    onPathChange(currentPath);
-  }, [currentPath, onPathChange]);
+    if (workDir && !currentPath) browse(workDir);
+  }, [workDir, currentPath, browse]);
 
   const crumbs = useMemo(() => splitCrumbs(workDir, currentPath), [workDir, currentPath]);
 
