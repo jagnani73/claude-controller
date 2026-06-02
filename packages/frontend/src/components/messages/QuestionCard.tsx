@@ -160,14 +160,21 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
   // so a reloaded "answered" card shows what was chosen instead of "No answer
   // recorded". Local state wins while live; the result is the fallback.
   const lockedAnswerText = isLocked && result ? extractAnswer(result.value, q.question) : null;
+  const recoveredLabels = lockedAnswerText
+    ? q.options.filter((o) => answerIncludesLabel(lockedAnswerText, o.label)).map((o) => o.label)
+    : [];
+  // When the card is locked by an external answer (terminal / another device /
+  // post-reload) rather than our own submit, the local selection is just the
+  // pre-selected first-option default (single-select pre-selects options[0]) and
+  // would show the wrong "You picked". Prefer the answer recovered from the
+  // result. When WE submitted, trust the live local selection.
+  const answeredElsewhere = !!result && !submitted;
   const effectiveSelectedLabels =
-    s.selectedLabels.length > 0
-      ? s.selectedLabels
-      : lockedAnswerText
-        ? q.options
-            .filter((o) => answerIncludesLabel(lockedAnswerText, o.label))
-            .map((o) => o.label)
-        : [];
+    answeredElsewhere && lockedAnswerText
+      ? recoveredLabels
+      : s.selectedLabels.length > 0
+        ? s.selectedLabels
+        : recoveredLabels;
   const hasPreview = !q.multiSelect && q.options.some((o) => o.preview);
   const focusedOption =
     q.options.find((o) => o.label === effectiveSelectedLabels[0]) ?? q.options[0];

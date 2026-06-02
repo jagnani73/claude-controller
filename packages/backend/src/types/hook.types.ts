@@ -29,7 +29,24 @@ export interface PostCompactPayload extends BaseHookPayload {
   compact_summary: string;
 }
 
-export type HookPayload = PermissionRequestPayload | PreCompactPayload | PostCompactPayload;
+/**
+ * Fires BEFORE a tool's permission check / interactive picker. We register it
+ * scoped to `ExitPlanMode` only — it's the one signal that reaches us before
+ * the plan picker opens (the `ExitPlanMode` `tool_use` is written to the JSONL
+ * only after the picker resolves). Carries the real `tool_use_id`.
+ */
+export interface PreToolUsePayload extends BaseHookPayload {
+  hook_event_name: "PreToolUse";
+  tool_name: string;
+  tool_input: unknown;
+  tool_use_id: string;
+}
+
+export type HookPayload =
+  | PermissionRequestPayload
+  | PreCompactPayload
+  | PostCompactPayload
+  | PreToolUsePayload;
 
 export type HookEventName = HookPayload["hook_event_name"];
 

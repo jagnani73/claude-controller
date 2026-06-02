@@ -355,6 +355,7 @@ export function SessionView() {
       <div className="min-h-0 flex-1">
         <MessageStream
           sessionId={sessionId}
+          model={session?.model}
           inFlightPreview={
             inFlightItem ? { text: inFlightItem.text, timestamp: inFlightItem.timestamp } : null
           }

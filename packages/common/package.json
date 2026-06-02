@@ -17,6 +17,10 @@
     "./permission-cycle": {
       "import": "./dist/permission-cycle.js",
       "types": "./dist/permission-cycle.d.ts"
+    },
+    "./model": {
+      "import": "./dist/model.js",
+      "types": "./dist/model.d.ts"
     }
   },
   "scripts": {

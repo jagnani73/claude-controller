@@ -1,9 +1,10 @@
-import type { ServerMessage, ToolResult } from "common/types";
+import type { ClaudeModel, ServerMessage, ToolResult } from "common/types";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
 import { Markdown } from "@/components/messages/Markdown";
+import { PlanCard } from "@/components/messages/PlanCard";
 import { QuestionCard } from "@/components/messages/QuestionCard";
 import { ThinkingIndicator } from "@/components/messages/ThinkingIndicator";
 import { ToolCallCard } from "@/components/messages/ToolCallCard";
@@ -540,6 +541,11 @@ interface MessageStreamProps {
    * tool_use_id — the raw WS events alone can't be matched reliably.
    */
   onPendingQuestionChange?: (pending: boolean) => void;
+  /** The session's running model — passed to PlanCard to label the approve
+   *  buttons (auto mode vs auto-accept edits). Optional: the stream stays
+   *  mounted while `session` is still resolving, and the label is cosmetic (the
+   *  backend computes the actual resulting mode from the running model). */
+  model?: ClaudeModel;
 }
 
 export function MessageStream({
@@ -547,6 +553,7 @@ export function MessageStream({
   inFlightPreview,
   isProcessing,
   onPendingQuestionChange,
+  model,
 }: MessageStreamProps) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const items = state.items;
@@ -765,16 +772,18 @@ export function MessageStream({
   // assistant text, compact summary, local slash commands, and interrupts are
   // terminal. `isProcessing` from SessionView covers the gap between submit
   // and the bus echo arriving (no items yet but a turn is in flight).
-  // AskUserQuestion is special: when waiting on the user (no result yet) or
-  // after a cancel (result.isError), the CLI's turn is not in flight — the
-  // spinner would mislead. A successful answer (result.isError === false)
-  // still falls through to the regular "tool returned, Claude is thinking" path.
-  const askUserQuestionUnresolved =
+  // AskUserQuestion and ExitPlanMode are special: while waiting on the user (no
+  // result yet) or after a cancel/error (result.isError), the CLI's turn is not
+  // in flight — the card is waiting for a tap, so the spinner would mislead. A
+  // resolved success (result.isError === false) still falls through to the
+  // regular "tool returned, Claude is thinking" path.
+  const relayToolUnresolved =
     effectiveLastItem?.kind === "tool" &&
-    effectiveLastItem.toolName === "AskUserQuestion" &&
+    (effectiveLastItem.toolName === "AskUserQuestion" ||
+      effectiveLastItem.toolName === "ExitPlanMode") &&
     (!effectiveLastItem.result || effectiveLastItem.result.isError);
   const waitingForReply =
-    !askUserQuestionUnresolved &&
+    !relayToolUnresolved &&
     (isProcessing ||
       (!!effectiveLastItem &&
         effectiveLastItem.kind !== "assistant" &&
@@ -829,7 +838,7 @@ export function MessageStream({
   // tool-group toggle — a pending question hidden behind "Show N tool calls" is
   // unanswerable. They break a tool run and always render standalone.
   const isGroupable = (it: StreamItem): boolean =>
-    it.kind === "tool" && it.toolName !== "AskUserQuestion";
+    it.kind === "tool" && it.toolName !== "AskUserQuestion" && it.toolName !== "ExitPlanMode";
   const renderEntries: RenderEntry[] = [];
   let cursor = 0;
   while (cursor < items.length) {
@@ -931,6 +940,18 @@ export function MessageStream({
                       toolUseId={item.id}
                       input={item.input}
                       result={item.result}
+                    />
+                  );
+                }
+                if (item.toolName === "ExitPlanMode") {
+                  return (
+                    <PlanCard
+                      key={item.id}
+                      sessionId={item.sessionId}
+                      toolUseId={item.id}
+                      input={item.input}
+                      result={item.result}
+                      model={model}
                     />
                   );
                 }

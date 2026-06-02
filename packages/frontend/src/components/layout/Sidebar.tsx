@@ -6,7 +6,7 @@ import { SidebarFolderPicker } from "@/components/sessions/SidebarFolderPicker";
 import { SidebarRecentChats } from "@/components/sessions/SidebarRecentChats";
 import { SectionLabel } from "@/components/ui/SectionLabel";
 import { StatusDot } from "@/components/ui/StatusDot";
-import { useProjectSessions, useSessions } from "@/hooks/use-sessions";
+import { readSessionConfig, useProjectSessions, useSessions } from "@/hooks/use-sessions";
 import { useWsState } from "@/hooks/use-ws";
 import { useSidebarShell } from "@/lib/sidebar-shell-context";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -46,10 +46,17 @@ export function Sidebar() {
     if (resumingId) return;
     setResumingId(resumeSessionId);
     try {
+      // Resume with the session's last-known config (persisted by this browser)
+      // rather than a hardcoded "sonnet" — and even a missing/guessed model
+      // self-heals: on resume the PTY omits `--model` (keeps the JSONL's model)
+      // and the backend reconciles `currentModel` from the transcript during the
+      // initial drain, before the session is broadcast.
+      const persisted = readSessionConfig(resumeSessionId);
       const session = await createSession({
         cwd: currentPath,
-        model: "sonnet",
-        permissionMode: "default",
+        model: persisted?.model ?? "opus",
+        permissionMode: persisted?.permissionMode ?? "default",
+        effort: persisted?.effort,
         resumeSessionId,
       });
       navigate({ to: "/session/$sessionId", params: { sessionId: session.id } });

@@ -84,7 +84,15 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
   useEffect(() => {
     setExpanded(false);
   }, [isMobile]);
-  const { name: title, cwd, model, effort, permissionMode, statusSnapshot: status } = session;
+  const {
+    name: title,
+    cwd,
+    model,
+    effort,
+    permissionMode,
+    modelPending,
+    statusSnapshot: status,
+  } = session;
   // Until Claude Code's first dump arrives, every session-detail badge is
   // unreliable (model alias is wrong on resume, effort can be overridden).
   // Show the title alone until we have ground truth.
@@ -156,9 +164,20 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
           <div className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="secondary" className="font-mono text-xs tracking-wider">
+                <Badge
+                  variant="secondary"
+                  className={cn("font-mono text-xs tracking-wider", modelPending && "opacity-60")}
+                >
                   {modelLabel}
                 </Badge>
+                {modelPending && (
+                  <span
+                    className="rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-warning"
+                    title="Applies on your next message"
+                  >
+                    pending
+                  </span>
+                )}
                 <Badge
                   variant="outline"
                   className="border-border/60 font-mono text-xs uppercase tracking-wider text-muted-foreground"

@@ -81,6 +81,13 @@ export interface SessionInfo {
   currentModelId?: string;
   permissionMode: PermissionMode;
   effort?: EffortLevel;
+  /**
+   * True when `model`/`effort` reflect a *pending* user pick (set in the
+   * controller, not yet applied to the running PTY — applied on the next
+   * message via respawn). The UI surfaces this so the badge reads as
+   * "will switch to X" rather than implying the model already changed.
+   */
+  modelPending?: boolean;
   tags: string[];
   createdAt: number;
   /** Live snapshot from Claude Code's statusline payload, when available. */
@@ -227,6 +234,23 @@ export interface ToolResult {
   isError: boolean;
 }
 
+// ─── Plan-mode relay ──────────────────────────────────────────────
+// `ExitPlanMode` is handled inside the CLI's ink picker (behavior:'ask') and
+// fires NO HTTP hook — the plan only reaches us as a `tool_call` (input.plan).
+// So, like AskUserQuestion, the answer is driven by synthesizing keystrokes
+// into the PTY (the ink picker commits on a number key: 1=auto-accept edits,
+// 2=manually approve, 3=keep planning + feedback). Confirmation rides the
+// existing `tool_result` for the ExitPlanMode toolUseId.
+
+/**
+ * A user's response to an `ExitPlanMode` plan picker.
+ * - `approve-primary` → the elevated keep-context approve (picker position 1):
+ *   "use auto mode" when the model supports it, else "auto-accept edits".
+ * - `approve-manual` → "manually approve edits" (position 2) → default mode.
+ * The Stop/keep-planning action uses the `cancel` flag (Esc), not a decision.
+ */
+export type PlanDecision = "approve-primary" | "approve-manual";
+
 /** Client → Server messages */
 export type ClientMessage =
   | { type: "input"; sessionId: string; text: string; settings?: RespawnSettings }
@@ -271,6 +295,34 @@ export type ClientMessage =
       questions?: QuestionSchema[];
       /** Answers, positional with `questions`. */
       answers?: AnswerEntry[];
+    }
+  | {
+      /**
+       * Reply to an `ExitPlanMode` plan picker. Like `question_response`, the
+       * CLI's picker isn't HTTP-hookable — the backend translates this into
+       * keystrokes written to the PTY: `1` (approve-primary) / `2`
+       * (approve-manual), or Esc (`cancel`, keep planning). Confirmation rides
+       * the `tool_result` for `toolUseId`.
+       */
+      type: "plan_response";
+      sessionId: string;
+      toolUseId: string;
+      decision: PlanDecision;
+      /** When true, send Esc (keep planning / dismiss); `decision` is ignored. */
+      cancel?: boolean;
+    }
+  | {
+      /**
+       * Record a *pending* model/effort pick made in the controller. The pick
+       * isn't applied to the PTY until the next message (respawn), so the
+       * backend holds it as pending and echoes it via `session_metadata`
+       * (`modelPending: true`) so the UI can show "will switch to X". Permission
+       * mode is NOT here — it applies immediately via `set_permission_mode`.
+       */
+      type: "set_pending_model";
+      sessionId: string;
+      model: ClaudeModel;
+      effort?: EffortLevel;
     }
   | {
       type: "subscribe";

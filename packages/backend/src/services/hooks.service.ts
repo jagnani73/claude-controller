@@ -6,6 +6,7 @@ import type {
   PermissionRequestPayload,
   PostCompactPayload,
   PreCompactPayload,
+  PreToolUsePayload,
 } from "../types/hook.types.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
@@ -150,7 +151,50 @@ export class HooksService {
         return this.handlePreCompact(bus, payload as PreCompactPayload);
       case "PostCompact":
         return this.handlePostCompact(bus, payload as PostCompactPayload);
+      case "PreToolUse":
+        return this.handlePreToolUse(bus, payload as PreToolUsePayload);
     }
+  }
+
+  /**
+   * `ExitPlanMode`'s `tool_use` is written to the JSONL only AFTER its picker
+   * resolves, so the transcript-tailed `tool_call` arrives too late to render
+   * the plan card. This PreToolUse hook fires BEFORE the picker (scoped to
+   * `ExitPlanMode` via the settings matcher) — push a synthetic `tool_call`
+   * with the real `tool_use_id` so the frontend's `PlanCard` shows in time. The
+   * bus dedups the later transcript `tool_call` by id; the transcript
+   * `tool_result` still fuses onto the card to lock it. We return `{}` (no
+   * decision) so the tool proceeds to its normal picker, which the phone drives
+   * via keystrokes — we do NOT hold the response like `PermissionRequest`.
+   */
+  private async handlePreToolUse(
+    bus: SessionBus,
+    payload: PreToolUsePayload,
+  ): Promise<HookResponse> {
+    if (payload.tool_name === "ExitPlanMode") {
+      const input = payload.tool_input;
+      // Surface the input shape — we need real evidence on whether the plan text
+      // is inline (`input.plan`) here or only referenced by a file path, so the
+      // card-rendering edge can be confirmed rather than guessed.
+      log.info("PreToolUse ExitPlanMode", {
+        sessionId: bus.sessionId,
+        toolUseId: payload.tool_use_id,
+        inputKeys: input && typeof input === "object" ? Object.keys(input) : typeof input,
+        hasPlan:
+          !!input &&
+          typeof input === "object" &&
+          typeof (input as { plan?: unknown }).plan === "string",
+      });
+      bus.push({
+        kind: "tool_call",
+        sessionId: bus.sessionId,
+        timestamp: new Date().toISOString(),
+        toolUseId: payload.tool_use_id,
+        name: payload.tool_name,
+        input,
+      });
+    }
+    return {};
   }
 
   private async handlePreCompact(
@@ -192,6 +236,15 @@ export class HooksService {
     bus: SessionBus,
     payload: PermissionRequestPayload,
   ): Promise<HookResponse> {
+    // ExitPlanMode also fires a PermissionRequest, but it's notification-only:
+    // responding allow/deny does NOT resolve the plan (verified live — tapping
+    // Approve did nothing across two fresh sessions; the interactive picker is
+    // the real resolver). The plan is surfaced via the PreToolUse `tool_call`
+    // (→ PlanCard) and resolved by the keystroke relay driving that picker. So
+    // firing an approval_request here would only duplicate the PlanCard and
+    // strand a never-resolved hold — skip it.
+    if (payload.tool_name === "ExitPlanMode") return {};
+
     const toolUseId = synthesizeToolUseId(payload);
 
     bus.push({

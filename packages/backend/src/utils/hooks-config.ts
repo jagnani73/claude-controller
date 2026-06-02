@@ -9,7 +9,17 @@ import type { HookEventName } from "../types/hook.types.js";
  * Assistant text, tool calls, tool results, and user prompts all come from
  * the transcript JSONL tail.
  */
-const HOOK_SYNC: readonly HookEventName[] = ["PermissionRequest", "PreCompact", "PostCompact"];
+const HOOK_SYNC: readonly { event: HookEventName; matcher?: string }[] = [
+  { event: "PermissionRequest" },
+  { event: "PreCompact" },
+  { event: "PostCompact" },
+  // PreToolUse fires BEFORE the interactive permission picker — the only signal
+  // that reaches us before an ExitPlanMode plan picker opens (the tool_use lands
+  // in the JSONL only after the picker resolves). Scoped to ExitPlanMode so it
+  // doesn't fire for every tool; the handler responds {} (continue) and uses it
+  // purely to surface the plan card in time.
+  { event: "PreToolUse", matcher: "ExitPlanMode" },
+];
 
 /**
  * Build the `--settings '{...}'` JSON payload for a spawned Claude Code session.
@@ -30,9 +40,10 @@ export function buildHooksConfig(
 ): string {
   const hooks: Record<string, unknown> = {};
 
-  for (const event of HOOK_SYNC) {
+  for (const { event, matcher } of HOOK_SYNC) {
     hooks[event] = [
       {
+        ...(matcher ? { matcher } : {}),
         hooks: [
           {
             type: "http",

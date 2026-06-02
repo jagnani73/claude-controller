@@ -5,6 +5,7 @@ import { createWriteStream, type FSWatcher, mkdirSync, readFileSync, watch } fro
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { reconcileModelAlias } from "common/model";
 import { cycleCanIncludeAuto, cycleDistance } from "common/permission-cycle";
 import type {
   ClaudeModel,
@@ -75,6 +76,14 @@ export class Session extends EventEmitter<SessionEvents> {
   private currentModel: ClaudeModel;
   private currentEffort: EffortLevel | undefined;
   private currentPermissionMode: PermissionMode;
+  /**
+   * A model/effort pick made in the controller that hasn't been applied to the
+   * running PTY yet (applied on the next message via respawn). Held here so the
+   * UI can show "will switch to X"; reconciliation is suppressed while set.
+   * `null` = no pending value (model/effort already reflect the applied state).
+   */
+  private pendingModel: ClaudeModel | null = null;
+  private pendingEffort: EffortLevel | null = null;
   private statusLineTimer: NodeJS.Timeout | null = null;
   private statusLineWatcher: FSWatcher | null = null;
   private statusLineInFlight = false;
@@ -102,6 +111,10 @@ export class Session extends EventEmitter<SessionEvents> {
   }
   get resolved(): boolean {
     return this._id !== null;
+  }
+  /** The model alias the PTY is currently running (not the pending pick). */
+  get model(): ClaudeModel {
+    return this.currentModel;
   }
 
   constructor(config: SessionConfig, deps: SessionDeps) {
@@ -205,8 +218,37 @@ export class Session extends EventEmitter<SessionEvents> {
     if (this.currentModelId === model) return;
     log.info("Model changed", { token: this.spawnToken, model });
     this.currentModelId = model;
+    // Reconcile the stored alias against the real model observed in the
+    // transcript — fixes a family mismatch from an out-of-band `/model` change
+    // or a wrong resume default. Transcript-only on purpose: the statusline is a
+    // render target, not a source of app state. The model id carries the family
+    // but not the 1M variant, so a same-family alias (incl. `opus[1m]`) is
+    // preserved and only a true family mismatch is corrected.
+    this.reconcileModelFromRuntime();
     this.emit("metadataChanged");
   };
+
+  /**
+   * Correct `currentModel` when the model observed in the transcript is a
+   * different family than the stored alias — a stale alias from an out-of-band
+   * `/model` change or a wrong resume default. No-op while respawning or while a
+   * pending pick is unapplied, and preserves opusplan/haiku-in-plan (their valid
+   * sub-model resolutions aren't mismatches). Returns true if the alias changed.
+   */
+  private reconcileModelFromRuntime(): boolean {
+    if (this.respawning || this.pendingModel !== null) return false;
+    const corrected = reconcileModelAlias(this.currentModel, this.currentPermissionMode, {
+      modelId: this.currentModelId ?? undefined,
+    });
+    if (!corrected || corrected === this.currentModel) return false;
+    log.info("Reconciled model alias from transcript", {
+      token: this.spawnToken,
+      from: this.currentModel,
+      to: corrected,
+    });
+    this.currentModel = corrected;
+    return true;
+  }
 
   // Diff-then-emit because Claude Code rewrites the dump on every render,
   // and downstream metadataChanged listeners trigger session_metadata broadcasts.
@@ -249,10 +291,10 @@ export class Session extends EventEmitter<SessionEvents> {
       sevenDay: window("rate_limits.seven_day"),
     };
 
-    // Don't sync currentModel from runtime display_name — opusplan/haiku-in-plan
-    // swap sub-models per render and would clobber the user's chosen alias.
-    // Live sub-model is tracked separately on currentModelId / snapshot.
-
+    // NB: model-alias reconciliation is intentionally NOT done here. The
+    // statusline payload is a render input, not a source of app state, and it
+    // only flows when the user has a statusline command configured. Alias
+    // reconciliation is transcript-driven (see handleModelChange).
     if (statusSnapshotsEqual(this.statusSnapshot, snapshot)) return;
     this.statusSnapshot = snapshot;
     this.emit("metadataChanged");
@@ -520,6 +562,72 @@ export class Session extends EventEmitter<SessionEvents> {
     });
   }
 
+  /**
+   * Drive the `ExitPlanMode` ink picker with a pre-built keystroke script, then
+   * (for non-cancel responses) confirm the plan registered via the bus
+   * `tool_result` for `toolUseId`.
+   *
+   * Unlike `answerQuestion`, we DON'T resend Enter on a miss: the plan picker
+   * commits on an atomic single keystroke (`1`/`2`, or Shift+Tab after typed
+   * feedback) — there's no focus-flush race to paper over, and a stray `\r`
+   * would commit the *default-focused* option (auto-accept), silently changing
+   * the user's decision. So we confirm-or-fail.
+   *
+   * `resultingMode` (when the decision approves the plan) is the permission mode
+   * the picker exits into — set optimistically on confirmation so the top bar
+   * reflects it immediately instead of waiting for the lagging JSONL
+   * `permission-mode` entry. The JSONL entry remains the canonical correction.
+   */
+  async answerPlan(
+    chunks: KeystrokeChunk[],
+    confirm: boolean,
+    toolUseId: string,
+    resultingMode?: PermissionMode,
+  ): Promise<void> {
+    for (let i = 0; i < chunks.length; i++) {
+      if (i > 0) await delay(chunks[i - 1].settleMs ?? CHUNK_DELAY_MS);
+      this.sendKeystrokes(chunks[i].bytes);
+    }
+    if (!confirm) return;
+    const bus = this._bus;
+    if (!bus) return;
+    const matches = (e: SessionBusEvent): boolean =>
+      e.kind === "tool_result" && e.toolUseId === toolUseId;
+    const confirmed = await this.waitForBusEvent(
+      bus,
+      matches,
+      QUESTION_SUBMIT_ATTEMPTS * QUESTION_SUBMIT_RETRY_MS,
+    );
+    if (confirmed) {
+      if (resultingMode) this.notePermissionMode(resultingMode);
+      return;
+    }
+    log.warn("Plan response not confirmed by transcript", {
+      token: this.spawnToken,
+      toolUseId,
+    });
+    this.failPlan(toolUseId, "Plan response could not be confirmed by the CLI.");
+  }
+
+  /**
+   * Record a permission-mode change the CLI is making for us as a side effect
+   * (e.g. exiting plan mode via the plan picker) WITHOUT writing the Shift+Tab
+   * keystrokes `setPermissionMode` would. The JSONL `permission-mode` entry
+   * remains the canonical correction if reality diverges.
+   */
+  notePermissionMode(mode: PermissionMode): void {
+    if (this.currentPermissionMode === mode) return;
+    this.currentPermissionMode = mode;
+    this.emit("metadataChanged");
+  }
+
+  /** Frontend-only unblock for an undeliverable plan response — mirrors
+   *  `failQuestion`: push a synthetic error `tool_result` so the PlanCard
+   *  flips out of its locked state instead of stranding. */
+  failPlan(toolUseId: string, message: string): void {
+    this.failQuestion(toolUseId, message);
+  }
+
   /** Resolve true when a bus event matching `predicate` lands, false on timeout. */
   private waitForBusEvent(
     bus: SessionBus,
@@ -607,10 +715,18 @@ export class Session extends EventEmitter<SessionEvents> {
       log.warn("Respawn requested before id resolved", { token: this.spawnToken });
       return;
     }
+    // The incoming settings ARE the now-applied intent — drop any pending
+    // overlay. Emit even on a no-op respawn so the pending badge clears.
+    const hadPending = this.pendingModel !== null || this.pendingEffort !== null;
+    this.pendingModel = null;
+    this.pendingEffort = null;
     const modelChanged = settings.model !== this.currentModel;
     const effortChanged = settings.effort !== this.currentEffort;
     const modeChanged = settings.permissionMode !== this.currentPermissionMode;
-    if (!modelChanged && !effortChanged && !modeChanged) return;
+    if (!modelChanged && !effortChanged && !modeChanged) {
+      if (hadPending) this.emit("metadataChanged");
+      return;
+    }
 
     this.currentModel = settings.model;
     this.currentEffort = settings.effort;
@@ -738,6 +854,21 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   /**
+   * Record a pending model/effort pick (made in the controller, not yet applied
+   * to the PTY — applied on the next message via respawn). Surfaced in the UI as
+   * "will switch to X" and cleared when respawn applies it. A pick equal to the
+   * current value isn't pending. An omitted `effort` leaves effort unchanged.
+   */
+  setPendingModel(model: ClaudeModel, effort?: EffortLevel): void {
+    const nextModel = model === this.currentModel ? null : model;
+    const nextEffort = effort === undefined || effort === this.currentEffort ? null : effort;
+    if (nextModel === this.pendingModel && nextEffort === this.pendingEffort) return;
+    this.pendingModel = nextModel;
+    this.pendingEffort = nextEffort;
+    this.emit("metadataChanged");
+  }
+
+  /**
    * Single Esc — interrupts Claude's current turn at the PTY (writes `\x1b`)
    * and pushes a synthesized `interrupt` event onto the bus so subscribers
    * (and reload/replay) see the terminal marker. Claude Code itself doesn't
@@ -831,10 +962,13 @@ export class Session extends EventEmitter<SessionEvents> {
       name: this.config.name ?? (basename(this.config.cwd) || this.config.cwd),
       status: this.status,
       cwd: this.config.cwd,
-      model: this.currentModel,
+      // Show the pending pick (if any) so the UI reads "will switch to X";
+      // currentModel stays the applied value until respawn.
+      model: this.pendingModel ?? this.currentModel,
       currentModelId: this.currentModelId ?? undefined,
       permissionMode: this.currentPermissionMode,
-      effort: this.currentEffort,
+      effort: this.pendingEffort ?? this.currentEffort,
+      modelPending: this.pendingModel !== null,
       tags: this.config.tags ?? [],
       createdAt: this.createdAt,
       statusSnapshot: this.statusSnapshot ?? undefined,

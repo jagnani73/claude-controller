@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, normalize, relative, resolve, sep } from "node:path";
+import { cycleCanIncludeAuto } from "common/permission-cycle";
 import type {
   ClientMessage,
   DirEntry,
@@ -17,6 +18,7 @@ import { findSessionByTranscript } from "../utils/find-session.js";
 import { listProjectSessions } from "../utils/project-sessions.js";
 import type { HooksService } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
+import { buildPlanKeystrokes } from "./plan.input.js";
 import { buildKeystrokes } from "./question.input.js";
 import type { SessionBus, SessionBusEvent } from "./session-bus.service.js";
 import type { SessionManager } from "./session-manager.service.js";
@@ -473,6 +475,54 @@ function handleMessage(
       return;
     }
 
+    case "plan_response": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) {
+        send(ws, { type: "error", sessionId: msg.sessionId, message: "Session not found" });
+        return;
+      }
+      const { chunks } = buildPlanKeystrokes({
+        decision: msg.decision,
+        cancel: msg.cancel,
+      });
+      if (chunks.length === 0) {
+        if (!msg.cancel)
+          session.failPlan(msg.toolUseId, "Couldn't build keystrokes for this plan response.");
+        return;
+      }
+      // The mode the picker exits into on approval — set optimistically once the
+      // approval confirms so the top bar updates immediately (the laggy JSONL
+      // permission-mode entry stays the canonical correction). `approve-primary`
+      // is the elevated keep-context approve at picker position 1: "use auto
+      // mode" when the running model supports it (→ auto), else "auto-accept
+      // edits" (→ acceptEdits). `approve-manual` → default. Cancel stays in plan.
+      const resultingMode: PermissionMode | undefined = msg.cancel
+        ? undefined
+        : msg.decision === "approve-primary"
+          ? cycleCanIncludeAuto(session.model)
+            ? "auto"
+            : "acceptEdits"
+          : "default";
+      // Drive the ink plan picker with the keystroke script and confirm via the
+      // tool_result for this toolUseId. Cancel (Esc) is terminal — no confirm.
+      void session.answerPlan(chunks, !msg.cancel, msg.toolUseId, resultingMode).catch((err) => {
+        log.error("Plan response dispatch failed", {
+          sessionId: msg.sessionId,
+          error: (err as Error).message,
+        });
+        if (!msg.cancel)
+          session.failPlan(msg.toolUseId, "Failed to deliver plan response to the CLI.");
+      });
+      return;
+    }
+
+    case "set_pending_model": {
+      const session = sessionManager.get(msg.sessionId);
+      if (!session) return;
+      session.setPendingModel(msg.model, msg.effort);
+      return;
+    }
+
     case "create_session": {
       log.info("Creating session", { config: msg.config });
       let session: Session;
@@ -544,6 +594,10 @@ function handleMessage(
             cwd: found.cwd,
           });
           const created = sessionManager.create({
+            // Placeholder alias only — on resume the PTY omits `--model`, so the
+            // session keeps its real model from the JSONL, and the backend
+            // reconciles `currentModel` from the runtime within a turn. (The
+            // "open /session/<id> directly" path has no localStorage config.)
             cwd: found.cwd,
             model: "sonnet",
             permissionMode: "default",

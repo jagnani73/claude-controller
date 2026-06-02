@@ -1,3 +1,4 @@
+import { displayNameMatchesIntent } from "common/model";
 import { cycleCanIncludeAuto } from "common/permission-cycle";
 import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 
@@ -122,30 +123,4 @@ export function displayedModelLabel(
     return `Haiku · ${dn ?? "Sonnet"}`;
   }
   return dn ?? fallback;
-}
-
-/**
- * Does the runtime display name correspond to what `(model, mode)` should resolve to?
- *
- * Couples to Claude Code's `model.display_name` format (e.g. "Opus 4.7", "Sonnet 4.6 (1M context)").
- * If that format changes, these regex checks silently stop matching and we fall back to the alias label.
- */
-function displayNameMatchesIntent(
-  model: ClaudeModel,
-  permissionMode: PermissionMode,
-  displayName: string,
-): boolean {
-  const dn = displayName.toLowerCase();
-  switch (model) {
-    case "opus":
-    case "opus[1m]":
-      return /\bopus\b/.test(dn) && !/\bplan\b/.test(dn);
-    case "sonnet":
-    case "sonnet[1m]":
-      return /\bsonnet\b/.test(dn);
-    case "opusplan":
-      return permissionMode === "plan" ? /\bopus\b/.test(dn) : /\bsonnet\b/.test(dn);
-    case "haiku":
-      return permissionMode === "plan" ? /\bsonnet\b/.test(dn) : /\bhaiku\b/.test(dn);
-  }
 }

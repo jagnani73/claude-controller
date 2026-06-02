@@ -55,30 +55,13 @@ function persistSessionConfig(s: SessionInfo): void {
   } catch {}
 }
 
-function readSessionConfig(sessionId: string): PersistedConfig | null {
+export function readSessionConfig(sessionId: string): PersistedConfig | null {
   try {
     const raw = localStorage.getItem(SESSION_CFG_PREFIX + sessionId);
     return raw ? (JSON.parse(raw) as PersistedConfig) : null;
   } catch {
     return null;
   }
-}
-
-/**
- * Apply localStorage's user-set values over backend-supplied SessionInfo when
- * they differ. Backend may be momentarily stale (e.g. user changed model in
- * popover but hasn't sent a message yet, then refreshed) — local intent wins
- * and gets re-applied via the next input's `settings` field.
- */
-function mergeWithLocal(s: SessionInfo): SessionInfo {
-  const local = readSessionConfig(s.id);
-  if (!local) return s;
-  return {
-    ...s,
-    model: local.model,
-    effort: local.effort,
-    permissionMode: local.permissionMode,
-  };
 }
 
 interface PendingCreate {
@@ -115,9 +98,12 @@ export function useSessions() {
   }, []);
 
   useWsMessage("connected", (msg) => {
-    const merged = msg.sessions.map(mergeWithLocal);
-    setSessions(merged);
-    for (const s of merged) persistSessionConfig(s);
+    // Backend SessionInfo is authoritative — it reconciles the model alias from
+    // the live runtime and owns the pending-pick overlay. localStorage is only a
+    // resume-config fallback for a cold backend (see `subscribe`), never a
+    // display override.
+    setSessions(msg.sessions);
+    for (const s of msg.sessions) persistSessionConfig(s);
   });
 
   useWsMessage("session_created", (msg) => {
@@ -142,26 +128,15 @@ export function useSessions() {
 
   useWsMessage("session_metadata", (msg) => {
     setSessions((prev) => {
+      // Backend is the single source of truth: it reconciles the model alias
+      // from the live runtime (fixing an out-of-band /model change or a stale
+      // resume default) and carries the pending pick (model/effort + modelPending)
+      // until it's applied. So accept it verbatim rather than preserving local.
+      persistSessionConfig(msg.session);
       const idx = prev.findIndex((s) => s.id === msg.session.id);
-      if (idx < 0) {
-        const merged = mergeWithLocal(msg.session);
-        persistSessionConfig(merged);
-        return [...prev, merged];
-      }
-      // Preserve local model/effort — they're user-set values applied via
-      // respawn-on-input. Backend echoes its `currentX` here, but in the gap
-      // between user click and next message-send the local value is the
-      // intent. Permission mode comes from the backend: it sets
-      // `currentPermissionMode` optimistically when handling
-      // `set_permission_mode` and corrects from JSONL's `permission-mode`
-      // entry on divergence, so this broadcast is always self-consistent.
+      if (idx < 0) return [...prev, msg.session];
       const next = [...prev];
-      next[idx] = {
-        ...msg.session,
-        model: prev[idx].model,
-        effort: prev[idx].effort,
-      };
-      persistSessionConfig(next[idx]);
+      next[idx] = msg.session;
       return next;
     });
   });
@@ -186,34 +161,43 @@ export function useSessions() {
    * without a respawn.
    */
   const updateSettings = useCallback((sessionId: string, patch: SettingsPatch) => {
-    let modeChangedTo: PermissionMode | null = null;
+    const cur = sessionsRef.current.find((s) => s.id === sessionId);
+    if (!cur) return;
+    const nextModel = patch.model ?? cur.model;
+    const nextEffort = patch.effort ?? cur.effort;
+    const nextMode = patch.permissionMode ?? cur.permissionMode;
+    if (nextModel === cur.model && nextEffort === cur.effort && nextMode === cur.permissionMode) {
+      return;
+    }
+
+    const updated: SessionInfo = {
+      ...cur,
+      model: nextModel,
+      effort: nextEffort,
+      permissionMode: nextMode,
+    };
+    persistSessionConfig(updated);
     setSessions((prev) => {
       const idx = prev.findIndex((s) => s.id === sessionId);
       if (idx < 0) return prev;
-      const cur = prev[idx];
-      const nextModel = patch.model ?? cur.model;
-      const nextEffort = patch.effort ?? cur.effort;
-      const nextMode = patch.permissionMode ?? cur.permissionMode;
-      if (nextModel === cur.model && nextEffort === cur.effort && nextMode === cur.permissionMode) {
-        return prev;
-      }
-      if (nextMode !== cur.permissionMode) {
-        modeChangedTo = nextMode;
-      }
-      const updated: SessionInfo = {
-        ...cur,
-        model: nextModel,
-        effort: nextEffort,
-        permissionMode: nextMode,
-      };
-      persistSessionConfig(updated);
       const next = [...prev];
       next[idx] = updated;
       return next;
     });
 
-    if (modeChangedTo) {
-      wsService.send({ type: "set_permission_mode", sessionId, mode: modeChangedTo });
+    // Permission mode applies immediately (Shift+Tab cycle); model/effort apply
+    // on the next message via respawn — record them as pending on the backend so
+    // it owns the pending overlay (modelPending).
+    if (nextMode !== cur.permissionMode) {
+      wsService.send({ type: "set_permission_mode", sessionId, mode: nextMode });
+    }
+    if (nextModel !== cur.model || nextEffort !== cur.effort) {
+      wsService.send({
+        type: "set_pending_model",
+        sessionId,
+        model: nextModel,
+        effort: nextEffort,
+      });
     }
   }, []);
 
