@@ -354,12 +354,45 @@ Prior art studied while designing the relay:
 - **The backend binds loopback**; only Caddy faces the tailnet.
 - **Shared types go in `packages/common`** — both backend and frontend import them.
 
+## Claude Code version alignment
+
+The controller drives a CLI it does not ship or pin. The keystroke relays, JSONL
+shapes, and hook contracts were reverse-engineered against one build, and drift
+fails silently rather than loudly — so the version is tracked explicitly.
+
+```
+packages/common/src/version.ts
+  CLAUDE_CODE_TARGET_VERSION              the build we're verified against
+  CLAUDE_CODE_REFERENCE_SNAPSHOT_VERSION  the frozen claude-code-source/ snapshot
+  classifyCliVersion(observed)            -> "match" | "older" | "newer"
+```
+
+- `CLAUDE_CODE_TARGET_VERSION` is the single canonical number. Bump only after
+  re-verifying the relays. Comments should reference it rather than restating a
+  version; genuine behavioral minimums ("since v2.1.126 …") stay inline, since
+  those record when a behavior appeared rather than what we tested against.
+- The **transcript** is the runtime source: Claude Code stamps `version` on every
+  `user`/`assistant`/`system`/`attachment` entry. `TranscriptWatcher.noteCliVersion`
+  → `Session.handleCliVersion` warns on mismatch and publishes `cliVersion` /
+  `cliVersionStatus` on `SessionInfo`. The statusline payload also carries a
+  version but only flows when a statusline command is configured, so it is not a
+  dependable source. A mismatch is informational, never fatal.
+- Which binary runs is decided by the environment: the PTY spawns bare `claude`
+  off PATH unless `CLAUDE_BIN` pins an absolute path. On a machine with multiple
+  installs, PATH order silently picks the build.
+
 ## Reference: Claude Code source
 
-`claude-code-source/` (gitignored, not built) contains a copy of the CLI source
+`claude-code-source/` (gitignored, not built) contains a snapshot of the CLI source
 used to understand hook payloads, the JSONL entry shape, and `--settings` handling:
 
 - `src/main.tsx` — `--settings` JSON parsing
 - `src/utils/hooks/execHttpHook.ts` — HTTP hook POST contract
 - `src/entrypoints/sdk/coreSchemas.ts` — hook event payload schemas
 - `src/schemas/hooks.ts` — settings.json hook config shape (zod)
+
+The snapshot is **frozen at v2.1.87 and cannot be refreshed** — it exists only
+because a one-time source-map exposure made the unbundled TypeScript briefly
+downloadable, and the shipped CLI is a compiled Bun binary whose strings are
+compressed. It is a hint about intent, not ground truth for current behavior;
+verify against live PTY captures instead.

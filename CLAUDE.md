@@ -103,9 +103,17 @@ Claude Code's `AskUserQuestion` is an interactive ink picker, not structured inp
 - Backend loads its own `packages/backend/.env` via dotenv.
 - `pnpm start` serves the static frontend bundle + backend behind Caddy (`Caddyfile`) over Tailscale — so both packages must be built first (`pnpm build`).
 
+## Claude Code Version Alignment
+
+We drive a CLI we neither ship nor pin, and everything fragile here — the AskUserQuestion and ExitPlanMode keystroke scripts, JSONL entry shapes, hook payload contracts — was reverse-engineered against one specific build. Drift fails *silently*: a picker gains an option and a digit keystroke selects the wrong one; a JSONL field is renamed and the watcher goes quiet.
+
+- **One canonical number.** `CLAUDE_CODE_TARGET_VERSION` in `packages/common/src/version.ts` is the build we're verified against. Bump it only after re-verifying the relays against the newer CLI. Don't scatter "verified against vX" into comments — point at the constant instead. *Behavioral minimums* are different and stay inline (e.g. "since v2.1.126 the JSONL isn't pre-created") — those are facts about when a behavior appeared, not claims about what we tested.
+- **The runtime version comes from the transcript**, not the statusline. Claude Code stamps `version` on every `user`/`assistant`/`system`/`attachment` JSONL entry; `TranscriptWatcher` reports changes via `onCliVersion` → `Session.handleCliVersion`, which warns on mismatch and surfaces `cliVersion` + `cliVersionStatus` on `SessionInfo`. The statusline payload carries a version too, but `absorbDumpedPayload` only runs when the user has a statusline command configured — so it isn't a dependable source. A mismatch is **never fatal**; most releases change nothing we touch.
+- **Which binary runs is an environment decision.** The PTY spawns bare `claude` off PATH by default, so a machine with two installs resolves by PATH order. Pin `CLAUDE_BIN` (absolute path) in `packages/backend/.env` when that's ambiguous. The launch command is logged at spawn; the version that actually ran is reported separately from the transcript.
+
 ## Reference: Claude Code Source
 
-`claude-code-source/` contains a copy of the Claude Code CLI source (v2.1.87) for reference — used to understand hook payloads, JSONL entry shape, and the `--settings` inline JSON handling. Key files:
+`claude-code-source/` contains a snapshot of the Claude Code CLI source for reference — used to understand hook payloads, JSONL entry shape, and the `--settings` inline JSON handling. Key files:
 
 - `src/main.tsx:432-483` — `--settings` inline JSON parsing
 - `src/utils/hooks/execHttpHook.ts` — HTTP hook POST contract
@@ -113,3 +121,5 @@ Claude Code's `AskUserQuestion` is an interactive ink picker, not structured inp
 - `src/schemas/hooks.ts` — settings.json hook config shape (zod)
 
 Gitignored, not part of the build.
+
+**It is frozen at v2.1.87 (`CLAUDE_CODE_REFERENCE_SNAPSHOT_VERSION`) and cannot be updated.** That tree exists only because a one-time source-map exposure briefly made the unbundled TypeScript downloadable (see its README); there is no newer unbundled source to re-vendor, and the shipped CLI is a compiled Bun binary whose embedded strings are compressed and not greppable. Treat it as a **hint about intent, never as ground truth for current behavior** — that has to come from live PTY captures (`dump/captures/*.raw`) against the build actually running. Expect it to drift further from `CLAUDE_CODE_TARGET_VERSION` over time.
