@@ -7,10 +7,18 @@ the newer CLI"* — and these scripts are what makes it checkable. Without them,
 re-verifying means reconstructing the checks from memory each time.
 
 ```bash
-pnpm build                 # probes read from dist, not src
-pnpm verify:hooks          # do our hook events still fire?
-pnpm verify:model-switch   # does PostModelSwitch still carry requested_model?
+pnpm build                  # probes read from dist, not src
+pnpm verify:hooks           # do our hook events still fire?
+pnpm verify:model-switch    # does PostModelSwitch still carry requested_model?
+
+pnpm dev:backend            # required for the next one only
+pnpm verify:approval-edit   # does approving with updatedInput run the edited call?
 ```
+
+`verify:approval-edit` needs a **running backend**: `PermissionRequest` does not
+fire under headless `claude -p` (there is nobody to prompt) and did not reproduce
+in a bare PTY either. A real controller session is the only place it fires. The
+other two spawn the CLI directly and need nothing running.
 
 Exit codes: `0` pass, `1` a real regression, `2` inconclusive (the probe itself
 failed — fix that before reading anything into the result).
@@ -27,6 +35,7 @@ only. Run them deliberately, not in a loop.
 |---|---|
 | `hooks-fire.mjs` | Hook events silently no longer firing; safe mode no longer suppressing them (either direction is a surprise worth knowing). |
 | `model-switch.mjs` | `PostModelSwitch` disappearing, or `requested_model` being renamed — which would degrade model reconciliation to family-matching with no error. |
+| `approval-edit.mjs` | The two PermissionRequest response shapes diverging. `updatedInput` is honoured only in the schema form; on the flat form the CLI discards the whole response, loses the allow, and falls back to a terminal picker the phone cannot see — the session hangs with no error. Verified to genuinely fail by reverting the shape. |
 
 ## Every probe has a control
 
