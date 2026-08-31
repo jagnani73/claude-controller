@@ -110,6 +110,14 @@ export class TranscriptWatcher {
     // since the next live entry carries the *unchanged* value and is skipped.
     if (this.lastAssistantModel) this.onModelChange?.(this.lastAssistantModel);
     if (this.lastAssistantEffort) this.onEffortChange?.(this.lastAssistantEffort);
+    // Version follows the same drain-then-replay rule, and for a sharper reason:
+    // reporting *during* the scan reports the version at the HEAD of the file.
+    // On resume that is the build the session was originally started on, which
+    // is often old — so a session resumed onto a current CLI would announce a
+    // stale version and, if that version is below the floor, log an error about
+    // a relay that is in fact running on a perfectly good build. Only the last
+    // stamp in the file describes the process now writing it.
+    if (this.lastCliVersion) this.onCliVersion?.(this.lastCliVersion);
     // Since v2.1.126 Claude Code doesn't pre-create the transcript JSONL on
     // session start — it only appears after the first user message. Watch the
     // parent dir until our file shows up, then attach the file-level watcher.
@@ -263,15 +271,21 @@ export class TranscriptWatcher {
    * when the user has a statusline command configured.
    *
    * Fires on change rather than once, so a resume spanning a CLI upgrade reports
-   * the newer build rather than the stale one at the head of the file. Runs
-   * during the silent initial scan too: it's a plain callback, not a bus event,
-   * so it can't leak replayed entries into the UI stream.
+   * the newer build rather than the stale one at the head of the file.
+   *
+   * The initial scan **records but does not report**: mid-scan the latest value
+   * is whatever the file has reached so far, which on resume starts at the build
+   * the session was first created on. Announcing that would misreport the
+   * running version and can raise a below-minimum error against a CLI that is
+   * actually current. `start()` replays the final value once the scan is done,
+   * matching how the drained model and effort are handled.
    */
   private noteCliVersion(entry: TranscriptEntry): void {
     const version = (entry as { version?: unknown }).version;
     if (typeof version !== "string" || !version) return;
     if (version === this.lastCliVersion) return;
     this.lastCliVersion = version;
+    if (this.initialScan) return;
     this.onCliVersion?.(version);
   }
 
