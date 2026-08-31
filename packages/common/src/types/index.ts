@@ -34,6 +34,27 @@ export type ClaudeModel = "opus" | "opus[1m]" | "opusplan" | "sonnet" | "sonnet[
  */
 export type EffortLevel = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Runtime-checkable list of {@link EffortLevel} for validating untrusted input. */
+export const EFFORT_LEVELS: readonly EffortLevel[] = [
+  "auto",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+/**
+ * Narrow an arbitrary string to an {@link EffortLevel}.
+ *
+ * Claude Code accepts levels we deliberately don't model (`ultracode`), and the
+ * set grows over releases, so anything unrecognized must be ignored rather than
+ * coerced into the union.
+ */
+export function isEffortLevel(value: string): value is EffortLevel {
+  return (EFFORT_LEVELS as readonly string[]).includes(value);
+}
+
 /** Session configuration when spawning */
 export interface SessionConfig {
   name?: string;

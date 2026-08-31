@@ -70,6 +70,7 @@ export class TranscriptWatcher {
   private pendingRead = false;
   private initialScan = true;
   private lastAssistantModel: string | null = null;
+  private lastAssistantEffort: string | null = null;
   private lastCliVersion: string | null = null;
   // Buffered while waiting for a `<local-command-stdout>` follow-up entry
   // that completes the slash command. Flushed without output on any other
@@ -87,6 +88,8 @@ export class TranscriptWatcher {
     private readonly onModelChange?: (model: string) => void,
     /** Fires when the CLI version stamped on transcript entries changes. */
     private readonly onCliVersion?: (version: string) => void,
+    /** Fires when a fresh assistant turn changes the resolved effort level. */
+    private readonly onEffortChange?: (effort: string) => void,
   ) {}
 
   private emitEvent(event: Parameters<SessionBus["push"]>[0]): void {
@@ -301,6 +304,11 @@ export class TranscriptWatcher {
     if (entry.message.model && this.lastAssistantModel !== entry.message.model) {
       this.lastAssistantModel = entry.message.model;
       if (!this.initialScan) this.onModelChange?.(entry.message.model);
+    }
+
+    if (entry.effort && this.lastAssistantEffort !== entry.effort) {
+      this.lastAssistantEffort = entry.effort;
+      if (!this.initialScan) this.onEffortChange?.(entry.effort);
     }
 
     const content: ContentBlock[] = entry.message.content ?? [];

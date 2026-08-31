@@ -65,6 +65,13 @@ export interface AssistantUsage {
 
 export interface AssistantEntry extends BaseEntry {
   type: "assistant";
+  /**
+   * Reasoning effort the turn actually ran at, recorded on every assistant
+   * message since v2.1.212. This is the *resolved* level, so a session
+   * configured `auto` reports a concrete level here, not "auto". Typed as a
+   * plain string because Claude Code accepts levels we don't model.
+   */
+  effort?: string;
   message: {
     id: string;
     model: string;

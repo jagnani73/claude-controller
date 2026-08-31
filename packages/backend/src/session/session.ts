@@ -18,6 +18,7 @@ import type {
   SessionStatus,
   SessionStatusSnapshot,
 } from "common/types";
+import { isEffortLevel } from "common/types";
 import {
   CLAUDE_CODE_MINIMUM_VERSION,
   CLAUDE_CODE_TARGET_VERSION,
@@ -172,6 +173,7 @@ export class Session extends EventEmitter<SessionEvents> {
         this.bus,
         this.handleModelChange,
         this.handleCliVersion,
+        this.handleEffortChange,
       );
       drainDone = this.transcript.start().catch((err) => {
         log.warn("Initial transcript drain failed", { token: this.spawnToken, error: err });
@@ -224,6 +226,7 @@ export class Session extends EventEmitter<SessionEvents> {
         this.bus,
         this.handleModelChange,
         this.handleCliVersion,
+        this.handleEffortChange,
       );
       void this.transcript.start().catch((err) =>
         log.warn("Transcript watcher start failed", {
@@ -246,6 +249,43 @@ export class Session extends EventEmitter<SessionEvents> {
     // but not the 1M variant, so a same-family alias (incl. `opus[1m]`) is
     // preserved and only a true family mismatch is corrected.
     this.reconcileModelFromRuntime();
+    this.emit("metadataChanged");
+  };
+
+  /**
+   * Reconcile the stored effort level against what the transcript says the turn
+   * actually ran at (recorded on every assistant message since v2.1.212).
+   *
+   * Mirrors `handleModelChange`: before this, effort was write-only — we set
+   * `CLAUDE_CODE_EFFORT_LEVEL` at spawn and never read it back, so an
+   * out-of-band `/effort` left the badge showing a level the session wasn't
+   * running, exactly the way a stale model alias used to.
+   *
+   * `auto` is preserved rather than corrected. It means "no override, use the
+   * model default", so a concrete observed level is auto's *resolution*, not a
+   * mismatch — the same reason `reconcileModelAlias` preserves `opusplan`.
+   */
+  private handleEffortChange = (effort: string): void => {
+    if (this.respawning || this.pendingEffort !== null) return;
+    // `auto` resolves to a concrete level at runtime; observing that level is
+    // not evidence the stored intent is wrong.
+    if (this.currentEffort === "auto" || this.currentEffort === undefined) return;
+    if (!isEffortLevel(effort)) {
+      // Claude Code accepts levels we don't model (e.g. `ultracode`). Ignore
+      // rather than coerce — a wrong badge is worse than a stale one.
+      log.debug("Ignoring unmodelled effort level from transcript", {
+        token: this.spawnToken,
+        effort,
+      });
+      return;
+    }
+    if (this.currentEffort === effort) return;
+    log.info("Reconciled effort from transcript", {
+      token: this.spawnToken,
+      from: this.currentEffort,
+      to: effort,
+    });
+    this.currentEffort = effort;
     this.emit("metadataChanged");
   };
 
