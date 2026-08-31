@@ -111,14 +111,11 @@ export class SessionManager {
   /**
    * Kill every PTY. Wired to SIGINT/SIGTERM in `index.ts`, which covers Ctrl+C.
    *
-   * It does NOT cover a hard kill, and on Windows that is the common case: a
-   * `tsc-watch` rebuild (or anything terminating the process without a signal)
-   * skips this entirely, and every `claude --resume` keeps running, detached and
-   * unreachable. Those orphans are how a single session ends up with two PTYs
-   * on one transcript — the `create` guard cannot see them, because a restart
-   * takes the registry with it. If orphans become a recurring nuisance, the fix
-   * is to persist spawn tokens/PIDs and reap them at startup, not to add another
-   * in-process guard.
+   * It does NOT cover a hard kill — anything terminating the process without a
+   * signal skips this entirely. Whether the PTYs then survive is unresolved:
+   * two live tests on Windows showed ConPTY killing the children along with the
+   * parent. `orphan-reaper.service.ts` covers the case where they don't, and
+   * documents how little of it is proven.
    */
   stopAll(): void {
     log.info("Stopping all sessions", { count: this.byToken.size });

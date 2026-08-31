@@ -25,6 +25,7 @@ import {
   isBelowMinimumVersion,
 } from "common/version";
 import { LoggerService } from "../services/logger.service.js";
+import { forgetSpawn, rememberSpawn } from "../services/orphan-reaper.service.js";
 import { PtyService } from "../services/pty.service.js";
 import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.js";
 import { SessionBus, type SessionBusEvent } from "../services/session-bus.service.js";
@@ -490,6 +491,13 @@ export class Session extends EventEmitter<SessionEvents> {
     if (this._id) return;
     this._id = id;
     this._bus = new SessionBus(id);
+    // Leave a trail for the startup reaper. Only possible now: the record is
+    // keyed on the session id, which is exactly what we did not have at spawn.
+    rememberSpawn({
+      sessionId: id,
+      spawnToken: this.spawnToken,
+      spawnedAt: this.createdAt,
+    });
     // Mirror JSONL permission-mode entries onto our state so unrelated
     // metadataChanged broadcasts don't ship a stale config value.
     this._bus.on("event", (event) => {
@@ -1171,6 +1179,9 @@ export class Session extends EventEmitter<SessionEvents> {
     this.pty.kill();
     this.setStatus("stopped");
     this._bus?.dispose();
+    // We got to run teardown, so there is nothing for the startup reaper to
+    // clean up. The record only earns its keep when this never runs.
+    forgetSpawn(this.spawnToken);
   }
 
   /** Returns null until the Claude Code session id is resolved. */

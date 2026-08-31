@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 import { startServer } from "./server.js";
 import { HooksService } from "./services/hooks.service.js";
 import { LoggerService } from "./services/logger.service.js";
+import { reapOrphans } from "./services/orphan-reaper.service.js";
 import { SessionManager } from "./services/session-manager.service.js";
 
 // Load packages/backend/.env relative to the compiled file (dist/index.js ->
@@ -14,6 +15,16 @@ loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") }
 const log = LoggerService.scoped("init");
 
 const config = loadConfig();
+
+// Before anything can spawn: kill PTYs left by a previous backend that died
+// without running `shutdown`, and clear the registry either way. A survivor
+// would be detached and unreachable, and reopening its session would put a
+// second `claude --resume` on the same transcript. Safe here because the backend
+// binds a fixed port: if we are starting, nothing else owns them. (Whether a PTY
+// actually survives is unproven — see the note in orphan-reaper.service.ts.)
+const reaped = reapOrphans();
+if (reaped > 0) log.warn("Reaped orphaned PTYs from a previous run", { count: reaped });
+
 const sessionManager = new SessionManager(config);
 
 const hooksService = new HooksService((sessionId) => sessionManager.getBus(sessionId));
