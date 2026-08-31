@@ -531,14 +531,14 @@ wrong option. Detecting it needs the statusline context percentage, which is
 deliberately not a source of app state. Already recorded as a KNOWN LIMITATION in
 `plan.input.ts`; correct at normal context, best-effort at high.
 
-**The keystroke pacing sits on top of upstream race fixes the version floor does
-not require.** `CHUNK_DELAY_MS` is 35 ms. Arrow-then-Enter races were fixed
-upstream in 2.1.235 and 2.1.247 — at or below `CLAUDE_CODE_TARGET_VERSION`, so
-the build we verify against has them. But `CLAUDE_CODE_MINIMUM_VERSION` is
-2.1.181, *below* both, so a CLI anywhere in 2.1.181–2.1.234 reintroduces the
-races while still clearing our floor. Unverified: raising the floor would need
-old binaries and a demonstration that the race actually breaks the relay, rather
-than an inference from release notes.
+**The submit `\r` can be answered by an unsolicited dialog below 2.1.247.**
+Upstream that release made install suggestions and the auto-mode offer "wait
+until you've sent or cleared what you're typing, so the Enter that sends your
+prompt can't answer them". `submitWithConfirmation` writes exactly that Enter,
+and it resends. This is *situational* — it needs a suggestion to appear — so it
+is deliberately **not** folded into `CLAUDE_CODE_MINIMUM_VERSION`, which is
+reserved for defects that make a relay systematically wrong. The arrow-then-Enter
+race from 2.1.235 *is* systematic and did raise the floor; see `version.ts`.
 
 **Esc-Esc at an idle prompt — unverified, probe inconclusive.** Upstream 2.1.216
 describes Esc-Esc at an idle prompt opening the rewind picker. Both
