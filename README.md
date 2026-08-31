@@ -41,7 +41,12 @@ Claude Code's built-in remote is a chat relay. This is a full control plane:
 ```bash
 pnpm install
 pnpm build
+pnpm test    # optional — Vitest unit tests, fast and free
 ```
+
+> The install must run `node-pty`'s build script (approved in `pnpm-workspace.yaml`).
+> Without it the backend can't spawn a PTY, and it fails at *runtime* rather than
+> at install time.
 
 ### 2. Configure
 
@@ -80,7 +85,8 @@ Launches the backend + Caddy together (Ctrl+C stops both). On your phone (Tailsc
 | Var | Required | Default | Description |
 |-----|----------|---------|-------------|
 | `WORK_DIR` | **yes** | — | The folder your projects live in — sessions spawn here and recent chats are browsed from it. The backend won't start without it. |
-| `NODE_ENV` | for remote | dev | Set to `production` to **fail closed**: the WS/CORS origin check rejects any origin not in `ALLOWED_ORIGINS` (and any request with no `Origin`). Leave unset for local dev (localhost auto-allowed). |
+| `NODE_ENV` | for remote | dev | Set to `production` to **fail closed**: the WS/CORS origin check rejects any origin not in `ALLOWED_ORIGINS` (and any request with no `Origin`), and PTY `.raw` captures are skipped. Safe to leave at `production` permanently — `pnpm dev:backend` forces `development` for itself, so local dev keeps localhost origins and captures either way. |
+| `CLAUDE_BIN` | no | `claude` (off PATH) | Absolute path to the Claude Code binary to spawn. Pin it when PATH is ambiguous — a machine with two installs resolves by PATH order, which can silently drive a different CLI build than intended. The launch command is logged at spawn, and the version that actually ran is reported separately from the transcript. |
 | `ALLOWED_ORIGINS` | in prod | — | Comma-separated allowed browser origins, e.g. `https://laptop.tailnet.ts.net`. |
 | `HOST` | no | `127.0.0.1` | Bind address. **Loopback only** — Caddy is the sole process facing the tailnet; never `0.0.0.0`. |
 | `PORT` | no | `4577` | Backend port. |
@@ -147,11 +153,10 @@ SSH-grade reach without exposing anything to the internet. Threat model, hardeni
 
 ## Roadmap
 
-What works today: session control, the hardened Tailscale + Caddy transport, one-tap tool approvals, the AskUserQuestion relay, slash-command *sending*, model/effort/mode switching, and the installable PWA. What's next:
+What works today: session control, the hardened Tailscale + Caddy transport, one-tap tool approvals, the AskUserQuestion relay, plan approval (`ExitPlanMode`), slash-command *sending*, model/effort/mode switching, and the installable PWA. What's next:
 
 ### Interactive features
 
-- **Plan approval (ExitPlanMode)** — render the plan on the phone and choose approve / approve + auto-accept edits / keep planning. Reuses the AskUserQuestion picker-driving + confirm machinery.
 - **Slash-command discovery** — a `/` autocomplete menu listing built-in + project + plugin commands with their args. (Sending already works; discovery is the missing half.)
 - **Subagents (agents) view** — nested, collapsible rendering of `Task`-spawned subagents so a fanned-out run stays legible on a phone.
 - **File-diff rendering** — mobile-friendly diffs for `Edit`/`Write` in the tool cards (currently raw tool I/O).
@@ -170,7 +175,7 @@ What works today: session control, the hardened Tailscale + Caddy transport, one
 - **Run as a durable service** — wrap `pnpm start` so the backend + Caddy start on boot and survive sleep (Windows service via NSSM, a logon Scheduled Task, or pm2).
 - **Session-registry persistence** — state is in-memory, so a backend restart loses the session list (transcripts persist on disk). A small persisted registry removes the "restarted and my sessions vanished" cliff.
 - **Adaptive history replay** — the reconnect replays only the recent transcript tail; long sessions need a bigger/adaptive window.
-- **Test suite** — to be built from scratch.
+- **Test coverage** — `pnpm test` (Vitest) covers pure logic, and `scripts/verify/` probes the CLI hook contracts on a version bump. Still uncovered: the services themselves (no integration tests around `Session`/`SessionBus`), the frontend, and — most importantly — the keystroke relays, which need an interactive PTY and remain a manual check.
 
 ### Hardening (optional)
 

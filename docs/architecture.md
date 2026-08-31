@@ -40,6 +40,11 @@ that registers **blocking** hooks which POST to a loopback-only endpoint:
 
 - **`PermissionRequest`** — tool approvals **and** AskUserQuestion.
 - **`PreCompact` / `PostCompact`** — compaction lifecycle.
+- **`PreToolUse`** (scoped to `ExitPlanMode`) — the only signal that arrives
+  *before* the plan picker opens, so the plan card renders in time.
+- **`PostModelSwitch`** (CLI ≥ 2.1.251) — an out-of-band `/model`, carrying the
+  requested *alias* rather than just the resolved id. `PreModelSwitch` is
+  deliberately not registered: it exists to block or confirm a switch.
 
 A blocked hook **holds the CLI** until the phone responds — this is how one-tap
 approvals work. The pending HTTP response is unblocked by
@@ -67,6 +72,26 @@ Claude Code writes a structured per-session transcript at:
 
 A `TranscriptWatcher` (`transcript.service.ts`) tails this file with `fs.watch`
 for **all content** — assistant text, tool calls, tool results, user prompts.
+
+The `<encoded-cwd>` segment replaces **every non-alphanumeric character** with
+`-`, not just the path separators. Getting this wrong is the least debuggable
+failure in the project: the watcher tails a directory that never appears and the
+session streams nothing at all, with no error anywhere. `resolveTranscriptPath`
+(`claude-paths.ts`) therefore falls back to a session-id scan for the cases the
+encoding can't cover — paths over ~200 chars (disambiguated upstream since
+2.1.224 under a scheme we haven't verified) and non-ASCII segments — and honours
+`CLAUDE_CODE_PROJECT_DIR_NAME`.
+
+Beyond content, the transcript is the **runtime source of truth** for three
+things the controller would otherwise only guess at:
+
+- **CLI version** — stamped on every `user`/`assistant`/`system`/`attachment`
+  entry. The statusline payload carries one too, but only flows when the user has
+  a statusline command configured, so it isn't dependable.
+- **Model** — the resolved id, reconciled against the stored alias by family.
+- **Effort** — the *resolved* level, recorded on every assistant entry since
+  2.1.212. Before this was read back, effort was write-only and the badge drifted
+  after any out-of-band `/effort`.
 
 ---
 
@@ -353,6 +378,30 @@ Prior art studied while designing the relay:
   blocks private IPs.
 - **The backend binds loopback**; only Caddy faces the tailnet.
 - **Shared types go in `packages/common`** — both backend and frontend import them.
+- **Never let the spawned CLI inherit the parent's Claude Code env**
+  (`STRIPPED_CHILD_ENV` in `pty.service.ts`). `CLAUDE_CODE_CHILD_SESSION`
+  disables transcript saving and `CLAUDE_CODE_SAFE_MODE` disables hooks — both
+  remove a load-bearing data source while the session still looks healthy.
+- **Every CLI probe asserts a control case.** Without one, "the hook didn't fire"
+  is indistinguishable from "the probe is broken" — a mistake already made once
+  here, and the reason `scripts/verify` exits `2 INCONCLUSIVE` rather than
+  reporting a finding it can't support.
+
+## Testing
+
+Two tiers, deliberately separate:
+
+- **`pnpm test`** — Vitest over `packages/*/tests/`. Pure logic only: version
+  comparison, type guards, path encoding. Fast, free, safe to run constantly.
+  Tests sit outside `src` because that's each package's build `rootDir`.
+- **`pnpm verify:hooks` / `pnpm verify:model-switch`** — `scripts/verify/`.
+  These spawn a real Claude Code session and **cost plan credits**, so they're
+  excluded from `pnpm test` and run deliberately, on a version bump.
+
+The harness does **not** cover the keystroke relays. Those drive ink pickers by
+synthesised navigation and need an interactive PTY plus a human reading the
+result; `scripts/verify/README.md` documents that manual pass. A green harness
+run means the hook contracts held, not that the relays work.
 
 ## Claude Code version alignment
 
