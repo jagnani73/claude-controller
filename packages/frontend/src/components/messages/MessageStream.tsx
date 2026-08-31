@@ -579,6 +579,21 @@ export function MessageStream({
   const prevFirstIdRef = useRef<string | undefined>(undefined);
   const pendingAnchorRef = useRef<{ height: number; top: number } | null>(null);
 
+  /**
+   * Whether anything has arrived *since* the replayed history finished.
+   *
+   * Replayed history can never mean a turn is in flight: the backend replays
+   * only after the PTY is up, and a resumed session has not been prompted yet.
+   * Without this, a transcript whose last entry is a tool result — the shape you
+   * get when a session was killed mid-turn — makes `waitingForReply` latch on
+   * and never clear, because the resumed CLI is idle and will not re-answer the
+   * interrupted turn. Observed live on two sessions orphaned by a backend
+   * restart: both showed a permanent spinner on reopen.
+   */
+  const hydratedRef = useRef(false);
+  const lastItemIdRef = useRef<string | undefined>(undefined);
+  const [hasLiveActivity, setHasLiveActivity] = useState(false);
+
   // Reset when switching sessions. The component instance is reused across
   // /session/$id route changes, so without `sessionId` in the dep list the
   // previous session's stream items leak into the new one.
@@ -591,10 +606,21 @@ export function MessageStream({
     setHasMore(false);
     setLoadingHistory(false);
     setCompacting(false);
+    setHasLiveActivity(false);
+    hydratedRef.current = false;
+    lastItemIdRef.current = undefined;
     prevFirstIdRef.current = undefined;
     prevScrollHeightRef.current = 0;
     pendingAnchorRef.current = null;
   }, [sessionId]);
+
+  // Anything appended after hydration is live. Keyed on the *last* item so a
+  // `history_page` prepend (the user scrolling back) doesn't read as activity.
+  useEffect(() => {
+    const lastId = items[items.length - 1]?.id;
+    if (hydratedRef.current && lastId !== lastItemIdRef.current) setHasLiveActivity(true);
+    lastItemIdRef.current = lastId;
+  }, [items]);
 
   useWsMessage("user_prompt", (msg) => {
     if (msg.sessionId !== sessionId) return;
@@ -693,6 +719,9 @@ export function MessageStream({
 
   useWsMessage("history_available", (msg) => {
     if (msg.sessionId !== sessionId) return;
+    // Sent after the replayed tail, so it marks the live boundary: everything
+    // already here is history, everything from now on is a real turn.
+    hydratedRef.current = true;
     setEarliestIndex(msg.earliestIndex);
     setHasMore(msg.hasMore);
   });
@@ -785,10 +814,16 @@ export function MessageStream({
     (effectiveLastItem.toolName === "AskUserQuestion" ||
       effectiveLastItem.toolName === "ExitPlanMode") &&
     (!effectiveLastItem.result || effectiveLastItem.result.isError);
+  // `hasLiveActivity` gates the inferred half: replayed history describes a turn
+  // that already ended, so inferring "still thinking" from it strands the
+  // spinner forever on any session killed mid-turn. `isProcessing` is not gated
+  // — the user just hit send, so a turn genuinely is in flight even with nothing
+  // on the stream yet.
   const waitingForReply =
     !relayToolUnresolved &&
     (isProcessing ||
-      (!!effectiveLastItem &&
+      (hasLiveActivity &&
+        !!effectiveLastItem &&
         effectiveLastItem.kind !== "assistant" &&
         effectiveLastItem.kind !== "compact_summary" &&
         effectiveLastItem.kind !== "slash_command" &&
