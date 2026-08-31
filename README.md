@@ -175,7 +175,7 @@ What works today: session control, the hardened Tailscale + Caddy transport, one
 - **Run as a durable service** — wrap `pnpm start` so the backend + Caddy start on boot and survive sleep (Windows service via NSSM, a logon Scheduled Task, or pm2).
 - **Session-registry persistence** — state is in-memory, so a backend restart loses the session list (transcripts persist on disk). A small persisted registry removes the "restarted and my sessions vanished" cliff.
 - **Adaptive history replay** — the reconnect replays only the recent transcript tail; long sessions need a bigger/adaptive window.
-- **Test coverage** — `pnpm test` (Vitest) covers pure logic, and `scripts/verify/` probes the CLI hook contracts on a version bump. Still uncovered: the services themselves (no integration tests around `Session`/`SessionBus`), the frontend, and — most importantly — the keystroke relays, which need an interactive PTY and remain a manual check.
+- **Test coverage** — `pnpm test` (Vitest) covers pure logic, and `scripts/verify/` probes the CLI hook contracts and the Shift+Tab permission cycle on a version bump. Still uncovered: the services themselves (no integration tests around `Session`/`SessionBus`), the frontend, and — most importantly — the AskUserQuestion and plan picker relays, which need an interactive PTY and remain a manual check.
 
 ### Hardening (optional)
 

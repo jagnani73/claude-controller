@@ -102,6 +102,63 @@ things the controller would otherwise only guess at:
   2.1.212. Before this was read back, effort was write-only and the badge drifted
   after any out-of-band `/effort`.
 
+Both model and effort reconciliation are **suppressed** while a respawn is in
+flight or a controller-side pick is still unapplied — the stored value is the
+user's intent there, not something to correct. The subtlety is that suppression
+has to *defer* the observation rather than drop it: `TranscriptWatcher` dedupes
+on the model id and effort level, so a value ignored while suppressed is never
+reported again and the correction is lost for the life of the session.
+`RuntimeReconciler` (`session/runtime-reconciler.ts`) holds the observation for
+exactly that reason, and `Session.flushDeferredReconciliation` replays it on the
+one path that lifts suppression without replacing the PTY — a pick that collapses
+the pending overlay back to the running value (the user changing their mind).
+
+The mirror-image trap is just as load-bearing: `_doRespawn` **invalidates** the
+observations instead of replaying them, because after a respawn they describe the
+process that was just killed. Reconciling a fresh `opus` intent against a stale
+`claude-sonnet-5` would "correct" the alias straight back to `sonnet` and undo
+the switch the user just made.
+
+**Permission mode is the exception**, and it is worth being precise about why.
+The transcript does carry a `permission-mode` entry, but only inside a periodic
+session-metadata block (`last-prompt` / `mode` / `permission-mode` /
+`bridge-session`) — never on the keypress that changed it, and not at all in a
+session that has yet to run a turn. So it is a lagging snapshot, not a
+correction. See *Permission-mode cycle* below for what depends on that.
+
+---
+
+## Permission-mode cycle
+
+The mode cannot be set directly: Claude Code only exposes it as a Shift+Tab
+cycle. `Session.setPermissionMode` therefore computes how many `ESC [ Z` to write
+with `cycleDistance` (`common/permission-cycle.ts`) and paces them into the PTY.
+
+```
+default → acceptEdits → plan → [auto] → default
+```
+
+Whether `auto` is a stop depends on the model, and getting that wrong is a
+**silent wrong-state bug**: the keystroke count is off by one, the session lands
+in a mode the phone did not pick, and — because the transcript only samples the
+mode in a metadata block — nothing corrects it before the next prompt *runs*
+under it.
+
+`cycleCanIncludeAuto` answers that per alias, and every answer in it is
+**observed**, not derived. `pnpm verify:permission-cycle` walks the real cycle for
+each `ClaudeModel` by pressing Shift+Tab in a live TUI and reading the mode the
+CLI names in its own footer. It submits no prompt, so unlike the other probes it
+costs nothing.
+
+The result on the target build: every alias includes auto **except `haiku`**.
+`opusplan` includes it — it resolves to Opus in plan mode and Sonnet outside,
+and both are auto-capable, so the dual-model alias never lands on a model that
+would drop the stop. This is also a worked example of the snapshot being wrong:
+`claude-code-source/` gates auto behind `/^claude-(opus|sonnet)-4-6/`, which
+would exclude the Opus 5 / Sonnet 5 actually in use, and the live cycle includes
+auto for both. The predicate previously excluded `opusplan` on the strength of
+that reading, and the probe is what disproved it.
+
 ---
 
 ## SessionBus and the WebSocket protocol
@@ -403,14 +460,19 @@ Two tiers, deliberately separate:
 - **`pnpm test`** — Vitest over `packages/*/tests/`. Pure logic only: version
   comparison, type guards, path encoding. Fast, free, safe to run constantly.
   Tests sit outside `src` because that's each package's build `rootDir`.
-- **`pnpm verify:hooks` / `pnpm verify:model-switch`** — `scripts/verify/`.
-  These spawn a real Claude Code session and **cost plan credits**, so they're
-  excluded from `pnpm test` and run deliberately, on a version bump.
+- **`scripts/verify/`** — `pnpm verify:hooks`, `verify:model-switch`,
+  `verify:approval-edit`, `verify:permission-cycle`. These drive a real Claude
+  Code process, so they're excluded from `pnpm test` and run deliberately, on a
+  version bump. All but `verify:permission-cycle` submit a prompt and therefore
+  **cost plan credits**.
 
-The harness does **not** cover the keystroke relays. Those drive ink pickers by
-synthesised navigation and need an interactive PTY plus a human reading the
-result; `scripts/verify/README.md` documents that manual pass. A green harness
-run means the hook contracts held, not that the relays work.
+The harness does **not** cover the picker relays. `question.input.ts` and
+`plan.input.ts` drive ink pickers by synthesised navigation and need an
+interactive PTY plus a human reading the result; `scripts/verify/README.md`
+documents that manual pass. `verify:permission-cycle` is the one keystroke relay
+it does cover, and only because the outcome is a mode the TUI names on screen —
+a picker selection is not. A green harness run means the hook contracts held and
+Shift+Tab still lands where we think, not that the relays work.
 
 ## Claude Code version alignment
 
@@ -438,6 +500,62 @@ packages/common/src/version.ts
 - Which binary runs is decided by the environment: the PTY spawns bare `claude`
   off PATH unless `CLAUDE_BIN` pins an absolute path. On a machine with multiple
   installs, PATH order silently picks the build.
+
+## Known couplings to CLI input handling
+
+Things the controller depends on that live in Claude Code's input layer rather
+than in a contract it publishes. None is a bug today. They are recorded with
+their **evidence status** so a future reader knows which are established and
+which are inherited from a changelog and never checked.
+
+**A leading `!` puts the CLI into shell mode — verified.** Every controller
+message is written as a bracketed paste, and pasting is *not* exempt from prefix
+handling: pasting `!echo hi` renders `! echo hi` in the textarea with the footer
+`! for shell mode`, so on submit the text runs as a shell command instead of
+reaching Claude. A `!` anywhere but the first character is inert (`run !echo hi`
+stays plain text). The asymmetry that makes this worth knowing is that the phone
+renders no shell-mode indicator, so unlike at the keyboard the user gets no
+warning. Deliberately not escaped or warned about yet: escaping would corrupt
+legitimate text and suppressing the prefix would remove a real CLI feature, so
+it is a product decision rather than a fix.
+
+**A leading `/` opens the slash-command palette — verified, and intended.**
+Pasting `/model` opens the command menu and submits as a slash command. This is
+the behaviour we want: a phone message of `/commit` should run the command, as
+the data-flow diagram above already shows.
+
+**Plan-picker digit shortcuts are position-sensitive.** At high context usage the
+CLI inserts a "clear context" approve at position 1, shifting the elevated
+approve to 2 and manual to 3, so `buildPlanKeystrokes`' digits would select the
+wrong option. Detecting it needs the statusline context percentage, which is
+deliberately not a source of app state. Already recorded as a KNOWN LIMITATION in
+`plan.input.ts`; correct at normal context, best-effort at high.
+
+**The keystroke pacing sits on top of upstream race fixes the version floor does
+not require.** `CHUNK_DELAY_MS` is 35 ms. Arrow-then-Enter races were fixed
+upstream in 2.1.235 and 2.1.247 — at or below `CLAUDE_CODE_TARGET_VERSION`, so
+the build we verify against has them. But `CLAUDE_CODE_MINIMUM_VERSION` is
+2.1.181, *below* both, so a CLI anywhere in 2.1.181–2.1.234 reintroduces the
+races while still clearing our floor. Unverified: raising the floor would need
+old binaries and a demonstration that the race actually breaks the relay, rather
+than an inference from release notes.
+
+**Esc-Esc at an idle prompt — unverified, probe inconclusive.** Upstream 2.1.216
+describes Esc-Esc at an idle prompt opening the rewind picker. Both
+`buildKeystrokes` and `buildPlanKeystrokes` emit a single bare Esc on cancel and
+`Session.interrupt` writes one — there is exactly one `pty.write("\x1b")` in the
+codebase — so we never emit two within one action. The residual hazard is two
+user actions in quick succession arriving after the picker has already closed.
+Three Escs 1.5 s apart at an idle prompt on a fresh session produced no visible
+change, but that settles nothing: the session had no history to rewind to and the
+double-press window may be far tighter than 1.5 s. With no control proving the
+picker *can* open in that harness, the claim stands unconfirmed rather than
+refuted.
+
+**`keybindings.json` can rebind Enter**, which `submitWithConfirmation` assumes
+when it writes `\r`. The file is absent on the development machine, so the
+default binding applies there. If a user rebinds submit, the resend loop would
+retry and give up rather than fail loudly. Unverified.
 
 ## Reference: Claude Code source
 
