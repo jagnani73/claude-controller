@@ -33,7 +33,7 @@ import {
 } from "../services/statusline.service.js";
 import { TranscriptWatcher } from "../services/transcript.service.js";
 import type { SessionDeps, SessionEvents } from "../types/index.js";
-import { encodedProjectDir } from "../utils/claude-paths.js";
+import { resolveTranscriptPath } from "../utils/claude-paths.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
 
 const log = LoggerService.scoped("session");
@@ -161,7 +161,7 @@ export class Session extends EventEmitter<SessionEvents> {
 
     let drainDone: Promise<void> = Promise.resolve();
     if (config.resumeSessionId) {
-      const knownPath = join(encodedProjectDir(config.cwd), `${config.resumeSessionId}.jsonl`);
+      const knownPath = resolveTranscriptPath(config.cwd, config.resumeSessionId);
       this.transcript = new TranscriptWatcher(
         knownPath,
         this.bus,
@@ -213,7 +213,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.locator = new SessionLocator(this.config.cwd, spawnedAt, (sessionId) => {
       if (this._id) return;
       this.resolveId(sessionId);
-      const path = join(encodedProjectDir(this.config.cwd), `${sessionId}.jsonl`);
+      const path = resolveTranscriptPath(this.config.cwd, sessionId);
       this.transcript = new TranscriptWatcher(
         path,
         this.bus,
