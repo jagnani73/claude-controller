@@ -976,9 +976,17 @@ export class Session extends EventEmitter<SessionEvents> {
    * `currentPermissionMode` optimistically and emits `metadataChanged`
    * so concurrent `session_metadata` broadcasts (e.g. statusline
    * re-renders triggered by the same keystrokes) carry the intended
-   * value rather than the pre-cycle one. JSONL's `permission-mode`
-   * entry still arrives via the transcript watcher and is the
-   * canonical correction if reality diverges.
+   * value rather than the pre-cycle one.
+   *
+   * The step count must be right, because nothing promptly corrects it.
+   * Claude Code writes `permission-mode` into the JSONL only as part of a
+   * periodic session-metadata block (`last-prompt`/`mode`/`permission-mode`/
+   * `bridge-session`) — never on the keypress itself, and not at all in a
+   * session that has yet to run a turn. So a miscount does not merely show a
+   * stale badge: the next prompt *runs* under a mode the user did not pick,
+   * and the transcript only catches up at the next block. That is what
+   * `cycleCanIncludeAuto` guards, and why `pnpm verify:permission-cycle`
+   * exists to check it against the live CLI.
    */
   setPermissionMode(target: PermissionMode): void {
     const from = this.currentPermissionMode;

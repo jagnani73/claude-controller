@@ -13,18 +13,23 @@ import type { ClaudeModel, PermissionMode } from "./types/index.js";
 
 /**
  * Whether auto mode participates in the cycle for a given model alias.
- * Mirrors Claude Code's runtime gate (`modelSupportsAutoMode`,
- * `betas.ts:160`), whose external (firstParty, non-ant) allowlist is
- * `/^claude-(opus|sonnet)-4-6/` — the plain Opus and Sonnet families.
- * `opusplan` and `haiku` are deliberately excluded.
  *
- * Two caveats this predicate intentionally does NOT encode:
- *  - The upstream gate is additionally behind the `TRANSCRIPT_CLASSIFIER`
- *    flag + a GrowthBook config, so a `true` here is the model-family
- *    *precondition*, not a guarantee auto is live in a given session.
- *  - We match on the alias family (`opus`/`sonnet`), not the resolved
- *    canonical id — upstream's regex is pinned to `-4-6`, so a future
- *    `-4-7`+ could drift past it while this still returns `true`.
+ * Every answer here is **observed**, not derived: `pnpm verify:permission-cycle`
+ * walks the real cycle for each `ClaudeModel` by pressing Shift+Tab in a live
+ * TUI and reading the mode the CLI renders. Haiku is the only alias whose cycle
+ * omits auto; `opusplan` includes it, because it resolves to Opus in plan mode
+ * and Sonnet outside it and both of those are auto-capable, so the alias never
+ * lands on a model that would drop the stop.
+ *
+ * Do not re-derive this from `claude-code-source/`. That snapshot's gate
+ * (`modelSupportsAutoMode`, `betas.ts:160`) allowlists `/^claude-(opus|sonnet)-4-6/`,
+ * which would exclude the Opus 5 / Sonnet 5 models actually in use — and the
+ * live cycle includes auto for both. The snapshot is a frozen hint, and here it
+ * is simply wrong about current behaviour.
+ *
+ * One caveat this predicate cannot encode: the snapshot also gates auto behind
+ * a feature flag and remote config, so the cycle could in principle differ by
+ * account or rollout. The probe can only observe the machine it runs on.
  *
  * Exhaustive `switch` (no `default`) on purpose: adding a `ClaudeModel`
  * alias becomes a compile error here rather than silently falling through to
@@ -35,10 +40,10 @@ export function cycleCanIncludeAuto(model: ClaudeModel): boolean {
   switch (model) {
     case "opus":
     case "opus[1m]":
+    case "opusplan":
     case "sonnet":
     case "sonnet[1m]":
       return true;
-    case "opusplan":
     case "haiku":
       return false;
   }

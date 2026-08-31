@@ -503,11 +503,14 @@ function handleMessage(
         return;
       }
       // The mode the picker exits into on approval — set optimistically once the
-      // approval confirms so the top bar updates immediately (the laggy JSONL
-      // permission-mode entry stays the canonical correction). `approve-primary`
+      // approval confirms so the top bar updates immediately. `approve-primary`
       // is the elevated keep-context approve at picker position 1: "use auto
       // mode" when the running model supports it (→ auto), else "auto-accept
       // edits" (→ acceptEdits). `approve-manual` → default. Cancel stays in plan.
+      // `cycleCanIncludeAuto` decides which of the two this is, so it has to be
+      // right about the *running* model — see its docblock. The JSONL
+      // permission-mode entry eventually agrees, but only at the next
+      // session-metadata block, so it is not a prompt correction.
       const resultingMode: PermissionMode | undefined = msg.cancel
         ? undefined
         : msg.decision === "approve-primary"

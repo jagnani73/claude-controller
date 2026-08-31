@@ -39,7 +39,7 @@ export function supportsMaxEffort(model: ClaudeModel): boolean {
  * Auto permission mode gate. Delegates to the shared `cycleCanIncludeAuto` so
  * the frontend (enable/disable the option + clamp on model switch) and the
  * backend (PTY Shift+Tab keystroke math) share one source of truth. Currently
- * the Opus and Sonnet families (not opusplan/haiku).
+ * every model but haiku — see that function for how it was established.
  */
 export function supportsAutoMode(model: ClaudeModel): boolean {
   return cycleCanIncludeAuto(model);
