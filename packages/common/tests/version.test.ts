@@ -30,6 +30,16 @@ describe("compareVersions", () => {
     expect(compareVersions("2.1.251", "2.1.251")).toBe(0);
   });
 
+  it("treats a pre-release suffix as its numeric prefix", () => {
+    // Documenting current behaviour, not endorsing it: parseInt("251-beta") is
+    // 251, so a pre-release compares equal to the release and classifies as
+    // "match". Acceptable while Claude Code ships plain x.y.z — if it ever
+    // publishes suffixed builds this needs revisiting, and this test will be
+    // the thing that flags the assumption.
+    expect(compareVersions("2.1.251-beta", "2.1.251")).toBe(0);
+    expect(classifyCliVersion("2.1.251-beta", "2.1.251")).toBe("match");
+  });
+
   it("degrades to zero on unparseable segments rather than throwing", () => {
     // Version strings come from the CLI, so a surprise must not crash the
     // session — it should just sort low.

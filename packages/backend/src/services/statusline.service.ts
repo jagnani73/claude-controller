@@ -56,7 +56,11 @@ export interface StatusLinePayload {
     added_dirs: string[];
     /** Present when a git remote is detected (added upstream in 2.1.145). */
     repo?: { host: string; owner: string; name: string };
-    /** Present only inside a linked git worktree (added upstream in 2.1.97). */
+    /**
+     * Unverified: documented upstream in 2.1.97 as set inside a linked git
+     * worktree, but absent from all of our captures — none were taken in one, so
+     * neither its presence nor its type is confirmed here.
+     */
     git_worktree?: string;
   };
   output_style: { name: string };

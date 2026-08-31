@@ -103,7 +103,13 @@ export class TranscriptWatcher {
     // Subscribers connecting after start() see them via the event-log tail.
     await this.drain();
     this.initialScan = false;
+    // Replay what the drain observed. Both are needed on resume: the drain
+    // records them but suppresses their callbacks, and `handleAssistant` dedupes
+    // on the same fields — so without this, a session resumed after an
+    // out-of-band `/model` or `/effort` keeps the stale value for its whole life,
+    // since the next live entry carries the *unchanged* value and is skipped.
     if (this.lastAssistantModel) this.onModelChange?.(this.lastAssistantModel);
+    if (this.lastAssistantEffort) this.onEffortChange?.(this.lastAssistantEffort);
     // Since v2.1.126 Claude Code doesn't pre-create the transcript JSONL on
     // session start — it only appears after the first user message. Watch the
     // parent dir until our file shows up, then attach the file-level watcher.

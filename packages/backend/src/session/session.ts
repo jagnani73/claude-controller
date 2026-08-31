@@ -105,7 +105,12 @@ export class Session extends EventEmitter<SessionEvents> {
   private currentModelId: string | null = null;
   /** CLI build driving this session, read from the transcript (see handleCliVersion). */
   private cliVersion: string | null = null;
-  /** Warn once per observed version, not once per session — a resume can span an upgrade. */
+  /**
+   * Last version already reported. The change-detection above it does most of
+   * the deduping; this only additionally suppresses a repeat report if a version
+   * were ever observed again after changing away and back, which shouldn't
+   * happen mid-session but costs nothing to hold.
+   */
   private warnedCliVersion: string | null = null;
   private statusSnapshot: SessionStatusSnapshot | null = null;
   /** Set during respawn() so the PTY exit handler doesn't propagate "stopped". */
@@ -266,8 +271,12 @@ export class Session extends EventEmitter<SessionEvents> {
    * (a wrong resume default, an older build).
    */
   private handleModelSwitch(requestedModel: string | undefined, toModel: string): void {
-    this.currentModelId = toModel;
+    // Record the id only once past the guards. `handleModelChange` dedupes on
+    // `currentModelId`, so writing it on a path that then returns early would
+    // permanently suppress the transcript fallback for that model: a switch seen
+    // while a pending pick is unapplied would leave the alias stale forever.
     if (this.respawning || this.pendingModel !== null) return;
+    this.currentModelId = toModel;
     if (!requestedModel || !isClaudeModel(requestedModel)) {
       // No alias, or one we don't model — fall back to family reconciliation
       // against the resolved id we just recorded.
