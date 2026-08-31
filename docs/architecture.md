@@ -50,6 +50,15 @@ A blocked hook **holds the CLI** until the phone responds — this is how one-ta
 approvals work. The pending HTTP response is unblocked by
 `hooks.service.resolveApproval()` when the phone sends `approval_response`.
 
+An approval can also carry `updatedInput`, letting the phone approve a *corrected*
+call (`ApprovalCard`'s Edit… mode) rather than only allow or deny. The response
+shape differs by path, and that detail is load-bearing: plain allow/deny uses the
+flat `{permissionDecision}` form, while `updatedInput` is honoured only in the
+schema form `{hookEventName, decision:{behavior, updatedInput}}`. Attaching
+`updatedInput` to the flat form makes the CLI discard the whole response and fall
+back to its own terminal picker — invisible to the phone, so the session hangs
+with no error. Both forms are verified against 2.1.251.
+
 `SessionStart` is **not** HTTP-capable in Claude Code, so the session id can't be
 learned from a hook. Instead it's discovered by watching
 `~/.claude/sessions/<pid>.json` (`session-locator.service.ts`). Because of this,
