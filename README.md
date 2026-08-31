@@ -18,7 +18,7 @@ Claude Controller spawns the real **Claude Code CLI** on your machine and relays
 
 Claude Code's built-in remote is a chat relay. This is a full control plane:
 
-- **Switch permission modes** mid-session (default / acceptEdits / plan / auto / bypassPermissions)
+- **Switch permission modes** mid-session (default / acceptEdits / plan / auto)
 - **One-tap tool approvals** — pending requests, approve or deny instantly
 - **Spawn / resume sessions** and browse recent chats per project
 - **Switch model + effort** mid-session (Opus / Sonnet / Haiku)

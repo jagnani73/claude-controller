@@ -582,6 +582,9 @@ export function MessageStream({
   // Reset when switching sessions. The component instance is reused across
   // /session/$id route changes, so without `sessionId` in the dep list the
   // previous session's stream items leak into the new one.
+  // It is the trigger, not an input: the body reads nothing from it, so the
+  // rule calls it extra. Taking that fix would run this once and never reset.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset trigger, not an input
   useEffect(() => {
     dispatch({ type: "clear" });
     setEarliestIndex(null);
