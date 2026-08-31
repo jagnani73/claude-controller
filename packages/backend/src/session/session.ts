@@ -5,7 +5,6 @@ import { createWriteStream, type FSWatcher, mkdirSync, readFileSync, watch } fro
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { reconcileModelAlias } from "common/model";
 import { cycleCanIncludeAuto, cycleDistance } from "common/permission-cycle";
 import type {
   ClaudeModel,
@@ -41,6 +40,7 @@ import { TranscriptWatcher } from "../services/transcript.service.js";
 import type { SessionDeps, SessionEvents } from "../types/index.js";
 import { resolveTranscriptPath } from "../utils/claude-paths.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
+import { nextPendingPick, RuntimeReconciler } from "./runtime-reconciler.js";
 
 const log = LoggerService.scoped("session");
 
@@ -101,8 +101,13 @@ export class Session extends EventEmitter<SessionEvents> {
   /** Resolved statusline command, cached after first non-null lookup. */
   private cachedStatusLineCommand: string | null = null;
   private statusLinePayloadFile: string;
-  /** Latest model id observed in the transcript (e.g. "claude-opus-4-7"). */
-  private currentModelId: string | null = null;
+  /**
+   * Runtime observations from the transcript (model id, effort level) plus the
+   * rules for correcting `currentModel`/`currentEffort` against them. Holds the
+   * observations rather than acting on them immediately so one seen while
+   * reconciliation is suppressed can be replayed — see `RuntimeReconciler`.
+   */
+  private readonly reconciler = new RuntimeReconciler();
   /** CLI build driving this session, read from the transcript (see handleCliVersion). */
   private cliVersion: string | null = null;
   /**
@@ -244,9 +249,8 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   private handleModelChange = (model: string): void => {
-    if (this.currentModelId === model) return;
+    if (!this.reconciler.observeModel(model)) return;
     log.info("Model changed", { token: this.spawnToken, model });
-    this.currentModelId = model;
     // Reconcile the stored alias against the real model observed in the
     // transcript — fixes a family mismatch from an out-of-band `/model` change
     // or a wrong resume default. Transcript-only on purpose: the statusline is a
@@ -271,12 +275,12 @@ export class Session extends EventEmitter<SessionEvents> {
    * (a wrong resume default, an older build).
    */
   private handleModelSwitch(requestedModel: string | undefined, toModel: string): void {
-    // Record the id only once past the guards. `handleModelChange` dedupes on
-    // `currentModelId`, so writing it on a path that then returns early would
-    // permanently suppress the transcript fallback for that model: a switch seen
-    // while a pending pick is unapplied would leave the alias stale forever.
+    // Retain the id even while suppressed. The reconciler dedupes on it, as does
+    // TranscriptWatcher, so an id dropped here never arrives again — and the
+    // alias would stay stale for the life of the session. Recording it keeps the
+    // transcript fallback replayable once suppression lifts.
+    this.reconciler.observeModel(toModel);
     if (this.respawning || this.pendingModel !== null) return;
-    this.currentModelId = toModel;
     if (!requestedModel || !isClaudeModel(requestedModel)) {
       // No alias, or one we don't model — fall back to family reconciliation
       // against the resolved id we just recorded.
@@ -295,40 +299,30 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   /**
-   * Reconcile the stored effort level against what the transcript says the turn
-   * actually ran at (recorded on every assistant message since v2.1.212).
+   * Take the effort level the transcript says the turn actually ran at (recorded
+   * on every assistant message since v2.1.212) and reconcile the stored one
+   * against it.
    *
    * Mirrors `handleModelChange`: before this, effort was write-only — we set
    * `CLAUDE_CODE_EFFORT_LEVEL` at spawn and never read it back, so an
    * out-of-band `/effort` left the badge showing a level the session wasn't
-   * running, exactly the way a stale model alias used to.
-   *
-   * `auto` is preserved rather than corrected. It means "no override, use the
-   * model default", so a concrete observed level is auto's *resolution*, not a
-   * mismatch — the same reason `reconcileModelAlias` preserves `opusplan`.
+   * running, exactly the way a stale model alias used to. `RuntimeReconciler`
+   * holds the rules for when the observation actually warrants a correction.
    */
   private handleEffortChange = (effort: string): void => {
-    if (this.respawning || this.pendingEffort !== null) return;
-    // `auto` resolves to a concrete level at runtime; observing that level is
-    // not evidence the stored intent is wrong.
-    if (this.currentEffort === "auto" || this.currentEffort === undefined) return;
+    // Retain before any guard, for the same reason as the model path: this is
+    // the only time the watcher reports this level.
+    if (!this.reconciler.observeEffort(effort)) return;
     if (!isEffortLevel(effort)) {
-      // Claude Code accepts levels we don't model (e.g. `ultracode`). Ignore
-      // rather than coerce — a wrong badge is worse than a stale one.
+      // Claude Code accepts levels we don't model (e.g. `ultracode`). The
+      // reconciler ignores it rather than coercing — a wrong badge is worse than
+      // a stale one — so this only surfaces that it happened.
       log.debug("Ignoring unmodelled effort level from transcript", {
         token: this.spawnToken,
         effort,
       });
-      return;
     }
-    if (this.currentEffort === effort) return;
-    log.info("Reconciled effort from transcript", {
-      token: this.spawnToken,
-      from: this.currentEffort,
-      to: effort,
-    });
-    this.currentEffort = effort;
-    this.emit("metadataChanged");
+    if (this.reconcileEffortFromRuntime()) this.emit("metadataChanged");
   };
 
   /**
@@ -380,11 +374,12 @@ export class Session extends EventEmitter<SessionEvents> {
    * sub-model resolutions aren't mismatches). Returns true if the alias changed.
    */
   private reconcileModelFromRuntime(): boolean {
-    if (this.respawning || this.pendingModel !== null) return false;
-    const corrected = reconcileModelAlias(this.currentModel, this.currentPermissionMode, {
-      modelId: this.currentModelId ?? undefined,
+    const corrected = this.reconciler.reconcileModel({
+      model: this.currentModel,
+      permissionMode: this.currentPermissionMode,
+      suppressed: this.respawning || this.pendingModel !== null,
     });
-    if (!corrected || corrected === this.currentModel) return false;
+    if (!corrected) return false;
     log.info("Reconciled model alias from transcript", {
       token: this.spawnToken,
       from: this.currentModel,
@@ -392,6 +387,45 @@ export class Session extends EventEmitter<SessionEvents> {
     });
     this.currentModel = corrected;
     return true;
+  }
+
+  /**
+   * Correct `currentEffort` from the level the transcript says the turn actually
+   * ran at. Mirrors {@link reconcileModelFromRuntime}, including reading the
+   * retained observation rather than a just-arrived value, so it can be replayed
+   * after a pending pick clears. Returns true if the level changed.
+   */
+  private reconcileEffortFromRuntime(): boolean {
+    const corrected = this.reconciler.reconcileEffort({
+      effort: this.currentEffort,
+      suppressed: this.respawning || this.pendingEffort !== null,
+    });
+    if (!corrected) return false;
+    log.info("Reconciled effort from transcript", {
+      token: this.spawnToken,
+      from: this.currentEffort,
+      to: corrected,
+    });
+    this.currentEffort = corrected;
+    return true;
+  }
+
+  /**
+   * Re-run both reconcilers after a pending pick clears **without** a respawn.
+   *
+   * Suppression defers an observation rather than discarding it, so this is
+   * where the deferred one is finally acted on. Without it the correction is
+   * lost for the session's life — and not just cosmetically: `currentModel`
+   * stays stale, so the next respawn passes `--model <stale alias>` and forces a
+   * switch the user never asked for.
+   *
+   * Only correct when no respawn happened. `_doRespawn` invalidates the
+   * observations instead, because there they describe the process it killed.
+   */
+  private flushDeferredReconciliation(): boolean {
+    const modelChanged = this.reconcileModelFromRuntime();
+    const effortChanged = this.reconcileEffortFromRuntime();
+    return modelChanged || effortChanged;
   }
 
   // Diff-then-emit because Claude Code rewrites the dump on every render,
@@ -872,7 +906,12 @@ export class Session extends EventEmitter<SessionEvents> {
     const effortChanged = settings.effort !== this.currentEffort;
     const modeChanged = settings.permissionMode !== this.currentPermissionMode;
     if (!modelChanged && !effortChanged && !modeChanged) {
-      if (hadPending) this.emit("metadataChanged");
+      // Nothing to respawn, but the overlay just cleared — same situation as a
+      // collapsed pick in setPendingModel, so replay any deferred observation.
+      if (hadPending) {
+        this.flushDeferredReconciliation();
+        this.emit("metadataChanged");
+      }
       return;
     }
 
@@ -907,6 +946,12 @@ export class Session extends EventEmitter<SessionEvents> {
     // anyway; nothing graceful to preserve.
     this.pty.kill({ immediate: true });
     await exited;
+
+    // The retained observations describe the process we just killed. Replaying
+    // them against the new intent would revert it — reconciling `opus` against a
+    // stale `claude-sonnet-5` "corrects" the alias straight back to sonnet. The
+    // resumed session reports its own model and effort on its first turn.
+    this.reconciler.invalidate();
 
     const dumpScriptPath = statusLineDumpScriptPath();
     const spawnedAt = Date.now();
@@ -1014,14 +1059,23 @@ export class Session extends EventEmitter<SessionEvents> {
    * Record a pending model/effort pick (made in the controller, not yet applied
    * to the PTY — applied on the next message via respawn). Surfaced in the UI as
    * "will switch to X" and cleared when respawn applies it. A pick equal to the
-   * current value isn't pending. An omitted `effort` leaves effort unchanged.
+   * current value isn't pending — see `nextPendingPick` for the exact overlay
+   * rules, including why an omitted `effort` drops any pending effort.
    */
   setPendingModel(model: ClaudeModel, effort?: EffortLevel): void {
-    const nextModel = model === this.currentModel ? null : model;
-    const nextEffort = effort === undefined || effort === this.currentEffort ? null : effort;
-    if (nextModel === this.pendingModel && nextEffort === this.pendingEffort) return;
-    this.pendingModel = nextModel;
-    this.pendingEffort = nextEffort;
+    const { next, changed, cleared } = nextPendingPick(
+      { model: this.currentModel, effort: this.currentEffort },
+      { model: this.pendingModel, effort: this.pendingEffort },
+      { model, effort },
+    );
+    if (!changed) return;
+    this.pendingModel = next.model;
+    this.pendingEffort = next.effort;
+    // Re-picking the running value collapses the overlay with no respawn — the
+    // one path that lifts suppression without replacing the PTY. Anything the
+    // transcript reported while the pick was outstanding is still true of the
+    // live process, so act on it now; nothing will report it again.
+    if (cleared) this.flushDeferredReconciliation();
     this.emit("metadataChanged");
   }
 
@@ -1122,7 +1176,7 @@ export class Session extends EventEmitter<SessionEvents> {
       // Show the pending pick (if any) so the UI reads "will switch to X";
       // currentModel stays the applied value until respawn.
       model: this.pendingModel ?? this.currentModel,
-      currentModelId: this.currentModelId ?? undefined,
+      currentModelId: this.reconciler.observedModelId ?? undefined,
       permissionMode: this.currentPermissionMode,
       effort: this.pendingEffort ?? this.currentEffort,
       modelPending: this.pendingModel !== null,
