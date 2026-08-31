@@ -9,6 +9,7 @@ import type {
   PreCompactPayload,
   PreToolUsePayload,
 } from "../types/hook.types.js";
+import { buildApprovalResponse } from "./approval-response.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
 
@@ -100,40 +101,16 @@ export class HooksService {
     const resolver = this.pendingApprovals.get(key);
     if (!resolver) return false;
     this.pendingApprovals.delete(key);
-    // Validate here rather than trusting the client. Upstream types this as
-    // `z.record(z.string(), z.unknown())`, so null, an array or a scalar fails
-    // validation and the CLI discards the whole response — the silent hang this
-    // shape exists to avoid. `ApprovalCard` already guards, but a stale cached
-    // PWA bundle or any non-browser client reaches this path too, and
-    // `!== undefined` alone would happily forward `null`.
-    if (decision === "allow" && updatedInput !== undefined && !isPlainObject(updatedInput)) {
+    const outcome = buildApprovalResponse(decision, reason, updatedInput);
+    if (outcome.rejected) {
       log.error("Ignoring non-object updatedInput; approving the original call", {
         sessionId,
         toolUseId,
-        received: updatedInput === null ? "null" : typeof updatedInput,
+        received: outcome.rejected,
       });
-      updatedInput = undefined;
     }
-    if (decision === "allow" && updatedInput !== undefined) {
-      // Only the schema form carries updatedInput. The flat form silently
-      // discards it AND loses the allow, dropping the CLI into its own terminal
-      // picker — see HookResponse.
-      log.info("Approving with edited input", { sessionId, toolUseId });
-      resolver({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: { behavior: "allow", updatedInput },
-        },
-      });
-      return true;
-    }
-    // Unedited path keeps the flat form, which is the one verified in use.
-    resolver({
-      hookSpecificOutput: {
-        permissionDecision: decision,
-        permissionDecisionReason: reason,
-      },
-    });
+    if (outcome.edited) log.info("Approving with edited input", { sessionId, toolUseId });
+    resolver(outcome.response);
     return true;
   }
 
@@ -318,11 +295,6 @@ export class HooksService {
       this.pendingApprovals.set(approvalKey(bus.sessionId, toolUseId), resolve);
     });
   }
-}
-
-/** Matches upstream's `z.record(z.string(), z.unknown())` for `updatedInput`. */
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function approvalKey(sessionId: string, toolUseId: string): string {
