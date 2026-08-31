@@ -70,6 +70,7 @@ export class TranscriptWatcher {
   private pendingRead = false;
   private initialScan = true;
   private lastAssistantModel: string | null = null;
+  private lastCliVersion: string | null = null;
   // Buffered while waiting for a `<local-command-stdout>` follow-up entry
   // that completes the slash command. Flushed without output on any other
   // entry so a stuck buffer can't outlive its prompt group.
@@ -84,6 +85,8 @@ export class TranscriptWatcher {
     readonly bus: SessionBus,
     /** Fires whenever a fresh assistant turn changes the active model. */
     private readonly onModelChange?: (model: string) => void,
+    /** Fires when the CLI version stamped on transcript entries changes. */
+    private readonly onCliVersion?: (version: string) => void,
   ) {}
 
   private emitEvent(event: Parameters<SessionBus["push"]>[0]): void {
@@ -98,9 +101,9 @@ export class TranscriptWatcher {
     await this.drain();
     this.initialScan = false;
     if (this.lastAssistantModel) this.onModelChange?.(this.lastAssistantModel);
-    // Claude Code v2.1.126+ doesn't pre-create the transcript JSONL on session
-    // start — it only appears after the first user message. Watch the parent
-    // dir until our file shows up, then attach the file-level watcher.
+    // Since v2.1.126 Claude Code doesn't pre-create the transcript JSONL on
+    // session start — it only appears after the first user message. Watch the
+    // parent dir until our file shows up, then attach the file-level watcher.
     if (existsSync(this.path)) {
       this.watch();
       return;
@@ -244,7 +247,27 @@ export class TranscriptWatcher {
     });
   }
 
+  /**
+   * Track the CLI build writing this transcript. Every user/assistant/system/
+   * attachment entry carries a `version`, which makes this the only source that
+   * is always available — the statusline payload carries it too, but only flows
+   * when the user has a statusline command configured.
+   *
+   * Fires on change rather than once, so a resume spanning a CLI upgrade reports
+   * the newer build rather than the stale one at the head of the file. Runs
+   * during the silent initial scan too: it's a plain callback, not a bus event,
+   * so it can't leak replayed entries into the UI stream.
+   */
+  private noteCliVersion(entry: TranscriptEntry): void {
+    const version = (entry as { version?: unknown }).version;
+    if (typeof version !== "string" || !version) return;
+    if (version === this.lastCliVersion) return;
+    this.lastCliVersion = version;
+    this.onCliVersion?.(version);
+  }
+
   private handleEntry(entry: TranscriptEntry): void {
+    this.noteCliVersion(entry);
     if (entry.type === "assistant") {
       this.flushPendingSlashCommand();
       this.handleAssistant(entry as AssistantEntry);

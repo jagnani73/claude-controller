@@ -2,14 +2,23 @@
  * JSONL transcript entry types. Only the entries we actually consume are typed;
  * everything else falls through the default branch in `transcript.service.ts`.
  *
- * Verified against real v2.1.117 transcripts at ~/.claude/projects/<cwd>/<sid>.jsonl.
- * Format is not publicly documented — tolerate unknown fields.
+ * Verified against real transcripts at ~/.claude/projects/<cwd>/<sid>.jsonl. The
+ * format is not publicly documented and tracks whatever CLI build wrote it —
+ * see `CLAUDE_CODE_TARGET_VERSION` (common/version) for the build these shapes
+ * are verified against. Tolerate unknown fields.
  */
 
 interface BaseEntry {
   uuid: string;
   timestamp: string;
   sessionId: string;
+  /**
+   * Claude Code's own version, stamped on every user/assistant/system/attachment
+   * entry. This is the authoritative record of which CLI build is driving the
+   * session — the controller spawns `claude` off PATH, so the binary that
+   * actually ran is not knowable up front.
+   */
+  version?: string;
 }
 
 // ─── Content blocks (Anthropic Messages API shape) ─────────────────

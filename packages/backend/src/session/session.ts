@@ -18,6 +18,7 @@ import type {
   SessionStatus,
   SessionStatusSnapshot,
 } from "common/types";
+import { CLAUDE_CODE_TARGET_VERSION, classifyCliVersion } from "common/version";
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
 import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.js";
@@ -96,6 +97,10 @@ export class Session extends EventEmitter<SessionEvents> {
   private statusLinePayloadFile: string;
   /** Latest model id observed in the transcript (e.g. "claude-opus-4-7"). */
   private currentModelId: string | null = null;
+  /** CLI build driving this session, read from the transcript (see handleCliVersion). */
+  private cliVersion: string | null = null;
+  /** Warn once per observed version, not once per session — a resume can span an upgrade. */
+  private warnedCliVersion: string | null = null;
   private statusSnapshot: SessionStatusSnapshot | null = null;
   /** Set during respawn() so the PTY exit handler doesn't propagate "stopped". */
   private respawning = false;
@@ -157,7 +162,12 @@ export class Session extends EventEmitter<SessionEvents> {
     let drainDone: Promise<void> = Promise.resolve();
     if (config.resumeSessionId) {
       const knownPath = join(encodedProjectDir(config.cwd), `${config.resumeSessionId}.jsonl`);
-      this.transcript = new TranscriptWatcher(knownPath, this.bus, this.handleModelChange);
+      this.transcript = new TranscriptWatcher(
+        knownPath,
+        this.bus,
+        this.handleModelChange,
+        this.handleCliVersion,
+      );
       drainDone = this.transcript.start().catch((err) => {
         log.warn("Initial transcript drain failed", { token: this.spawnToken, error: err });
       });
@@ -178,6 +188,7 @@ export class Session extends EventEmitter<SessionEvents> {
     const spawnedAt = Date.now();
     this.pty.spawn({
       cwd: config.cwd,
+      claudeBin: deps.serverConfig.claudeBin,
       model: config.model,
       permissionMode: config.permissionMode,
       cols: deps.serverConfig.pty.cols,
@@ -203,7 +214,12 @@ export class Session extends EventEmitter<SessionEvents> {
       if (this._id) return;
       this.resolveId(sessionId);
       const path = join(encodedProjectDir(this.config.cwd), `${sessionId}.jsonl`);
-      this.transcript = new TranscriptWatcher(path, this.bus, this.handleModelChange);
+      this.transcript = new TranscriptWatcher(
+        path,
+        this.bus,
+        this.handleModelChange,
+        this.handleCliVersion,
+      );
       void this.transcript.start().catch((err) =>
         log.warn("Transcript watcher start failed", {
           token: this.spawnToken,
@@ -225,6 +241,36 @@ export class Session extends EventEmitter<SessionEvents> {
     // but not the 1M variant, so a same-family alias (incl. `opus[1m]`) is
     // preserved and only a true family mismatch is corrected.
     this.reconcileModelFromRuntime();
+    this.emit("metadataChanged");
+  };
+
+  /**
+   * Record which Claude Code build is actually driving this session and warn if
+   * it isn't the one we're verified against.
+   *
+   * This matters because the controller spawns `claude` off PATH (or
+   * `CLAUDE_BIN`), so the binary that runs is decided by the environment, not by
+   * us — a machine with two installs can silently drive a build our keystroke
+   * relays were never tested on. A mismatch is not fatal and must not block the
+   * session: most versions change nothing we depend on. It's logged at warn and
+   * surfaced on `SessionInfo` so the drift is visible when a picker or the
+   * transcript parse starts misbehaving.
+   */
+  private handleCliVersion = (version: string): void => {
+    if (this.cliVersion === version) return;
+    this.cliVersion = version;
+    const status = classifyCliVersion(version);
+    if (status !== "match" && this.warnedCliVersion !== version) {
+      this.warnedCliVersion = version;
+      log.warn("Claude Code version differs from the verified target", {
+        token: this.spawnToken,
+        observed: version,
+        target: CLAUDE_CODE_TARGET_VERSION,
+        status,
+      });
+    } else if (status === "match") {
+      log.info("Claude Code version", { token: this.spawnToken, version });
+    }
     this.emit("metadataChanged");
   };
 
@@ -764,6 +810,7 @@ export class Session extends EventEmitter<SessionEvents> {
     const spawnedAt = Date.now();
     this.pty.spawn({
       cwd: this.config.cwd,
+      claudeBin: this.deps.serverConfig.claudeBin,
       model: this.currentModel,
       permissionMode: this.currentPermissionMode,
       cols: this.deps.serverConfig.pty.cols,
@@ -972,6 +1019,8 @@ export class Session extends EventEmitter<SessionEvents> {
       tags: this.config.tags ?? [],
       createdAt: this.createdAt,
       statusSnapshot: this.statusSnapshot ?? undefined,
+      cliVersion: this.cliVersion ?? undefined,
+      cliVersionStatus: this.cliVersion ? classifyCliVersion(this.cliVersion) : undefined,
     };
   }
 
