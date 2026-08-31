@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "verify:hooks": "node scripts/verify/hooks-fire.mjs",
     "verify:model-switch": "node scripts/verify/model-switch.mjs",
-    "verify:approval-edit": "node scripts/verify/approval-edit.mjs"
+    "verify:approval-edit": "node scripts/verify/approval-edit.mjs",
+    "verify:permission-cycle": "node scripts/verify/permission-cycle.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",
