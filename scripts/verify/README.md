@@ -11,6 +11,7 @@ pnpm build                  # probes read from dist, not src
 pnpm verify:hooks           # do our hook events still fire?
 pnpm verify:model-switch    # does PostModelSwitch still carry requested_model?
 pnpm verify:permission-cycle # does Shift+Tab still walk the cycle we predict?
+pnpm verify:question-relay  # does the picker relay still select the option asked for?
 
 pnpm dev:backend            # required for the next one only
 pnpm verify:approval-edit   # does approving with updatedInput run the edited call?
@@ -42,6 +43,7 @@ binary and about a minute of wall clock.
 | `model-switch.mjs` | `PostModelSwitch` disappearing, or `requested_model` being renamed — which would degrade model reconciliation to family-matching with no error. |
 | `approval-edit.mjs` | The two PermissionRequest response shapes diverging. `updatedInput` is honoured only in the schema form; on the flat form the CLI discards the whole response, loses the allow, and falls back to a terminal picker the phone cannot see — the session hangs with no error. Verified to genuinely fail by reverting the shape. |
 | `permission-cycle.mjs` | The Shift+Tab cycle gaining or losing a stop. `cycleDistance()` writes a keystroke count from `cycleCanIncludeAuto()`; if that count is wrong the session lands in a permission mode the phone did not pick, and the JSONL only records the mode in a periodic metadata block — so the *next prompt runs* under the wrong mode before anything corrects it. Caught `opusplan` being wrongly excluded from auto. |
+| `question-relay.mjs` | The AskUserQuestion picker changing shape under a script that still "succeeds". Drives the real `buildKeystrokes` and asserts the CLI committed the option asked for. Verified to genuinely fail by neutering the DOWN key: the probe reported `committed "Red", not the requested "Green"`. |
 
 ## Every probe has a control
 
@@ -62,22 +64,26 @@ appeared in the cycle" is indistinguishable from "the TUI never rendered."
 
 ## What this does NOT cover
 
-**The AskUserQuestion and plan keystroke relays.** `question.input.ts` and
-`plan.input.ts` drive ink pickers by synthesising navigation, and they are the
-most fragile thing in the project — a picker gaining one option silently changes
-what a digit key selects. They need an interactive PTY and a human reading the
-result, so they remain a manual step:
+**The plan picker.** `plan.input.ts` drives its ink picker by *digit* key, and
+the mapping is position-sensitive: at high context usage the CLI inserts a
+"clear context" approve at position 1, shifting the others down (see the KNOWN
+LIMITATION in that file). Reproducing high context on demand is the hard part,
+so it stays a manual step:
 
 1. Start the controller (`pnpm dev:backend`, `pnpm dev:frontend`).
-2. Ask a session to call `AskUserQuestion`; answer a **non-default** option and
-   confirm the `tool_result` echoes the option you actually picked.
-3. In a plan-mode session, ask for a plan, approve via **Approve · manual**, and
+2. In a plan-mode session, ask for a plan, approve via **Approve · manual**, and
    confirm the mode badge flips to `DEFAULT`.
 
-`permission-cycle.mjs` is the one keystroke relay the harness does cover, and
-only because its outcome is a mode the TUI names on screen — a picker selection
-is not. Treat a green run as "the hook contracts held and Shift+Tab still lands
-where we think", not "the relays work".
+The AskUserQuestion relay **is** covered now, by `question-relay.mjs`. An earlier
+version of this file claimed a picker selection could not be read off the
+screen; that was reasoning, not evidence, and it was wrong. The picker marks the
+focused option with `❯`, and the committed answer is echoed as
+`⎿ · <question> → <answer>` — both machine-readable. The probe reads the cursor
+*position* rather than the label, because stripping ANSI collapses the option
+list onto one line and ink draws each label twice (`1. RedRed`).
+
+Treat a green run as "the hook contracts held, Shift+Tab lands where we think,
+and the question relay selects what it was asked for" — not "every relay works".
 
 ## Configuration
 
