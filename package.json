@@ -13,14 +13,17 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "check": "biome check --write .",
-    "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
+    "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",
     "@types/node": "^22.0.0",
     "dotenv": "^17.2.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.11"
   },
   "workspaces": [
     "packages/*"
