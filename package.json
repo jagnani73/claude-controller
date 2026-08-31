@@ -15,7 +15,9 @@
     "check": "biome check --write .",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:hooks": "node scripts/verify/hooks-fire.mjs",
+    "verify:model-switch": "node scripts/verify/model-switch.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",

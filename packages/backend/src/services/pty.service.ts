@@ -35,7 +35,7 @@ const log = LoggerService.scoped("pty");
  * `CLAUDE_CONFIG_DIR` are legitimately inherited, and `CLAUDE_CODE_EFFORT_LEVEL`
  * is one we set ourselves below.
  */
-const STRIPPED_CHILD_ENV = [
+export const STRIPPED_CHILD_ENV = [
   // Parent-session identity
   "CLAUDECODE",
   "CLAUDE_CODE_CHILD_SESSION",
