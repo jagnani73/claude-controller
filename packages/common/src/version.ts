@@ -27,6 +27,24 @@ export const CLAUDE_CODE_TARGET_VERSION = "2.1.251";
  */
 export const CLAUDE_CODE_REFERENCE_SNAPSHOT_VERSION = "2.1.87";
 
+/**
+ * Oldest CLI build the AskUserQuestion keystroke relay is correct against.
+ *
+ * Two upstream fixes are load-bearing for `question.input.ts`, and below this
+ * version the relay silently produces the *wrong answer* rather than failing —
+ * which is why this is a hard floor and not just drift:
+ *
+ *  - **v2.1.144** made Esc in the preview-notes field return to option
+ *    selection instead of aborting the turn. `buildQuestionKeystrokes` exits
+ *    notes with Esc, so on an older build a note-carrying answer kills the turn.
+ *  - **v2.1.181** stopped multi-select questions dropping a typed "Other"
+ *    free-text answer, which the multi-select `customText` path depends on.
+ *
+ * Never lower this below 2.1.181 without re-verifying both paths against live
+ * PTY captures.
+ */
+export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.181";
+
 /** How an observed CLI version relates to {@link CLAUDE_CODE_TARGET_VERSION}. */
 export type CliVersionStatus = "match" | "older" | "newer";
 
@@ -58,4 +76,13 @@ export function classifyCliVersion(
   const diff = compareVersions(observed, target);
   if (diff === 0) return "match";
   return diff < 0 ? "older" : "newer";
+}
+
+/**
+ * True when the observed build predates a fix the keystroke relays require.
+ * Distinct from a plain version mismatch: this one means answers can be
+ * silently wrong. See {@link CLAUDE_CODE_MINIMUM_VERSION}.
+ */
+export function isBelowMinimumVersion(observed: string): boolean {
+  return compareVersions(observed, CLAUDE_CODE_MINIMUM_VERSION) < 0;
 }

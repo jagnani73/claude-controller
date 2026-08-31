@@ -124,6 +124,8 @@ function buildQuestionKeystrokes(
       // Type text as one chunk — TextInput handles it as a paste-like burst.
       emit(a.customText);
       // Commit the typed value into the "Other" row's selected state.
+      // Requires CLI >= 2.1.181: before that fix, multi-select silently dropped
+      // a typed "Other" answer on submit. See CLAUDE_CODE_MINIMUM_VERSION.
       emit(KEY.RETURN);
     }
     // Space already committed each toggle. In a batch, Tab turns the page (and
@@ -156,6 +158,10 @@ function buildQuestionKeystrokes(
   // yet), then the select Enter commits + advances. The Esc carries a longer
   // settle so the select Enter doesn't arrive while the notes field still owns
   // input (it'd be swallowed and no option would get selected).
+  //
+  // Requires CLI >= 2.1.144: before that fix, Esc in the notes field aborted
+  // the whole turn rather than returning to option selection, so this script
+  // would kill the turn instead of answering. See CLAUDE_CODE_MINIMUM_VERSION.
   //
   // Gated on `hasPreview`: the notes input only exists on the preview view, so
   // driving `n` on a plain question would land in the footer (→ "Chat about

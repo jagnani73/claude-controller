@@ -18,7 +18,12 @@ import type {
   SessionStatus,
   SessionStatusSnapshot,
 } from "common/types";
-import { CLAUDE_CODE_TARGET_VERSION, classifyCliVersion } from "common/version";
+import {
+  CLAUDE_CODE_MINIMUM_VERSION,
+  CLAUDE_CODE_TARGET_VERSION,
+  classifyCliVersion,
+  isBelowMinimumVersion,
+} from "common/version";
 import { LoggerService } from "../services/logger.service.js";
 import { PtyService } from "../services/pty.service.js";
 import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.js";
@@ -260,7 +265,18 @@ export class Session extends EventEmitter<SessionEvents> {
     if (this.cliVersion === version) return;
     this.cliVersion = version;
     const status = classifyCliVersion(version);
-    if (status !== "match" && this.warnedCliVersion !== version) {
+    if (isBelowMinimumVersion(version) && this.warnedCliVersion !== version) {
+      this.warnedCliVersion = version;
+      // Escalated above a plain mismatch: below the floor the AskUserQuestion
+      // relay produces wrong answers rather than failing, so this is a
+      // correctness problem the operator has to see, not version drift.
+      log.error("Claude Code predates fixes the question relay needs", {
+        token: this.spawnToken,
+        observed: version,
+        minimum: CLAUDE_CODE_MINIMUM_VERSION,
+        impact: "AskUserQuestion answers may be silently wrong",
+      });
+    } else if (status !== "match" && this.warnedCliVersion !== version) {
       this.warnedCliVersion = version;
       log.warn("Claude Code version differs from the verified target", {
         token: this.spawnToken,
