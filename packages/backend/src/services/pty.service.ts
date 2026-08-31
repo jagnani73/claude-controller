@@ -9,6 +9,33 @@ import { LoggerService } from "./logger.service.js";
 
 const log = LoggerService.scoped("pty");
 
+/**
+ * Environment markers Claude Code sets to identify *its own* running session.
+ *
+ * These must not reach the child. If the backend is launched from inside a
+ * Claude Code session — the normal dev workflow, and anyone starting the
+ * controller from a Claude Code terminal — the child inherits them and
+ * concludes it is a nested invocation of the parent. `CLAUDE_CODE_CHILD_SESSION`
+ * in particular makes it **disable transcript saving**, which silently removes
+ * the controller's primary data source: no JSONL is written, the session
+ * locator never resolves an id, and the session looks dead rather than broken.
+ *
+ * Deliberately an explicit list, not a `CLAUDE*` prefix sweep: config vars like
+ * `CLAUDE_CONFIG_DIR` are legitimately inherited, and `CLAUDE_CODE_EFFORT_LEVEL`
+ * is one we set ourselves below.
+ */
+const PARENT_SESSION_ENV = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_BRIDGE_SESSION_ID",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SSE_PORT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT",
+] as const;
+
 /** POSIX single-quote wrap; bare flags and plain paths pass through unquoted. */
 function shellQuote(arg: string): string {
   if (arg.startsWith("--") || /^[\w./-]+$/.test(arg)) return arg;
@@ -68,6 +95,13 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
         : ["-c", [options.claudeBin, ...args].map(shellQuote).join(" ")];
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+    const inherited = PARENT_SESSION_ENV.filter((key) => key in env);
+    for (const key of inherited) delete env[key];
+    if (inherited.length > 0) {
+      log.info("Stripped parent Claude Code session markers from child env", {
+        stripped: inherited,
+      });
+    }
     if (options.effort && options.effort !== "auto") {
       // Per-session effort isolation — env wins over settings.json in Claude
       // Code's resolve chain, so a parallel session's `/effort` won't bleed in.
