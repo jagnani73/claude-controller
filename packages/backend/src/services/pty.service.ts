@@ -9,6 +9,12 @@ import { LoggerService } from "./logger.service.js";
 
 const log = LoggerService.scoped("pty");
 
+/** POSIX single-quote wrap; bare flags and plain paths pass through unquoted. */
+function shellQuote(arg: string): string {
+  if (arg.startsWith("--") || /^[\w./-]+$/.test(arg)) return arg;
+  return `'${arg.replaceAll("'", `'\\''`)}'`;
+}
+
 export class PtyService extends EventEmitter<PtyManagerEvents> {
   private process: pty.IPty | null = null;
 
@@ -39,8 +45,13 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
       args.push("--settings", settingsPath);
     }
 
+    // Log the launch command: on a machine with more than one Claude Code
+    // install, which binary runs is decided by PATH order, and the resulting
+    // version drift is otherwise invisible until a relay misbehaves. The version
+    // that actually ran is reported separately from the transcript.
     log.info("Spawning Claude Code", {
       cwd: options.cwd,
+      claudeBin: options.claudeBin,
       model: options.model,
       permissionMode: options.permissionMode,
       cols: options.cols,
@@ -51,15 +62,10 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
     const shell = process.platform === "win32" ? "cmd.exe" : "/bin/bash";
     const shellArgs =
       process.platform === "win32"
-        ? ["/c", "claude", ...args]
-        : [
-            "-c",
-            `claude ${args
-              .map((a) =>
-                a.startsWith("--") || /^[\w./-]+$/.test(a) ? a : `'${a.replaceAll("'", `'\\''`)}'`,
-              )
-              .join(" ")}`,
-          ];
+        ? // node-pty quotes argv entries containing spaces, so an absolute
+          // CLAUDE_BIN path survives without hand-quoting here.
+          ["/c", options.claudeBin, ...args]
+        : ["-c", [options.claudeBin, ...args].map(shellQuote).join(" ")];
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
     if (options.effort && options.effort !== "auto") {

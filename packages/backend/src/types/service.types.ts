@@ -11,6 +11,11 @@ export interface ServerConfig {
   /** Whether to write PTY `.raw` captures — dev only, off in production. */
   capturePty: boolean;
   workDir: string;
+  /**
+   * Command used to launch Claude Code — bare `claude` (resolved off PATH) unless
+   * `CLAUDE_BIN` pins an absolute path. Pin it when PATH is ambiguous.
+   */
+  claudeBin: string;
   pty: {
     cols: number;
     rows: number;
@@ -21,6 +26,11 @@ export interface ServerConfig {
 
 export interface PtySpawnOptions {
   cwd: string;
+  /**
+   * Command used to launch Claude Code — bare `claude` (PATH-resolved) or the
+   * absolute path pinned via `CLAUDE_BIN`. See `ServerConfig.claudeBin`.
+   */
+  claudeBin: string;
   model: ClaudeModel;
   permissionMode: PermissionMode;
   cols: number;

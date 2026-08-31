@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import type { ServerConfig } from "./types/index.js";
 import {
+  DEFAULT_CLAUDE_BIN,
   DEFAULT_DUMP_DIR,
   DEFAULT_HOOKS_PORT,
   DEFAULT_HOST,
@@ -25,6 +26,7 @@ export function loadConfig(): ServerConfig {
     // PTY captures are a debug aid only — never write them in production.
     capturePty: !isProduction(),
     workDir: resolve(workDir),
+    claudeBin: process.env.CLAUDE_BIN?.trim() || DEFAULT_CLAUDE_BIN,
     pty: {
       cols: Number(process.env.PTY_COLS || DEFAULT_PTY_COLS),
       rows: Number(process.env.PTY_ROWS || DEFAULT_PTY_ROWS),

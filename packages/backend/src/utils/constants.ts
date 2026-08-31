@@ -27,6 +27,17 @@ export const DEFAULT_DUMP_DIR = "./dump";
 export const DEFAULT_PTY_COLS = 120;
 export const DEFAULT_PTY_ROWS = 40;
 
+/**
+ * Command used to launch Claude Code. Bare name by default, so it resolves off
+ * PATH like a normal `claude` invocation.
+ *
+ * Override with `CLAUDE_BIN` (absolute path) when PATH is ambiguous — a machine
+ * with more than one install resolves by PATH order, which can silently drive a
+ * different CLI build than intended. The version the session actually ran is
+ * always reported from the transcript (see `Session.handleCliVersion`).
+ */
+export const DEFAULT_CLAUDE_BIN = "claude";
+
 /** Whether the server is running in production mode. */
 export function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
