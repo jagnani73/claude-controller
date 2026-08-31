@@ -10,21 +10,33 @@ import { LoggerService } from "./logger.service.js";
 const log = LoggerService.scoped("pty");
 
 /**
- * Environment markers Claude Code sets to identify *its own* running session.
+ * Environment variables that must never reach the spawned CLI. Two groups, both
+ * of which fail *silently* — the session runs and looks healthy while a load-
+ * bearing signal is missing.
  *
- * These must not reach the child. If the backend is launched from inside a
- * Claude Code session — the normal dev workflow, and anyone starting the
- * controller from a Claude Code terminal — the child inherits them and
- * concludes it is a nested invocation of the parent. `CLAUDE_CODE_CHILD_SESSION`
- * in particular makes it **disable transcript saving**, which silently removes
- * the controller's primary data source: no JSONL is written, the session
- * locator never resolves an id, and the session looks dead rather than broken.
+ * 1. **Parent-session identity markers.** If the backend is launched from inside
+ *    a Claude Code session — the normal dev workflow, and anyone starting the
+ *    controller from a Claude Code terminal — the child inherits these and
+ *    concludes it is a nested invocation. `CLAUDE_CODE_CHILD_SESSION` in
+ *    particular makes it **disable transcript saving**, removing the
+ *    controller's primary data source: no JSONL, the locator never resolves an
+ *    id, and the session looks dead rather than broken.
+ *
+ * 2. **Safe mode** (`CLAUDE_CODE_SAFE_MODE`, added upstream in 2.1.169) starts
+ *    the CLI with all customizations disabled — *including hooks*, which are the
+ *    controller's entire control surface: approvals, the plan card, compaction,
+ *    statusline metadata. Verified by direct experiment against 2.1.251: with a
+ *    `PreToolUse` HTTP hook injected via `--settings`, a control run fired 1
+ *    hook while both `--safe-mode` and `CLAUDE_CODE_SAFE_MODE=1` fired 0 — each
+ *    still exiting 0 with the tool executed, so there is no error to notice.
+ *    The controller cannot function without hooks, so it must never inherit it.
  *
  * Deliberately an explicit list, not a `CLAUDE*` prefix sweep: config vars like
  * `CLAUDE_CONFIG_DIR` are legitimately inherited, and `CLAUDE_CODE_EFFORT_LEVEL`
  * is one we set ourselves below.
  */
-const PARENT_SESSION_ENV = [
+const STRIPPED_CHILD_ENV = [
+  // Parent-session identity
   "CLAUDECODE",
   "CLAUDE_CODE_CHILD_SESSION",
   "CLAUDE_CODE_SESSION_ID",
@@ -34,6 +46,8 @@ const PARENT_SESSION_ENV = [
   "CLAUDE_CODE_EXECPATH",
   "CLAUDE_PID",
   "CLAUDE_EFFORT",
+  // Disables hooks entirely — see (2) above
+  "CLAUDE_CODE_SAFE_MODE",
 ] as const;
 
 /** POSIX single-quote wrap; bare flags and plain paths pass through unquoted. */
@@ -95,11 +109,21 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
         : ["-c", [options.claudeBin, ...args].map(shellQuote).join(" ")];
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-    const inherited = PARENT_SESSION_ENV.filter((key) => key in env);
+    const inherited = STRIPPED_CHILD_ENV.filter((key) => key in env);
     for (const key of inherited) delete env[key];
     if (inherited.length > 0) {
-      log.info("Stripped parent Claude Code session markers from child env", {
-        stripped: inherited,
+      log.info("Stripped inherited Claude Code env from child", { stripped: inherited });
+    }
+    // Reported separately: safe mode is the operator's own setting, so silently
+    // overriding it would be surprising. Dropped regardless — the controller has
+    // no working mode without hooks.
+    //
+    // error, not warn: `warn` is outside the default `info,error` log level, so
+    // a warning here would itself be silent — the exact failure this guards
+    // against (same reasoning as statusLineDumpScriptPath).
+    if (inherited.includes("CLAUDE_CODE_SAFE_MODE")) {
+      log.error("CLAUDE_CODE_SAFE_MODE was set and has been dropped for this session", {
+        reason: "safe mode disables hooks, which the controller depends on entirely",
       });
     }
     if (options.effort && options.effort !== "auto") {
