@@ -18,7 +18,7 @@ import type {
   SessionStatus,
   SessionStatusSnapshot,
 } from "common/types";
-import { isEffortLevel } from "common/types";
+import { isClaudeModel, isEffortLevel } from "common/types";
 import {
   CLAUDE_CODE_MINIMUM_VERSION,
   CLAUDE_CODE_TARGET_VERSION,
@@ -253,6 +253,39 @@ export class Session extends EventEmitter<SessionEvents> {
   };
 
   /**
+   * Apply an out-of-band `/model` switch reported by the `PostModelSwitch` hook.
+   *
+   * More precise than the transcript path this complements: the hook carries
+   * `requested_model` — the alias itself — whereas the transcript only exposes
+   * the resolved id, which cannot distinguish `opus` from `opus[1m]`. So this
+   * corrects the alias exactly, where `reconcileModelFromRuntime` can only
+   * detect a whole-family mismatch.
+   *
+   * Both paths stay: the hook fires only on an explicit switch and only on CLI
+   * >= 2.1.251, so the transcript remains the catch-all for everything else
+   * (a wrong resume default, an older build).
+   */
+  private handleModelSwitch(requestedModel: string | undefined, toModel: string): void {
+    this.currentModelId = toModel;
+    if (this.respawning || this.pendingModel !== null) return;
+    if (!requestedModel || !isClaudeModel(requestedModel)) {
+      // No alias, or one we don't model — fall back to family reconciliation
+      // against the resolved id we just recorded.
+      if (this.reconcileModelFromRuntime()) this.emit("metadataChanged");
+      return;
+    }
+    if (this.currentModel === requestedModel) return;
+    log.info("Applied model switch from hook", {
+      token: this.spawnToken,
+      from: this.currentModel,
+      to: requestedModel,
+      resolved: toModel,
+    });
+    this.currentModel = requestedModel;
+    this.emit("metadataChanged");
+  }
+
+  /**
    * Reconcile the stored effort level against what the transcript says the turn
    * actually ran at (recorded on every assistant message since v2.1.212).
    *
@@ -409,6 +442,10 @@ export class Session extends EventEmitter<SessionEvents> {
     // Mirror JSONL permission-mode entries onto our state so unrelated
     // metadataChanged broadcasts don't ship a stale config value.
     this._bus.on("event", (event) => {
+      if (event.kind === "model_switch") {
+        this.handleModelSwitch(event.requestedModel, event.toModel);
+        return;
+      }
       if (event.kind !== "permission_mode") return;
       const mode = event.mode as PermissionMode;
       if (this.currentPermissionMode === mode) return;

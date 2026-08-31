@@ -50,6 +50,17 @@ export type SessionBusEvent =
       mode: string;
     }
   | {
+      kind: "model_switch";
+      sessionId: string;
+      timestamp: string;
+      /** Alias the user asked for ("opus"), when the switch carried one. */
+      requestedModel?: string;
+      /** Resolved model id after the switch ("claude-opus-5"). */
+      toModel: string;
+      /** What triggered it; "command" for `/model`. */
+      source?: string;
+    }
+  | {
       kind: "compact_start";
       sessionId: string;
       timestamp: string;

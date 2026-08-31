@@ -25,6 +25,27 @@ export type SessionStatus =
  */
 export type ClaudeModel = "opus" | "opus[1m]" | "opusplan" | "sonnet" | "sonnet[1m]" | "haiku";
 
+/** Runtime-checkable list of {@link ClaudeModel} for validating untrusted input. */
+export const CLAUDE_MODELS: readonly ClaudeModel[] = [
+  "opus",
+  "opus[1m]",
+  "opusplan",
+  "sonnet",
+  "sonnet[1m]",
+  "haiku",
+];
+
+/**
+ * Narrow an arbitrary string to a {@link ClaudeModel}.
+ *
+ * Claude Code accepts aliases we don't model (and raw model ids, and
+ * gateway-specific spellings), so anything unrecognized must be ignored rather
+ * than coerced into the union.
+ */
+export function isClaudeModel(value: string): value is ClaudeModel {
+  return (CLAUDE_MODELS as readonly string[]).includes(value);
+}
+
 /**
  * Effort levels accepted by `/effort`. Gating notes:
  *  - `low | medium | high`: any model that supports effort (i.e. not Haiku)

@@ -124,9 +124,18 @@ function listChildEntries(dirPath: string, workDir: string): DirEntry[] {
   }
 }
 
-/** Translate a SessionBusEvent into the corresponding WsMessage envelope. */
-function busEventToMessage(event: SessionBusEvent): ServerMessage {
+/**
+ * Translate a SessionBusEvent into the corresponding WsMessage envelope.
+ *
+ * Returns null for events that are internal to the backend and have no client
+ * counterpart — `model_switch` drives `Session`'s stored alias, and the result
+ * already reaches the client as `session_metadata`, so forwarding it too would
+ * be redundant and would need a protocol addition the frontend doesn't use.
+ */
+function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
   switch (event.kind) {
+    case "model_switch":
+      return null;
     case "user_prompt":
       return {
         type: "user_prompt",
@@ -239,7 +248,8 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
   const total = bus.getEventLogSize();
   const startIdx = Math.max(0, total - INITIAL_REPLAY);
   for (const event of bus.getEventLogSlice(startIdx, total)) {
-    send(ws, busEventToMessage(event));
+    const msg = busEventToMessage(event);
+    if (msg) send(ws, msg);
   }
   send(ws, {
     type: "history_available",
@@ -249,7 +259,8 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
   });
 
   const onEvent = (event: SessionBusEvent) => {
-    send(ws, busEventToMessage(event));
+    const msg = busEventToMessage(event);
+    if (msg) send(ws, msg);
   };
   const onExit = () => {
     send(ws, {
@@ -675,7 +686,10 @@ function handleMessage(
       const end = Math.min(total, Math.max(0, msg.beforeIndex));
       const limit = Math.max(1, Math.min(100, msg.limit));
       const start = Math.max(0, end - limit);
-      const events = bus.getEventLogSlice(start, end).map(busEventToMessage);
+      const events = bus
+        .getEventLogSlice(start, end)
+        .map(busEventToMessage)
+        .filter((m): m is ServerMessage => m !== null);
       send(ws, {
         type: "history_page",
         sessionId: msg.sessionId,

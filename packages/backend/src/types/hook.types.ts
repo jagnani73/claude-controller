@@ -42,11 +42,40 @@ export interface PreToolUsePayload extends BaseHookPayload {
   tool_use_id: string;
 }
 
+/**
+ * Fires when the session's model changes (added upstream in 2.1.251). We
+ * register only `PostModelSwitch` — `PreModelSwitch` exists to block or confirm
+ * a switch, which we never want to do.
+ *
+ * `requested_model` is the reason this is worth having: it is the *alias* the
+ * user asked for ("opus", "opus[1m]"), where the transcript only ever exposes
+ * the resolved id ("claude-opus-5"). The id cannot distinguish the 1M variant,
+ * so transcript-based reconciliation can only correct whole-family mismatches;
+ * this can correct the alias exactly.
+ *
+ * Shape captured from a live 2.1.251 run rather than the frozen source snapshot,
+ * which predates the event. `source` was "command" for a `/model opus` switch;
+ * other values are not yet observed, so it is typed as a plain string.
+ */
+export interface ModelSwitchPayload extends BaseHookPayload {
+  hook_event_name: "PostModelSwitch";
+  /** Resolved model id before the switch, e.g. "claude-sonnet-5". */
+  from_model: string;
+  /** Resolved model id after the switch, e.g. "claude-opus-5". */
+  to_model: string;
+  /** The alias as requested, e.g. "opus". Absent if the switch had no alias. */
+  requested_model?: string;
+  /** What triggered the switch; "command" for `/model`. */
+  source?: string;
+  prompt_id?: string;
+}
+
 export type HookPayload =
   | PermissionRequestPayload
   | PreCompactPayload
   | PostCompactPayload
-  | PreToolUsePayload;
+  | PreToolUsePayload
+  | ModelSwitchPayload;
 
 export type HookEventName = HookPayload["hook_event_name"];
 

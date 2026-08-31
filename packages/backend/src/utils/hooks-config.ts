@@ -19,6 +19,12 @@ const HOOK_SYNC: readonly { event: HookEventName; matcher?: string }[] = [
   // doesn't fire for every tool; the handler responds {} (continue) and uses it
   // purely to surface the plan card in time.
   { event: "PreToolUse", matcher: "ExitPlanMode" },
+  // Structured signal for an out-of-band `/model`, carrying the requested alias.
+  // Post, not Pre: PreModelSwitch exists to block or confirm a switch and we
+  // never want to do either. Sessions on a CLI older than 2.1.251 simply never
+  // fire it — an unrecognized event name no longer invalidates the settings
+  // file (upstream 2.1.101), so registering it is safe on older builds.
+  { event: "PostModelSwitch" },
 ];
 
 /**

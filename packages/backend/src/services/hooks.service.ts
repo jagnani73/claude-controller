@@ -3,6 +3,7 @@ import type {
   HookEventName,
   HookPayload,
   HookResponse,
+  ModelSwitchPayload,
   PermissionRequestPayload,
   PostCompactPayload,
   PreCompactPayload,
@@ -153,7 +154,29 @@ export class HooksService {
         return this.handlePostCompact(bus, payload as PostCompactPayload);
       case "PreToolUse":
         return this.handlePreToolUse(bus, payload as PreToolUsePayload);
+      case "PostModelSwitch":
+        return this.handleModelSwitch(bus, payload as ModelSwitchPayload);
     }
+  }
+
+  /**
+   * An out-of-band `/model` switch. Unlike the transcript's model id this
+   * carries `requested_model` — the alias itself — so the session can correct
+   * its stored alias exactly instead of inferring a family match.
+   */
+  private async handleModelSwitch(
+    bus: SessionBus,
+    payload: ModelSwitchPayload,
+  ): Promise<HookResponse> {
+    bus.push({
+      kind: "model_switch",
+      sessionId: bus.sessionId,
+      timestamp: new Date().toISOString(),
+      requestedModel: payload.requested_model,
+      toModel: payload.to_model,
+      source: payload.source,
+    });
+    return {};
   }
 
   /**
