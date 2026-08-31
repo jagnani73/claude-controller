@@ -21,26 +21,48 @@ interface SettingsJson {
   statusLine?: StatusLineSettings | string;
 }
 
+/** A usage window in the statusline payload's snake_case shape. */
+interface StatusLineRateWindow {
+  used_percentage: number;
+  resets_at: number;
+}
+
 /**
- * Payload matches Claude Code's `StatusLineCommandInput`. We fill what we can
- * (session id, cwd, model, permission mode) and zero out fields that require
- * API-level knowledge (cost, tokens, rate limits) — we're a PTY relay, not an
- * API client. Scripts that only use model/cwd/mode render accurately; ones
- * that print cost/token stats will see zeros.
+ * Claude Code's `StatusLineCommandInput`, as it actually arrives on disk.
+ *
+ * Purely descriptive — nothing here constructs one. Claude Code writes the
+ * payload via our dump script and we forward the raw JSON string to the user's
+ * statusline command untouched, so this type documents the dump and types any
+ * future parse of it. Verified field-by-field against captured payloads in
+ * `dump/statusline/`; fields marked "unverified" come from the changelog and
+ * postdate those captures.
+ *
+ * Optionality reflects observed reality: a field is optional when it was absent
+ * from at least one capture, because Claude Code emits several of these
+ * conditionally (a repo only when one is detected, a worktree only inside one).
  */
 export interface StatusLinePayload {
   session_id: string;
   transcript_path: string;
   cwd: string;
-  permission_mode: string;
+  /** Resolved reasoning effort — a concrete level even when the session is `auto`. */
+  effort: { level: string };
+  /** Set by `/rename`; absent on unnamed sessions. */
+  session_name?: string;
   model: { id: string; display_name: string };
   workspace: {
     current_dir: string;
     project_dir: string;
     added_dirs: string[];
+    /** Present when a git remote is detected (added upstream in 2.1.145). */
+    repo?: { host: string; owner: string; name: string };
+    /** Present only inside a linked git worktree (added upstream in 2.1.97). */
+    git_worktree?: string;
   };
   output_style: { name: string };
   version: string;
+  fast_mode: boolean;
+  thinking: { enabled: boolean };
   cost: {
     total_cost_usd: number;
     total_duration_ms: number;
@@ -52,11 +74,26 @@ export interface StatusLinePayload {
     total_input_tokens: number;
     total_output_tokens: number;
     context_window_size: number;
-    current_usage: number;
+    /** An object, not a scalar — this was previously typed `number`. */
+    current_usage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens: number;
+      cache_read_input_tokens: number;
+    };
     used_percentage: number;
     remaining_percentage: number;
   };
   exceeds_200k_tokens: boolean;
+  /** Read by `Session.absorbDumpedPayload`; was missing from this type entirely. */
+  rate_limits?: {
+    five_hour?: StatusLineRateWindow;
+    seven_day?: StatusLineRateWindow;
+    /** Unverified: documented in 2.1.251, postdates our captures. */
+    spend_limit?: StatusLineRateWindow;
+  };
+  /** Unverified: documented in 2.1.251, postdates our captures. */
+  prompt_cache?: Record<string, unknown>;
 }
 
 const RUN_TIMEOUT_MS = 5000;
@@ -153,11 +190,7 @@ async function tryReadSettings(path: string): Promise<SettingsJson | null> {
  * returns null on timeout / non-zero exit so a broken script never crashes
  * the session loop.
  */
-export async function runStatusLine(
-  command: string,
-  payload: StatusLinePayload | string,
-): Promise<string | null> {
-  const payloadJson = typeof payload === "string" ? payload : JSON.stringify(payload);
+export async function runStatusLine(command: string, payloadJson: string): Promise<string | null> {
   return await new Promise<string | null>((resolve) => {
     const isWindows = platform() === "win32";
     const direct = isWindows ? directBashSpawn(command) : null;
