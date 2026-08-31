@@ -21,7 +21,12 @@ pnpm build                  # Build all packages
 pnpm build:backend          # Build backend only
 pnpm build:frontend         # Build frontend only
 pnpm start                  # Launch built backend + Caddy together (prod run; needs both built)
+pnpm test                   # Vitest unit tests — pure logic, fast, free
+pnpm verify:hooks           # CLI probe: do our hook events still fire?  (spawns Claude, costs credits)
+pnpm verify:model-switch    # CLI probe: is the PostModelSwitch payload intact?  (ditto)
 ```
+
+Tests live in `packages/*/tests/` (outside `src`, which is each package's build `rootDir`) and cover pure logic only. Anything needing a real CLI lives in `scripts/verify/` — see its README, and note it deliberately does **not** cover the keystroke relays.
 
 Use `pnpm lint` to verify correctness — not full builds. For TypeScript projects, also run `npx tsc --noEmit -p packages/backend` / `packages/frontend`.
 
@@ -109,7 +114,7 @@ Claude Code's `AskUserQuestion` is an interactive ink picker, not structured inp
 
 We drive a CLI we neither ship nor pin, and everything fragile here — the AskUserQuestion and ExitPlanMode keystroke scripts, JSONL entry shapes, hook payload contracts — was reverse-engineered against one specific build. Drift fails *silently*: a picker gains an option and a digit keystroke selects the wrong one; a JSONL field is renamed and the watcher goes quiet.
 
-- **One canonical number.** `CLAUDE_CODE_TARGET_VERSION` in `packages/common/src/version.ts` is the build we're verified against. Bump it only after re-verifying the relays against the newer CLI. Don't scatter "verified against vX" into comments — point at the constant instead. *Behavioral minimums* are different and stay inline (e.g. "since v2.1.126 the JSONL isn't pre-created") — those are facts about when a behavior appeared, not claims about what we tested.
+- **One canonical number.** `CLAUDE_CODE_TARGET_VERSION` in `packages/common/src/version.ts` is the build we're verified against. Bump it only after re-verifying the relays against the newer CLI — run `pnpm verify:hooks` and `pnpm verify:model-switch` (see `scripts/verify/README.md`), then do the manual keystroke-relay pass that harness deliberately doesn't cover. Don't scatter "verified against vX" into comments — point at the constant instead. *Behavioral minimums* are different and stay inline (e.g. "since v2.1.126 the JSONL isn't pre-created") — those are facts about when a behavior appeared, not claims about what we tested.
 - **The runtime version comes from the transcript**, not the statusline. Claude Code stamps `version` on every `user`/`assistant`/`system`/`attachment` JSONL entry; `TranscriptWatcher` reports changes via `onCliVersion` → `Session.handleCliVersion`, which warns on mismatch and surfaces `cliVersion` + `cliVersionStatus` on `SessionInfo`. The statusline payload carries a version too, but `absorbDumpedPayload` only runs when the user has a statusline command configured — so it isn't a dependable source. A mismatch is **never fatal**; most releases change nothing we touch.
 - **Which binary runs is an environment decision.** The PTY spawns bare `claude` off PATH by default, so a machine with two installs resolves by PATH order. Pin `CLAUDE_BIN` (absolute path) in `packages/backend/.env` when that's ambiguous. The launch command is logged at spawn; the version that actually ran is reported separately from the transcript.
 - **`CLAUDE_CODE_MINIMUM_VERSION` is a hard floor, not drift.** The AskUserQuestion relay depends on two upstream fixes — v2.1.144 (Esc in the preview-notes field returns to option selection instead of aborting the turn) and v2.1.181 (multi-select stopped dropping a typed "Other" answer). Below either, the relay produces a *wrong answer* rather than failing, so it logs at **error**, not warn. Never lower it without re-verifying both paths against live PTY captures.
