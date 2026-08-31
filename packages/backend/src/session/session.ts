@@ -137,6 +137,14 @@ export class Session extends EventEmitter<SessionEvents> {
   get model(): ClaudeModel {
     return this.currentModel;
   }
+  /**
+   * False once the PTY is gone. `SessionManager.stop` deliberately leaves a
+   * stopped session in `byId` (only `remove` evicts it), so anything reusing a
+   * registry hit has to check this or it will hand back a corpse.
+   */
+  get alive(): boolean {
+    return this.status !== "stopped" && this.status !== "error";
+  }
 
   constructor(config: SessionConfig, deps: SessionDeps) {
     super();
