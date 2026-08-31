@@ -21,6 +21,10 @@
     "./model": {
       "import": "./dist/model.js",
       "types": "./dist/model.d.ts"
+    },
+    "./version": {
+      "import": "./dist/version.js",
+      "types": "./dist/version.d.ts"
     }
   },
   "scripts": {

@@ -1,3 +1,9 @@
+import type { CliVersionStatus } from "../version.js";
+
+// Re-exported so consumers of `common/types` can name the type of
+// `SessionInfo.cliVersionStatus` without reaching into `common/version`.
+export type { CliVersionStatus };
+
 // ─── Session metadata ─────────────────────────────────────────────
 
 /** Session permission modes matching Claude Code CLI */
@@ -92,6 +98,20 @@ export interface SessionInfo {
   createdAt: number;
   /** Live snapshot from Claude Code's statusline payload, when available. */
   statusSnapshot?: SessionStatusSnapshot;
+  /**
+   * Claude Code version actually driving this session, read from the transcript
+   * (the CLI stamps it on every user/assistant/system entry). Undefined until
+   * the first versioned entry lands. Sourced from the transcript rather than the
+   * statusline payload because the latter only flows when the user has a
+   * statusline command configured.
+   */
+  cliVersion?: string;
+  /**
+   * How `cliVersion` compares to `CLAUDE_CODE_TARGET_VERSION` — the build our
+   * keystroke relays and JSONL parsing are verified against. Anything but
+   * "match" means the relays may be driving a CLI they were not tested on.
+   */
+  cliVersionStatus?: CliVersionStatus;
 }
 
 /** Directory listing entry */
