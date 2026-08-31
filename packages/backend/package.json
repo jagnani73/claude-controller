@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsc-watch --onSuccess \"node dist/index.js\"",
+    "dev": "cross-env NODE_ENV=development tsc-watch --onSuccess \"node dist/index.js\"",
     "build": "tsc",
     "start": "node dist/index.js",
     "clean": "rm -rf dist"
@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
+    "cross-env": "^10.1.0",
     "tsc-watch": "^6.2.0",
     "typescript": "^5.7.0"
   }
