@@ -8,9 +8,28 @@ export function claudeProjectsRoot(): string {
   return join(homedir(), ".claude", "projects");
 }
 
-/** Map a cwd to Claude Code's encoded project folder. */
+/**
+ * Map a cwd to Claude Code's encoded project folder.
+ *
+ * Claude Code replaces **every non-alphanumeric character** with `-`, not just
+ * the path separators. Verified against live `~/.claude/sessions/<pid>.json`
+ * entries and the project dirs they resolve to, e.g.
+ *
+ *   D:\Education\NTU\Courses\Trimester 1\[SC6103] DISTRIBUTED SYSTEMS\proj
+ *   -> D--Education-NTU-Courses-Trimester-1--SC6103--DISTRIBUTED-SYSTEMS-proj
+ *
+ * An earlier version replaced only `[:\\/]`, which silently derived a
+ * non-existent directory for any path containing a space, bracket, dot or
+ * underscore — the watcher then tailed nothing and the session produced no
+ * transcript events at all.
+ *
+ * Known limit: since v2.1.224 the CLI disambiguates paths over ~200 chars under
+ * a scheme we have not verified, so this can still derive the wrong directory
+ * for very deep paths.
+ */
 export function encodedProjectDir(cwd: string): string {
-  const encoded = cwd.replaceAll(/[:\\/]/g, "-");
+  const override = process.env.CLAUDE_CODE_PROJECT_DIR_NAME?.trim();
+  const encoded = override || cwd.replaceAll(/[^a-zA-Z0-9]/g, "-");
   return join(claudeProjectsRoot(), encoded);
 }
 
