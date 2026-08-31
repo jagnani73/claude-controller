@@ -64,16 +64,19 @@ describe("classifyCliVersion", () => {
 describe("isBelowMinimumVersion", () => {
   it("is exclusive at the boundary", () => {
     expect(isBelowMinimumVersion(CLAUDE_CODE_MINIMUM_VERSION)).toBe(false);
-    expect(isBelowMinimumVersion("2.1.180")).toBe(true);
-    expect(isBelowMinimumVersion("2.1.181")).toBe(false);
+    expect(isBelowMinimumVersion("2.1.234")).toBe(true);
+    expect(isBelowMinimumVersion("2.1.235")).toBe(false);
   });
 
   it("flags the builds whose AskUserQuestion fixes we depend on", () => {
     // < 2.1.144: Esc in the notes field aborted the turn.
     // < 2.1.181: multi-select dropped a typed "Other" answer.
+    // < 2.1.235: arrow-then-Enter in quick succession committed the previously
+    //   highlighted option — which is every non-default answer the relay makes.
     expect(isBelowMinimumVersion("2.1.87")).toBe(true);
     expect(isBelowMinimumVersion("2.1.143")).toBe(true);
     expect(isBelowMinimumVersion("2.1.144")).toBe(true);
+    expect(isBelowMinimumVersion("2.1.181")).toBe(true);
   });
 });
 

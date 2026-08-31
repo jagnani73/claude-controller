@@ -30,7 +30,7 @@ export const CLAUDE_CODE_REFERENCE_SNAPSHOT_VERSION = "2.1.87";
 /**
  * Oldest CLI build the AskUserQuestion keystroke relay is correct against.
  *
- * Two upstream fixes are load-bearing for `question.input.ts`, and below this
+ * Three upstream fixes are load-bearing for `question.input.ts`, and below this
  * version the relay silently produces the *wrong answer* rather than failing —
  * which is why this is a hard floor and not just drift:
  *
@@ -39,11 +39,19 @@ export const CLAUDE_CODE_REFERENCE_SNAPSHOT_VERSION = "2.1.87";
  *    notes with Esc, so on an older build a note-carrying answer kills the turn.
  *  - **v2.1.181** stopped multi-select questions dropping a typed "Other"
  *    free-text answer, which the multi-select `customText` path depends on.
+ *  - **v2.1.235**: "arrow keys and Enter pressed in quick succession now select
+ *    the option you navigated to instead of the previously highlighted one".
+ *    That is exactly what the relay emits — `buildKeystrokes` pairs `\x1b[B`
+ *    with `\r` only `CHUNK_DELAY_MS` (35ms) apart — so below it *every* answer
+ *    needing navigation commits the previously highlighted option instead. It
+ *    is the most systematic of the three: not an edge case in notes or
+ *    free-text, but any non-default pick.
  *
- * Never lower this below 2.1.181 without re-verifying both paths against live
- * PTY captures.
+ * Never lower this without re-verifying each path against live PTY captures.
+ * `pnpm verify:question-relay` covers the 2.1.235 case directly: it drives the
+ * real script at a non-default option and asserts what the CLI committed.
  */
-export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.181";
+export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.235";
 
 /** How an observed CLI version relates to {@link CLAUDE_CODE_TARGET_VERSION}. */
 export type CliVersionStatus = "match" | "older" | "newer";
