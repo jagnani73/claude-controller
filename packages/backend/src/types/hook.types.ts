@@ -79,10 +79,38 @@ export type HookPayload =
 
 export type HookEventName = HookPayload["hook_event_name"];
 
-/** Subset of the hook response contract we actually return. */
-export interface HookResponse {
-  hookSpecificOutput?: {
-    permissionDecision?: "allow" | "deny";
-    permissionDecisionReason?: string;
-  };
-}
+/**
+ * Subset of the hook response contract we actually return.
+ *
+ * NB the shape: `claude-code-source` (v2.1.87) defines PermissionRequest's
+ * output as `{ hookEventName, decision: { behavior, updatedInput } }`, which is
+ * *not* what we send — we send the flatter `permissionDecision` form, and it is
+ * verified working against 2.1.251 for both allow and deny. The snapshot
+ * predates the build we drive, so live behaviour wins over the schema; don't
+ * "fix" this to match the snapshot without re-testing an actual approval.
+ */
+export type HookResponse =
+  | Record<string, never>
+  | {
+      /** Flat form — verified working on 2.1.251 for plain allow/deny. */
+      hookSpecificOutput: {
+        permissionDecision: "allow" | "deny";
+        permissionDecisionReason?: string;
+      };
+    }
+  | {
+      /**
+       * Schema form, required to carry `updatedInput`.
+       *
+       * Adding `updatedInput` to the flat form does NOT work: the CLI ignores
+       * the whole response and falls through to its own terminal picker, which
+       * the phone cannot see — the session then hangs with no error anywhere.
+       * Verified against 2.1.251 by observing the picker in a PTY capture.
+       */
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest";
+        decision:
+          | { behavior: "allow"; updatedInput?: unknown }
+          | { behavior: "deny"; message?: string };
+      };
+    };

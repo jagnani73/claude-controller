@@ -433,6 +433,7 @@ function handleMessage(
         msg.toolUseId,
         msg.decision,
         msg.reason,
+        msg.updatedInput,
       );
       if (!ok) {
         log.warn("No pending approval to resolve", {

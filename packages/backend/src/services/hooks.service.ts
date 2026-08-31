@@ -82,17 +82,38 @@ export class HooksService {
     return `http://${LOOPBACK_HOST}:${this.port}`;
   }
 
-  /** Resolve a pending approval from the phone. Returns false if not pending. */
+  /**
+   * Resolve a pending approval from the phone. Returns false if not pending.
+   *
+   * `updatedInput` approves a *corrected* call: Claude Code substitutes it for
+   * the tool's input wholesale. Only meaningful with `allow`, and deliberately
+   * dropped on `deny` so a denial can never smuggle in a modified call.
+   */
   resolveApproval(
     sessionId: string,
     toolUseId: string,
     decision: "allow" | "deny",
     reason?: string,
+    updatedInput?: unknown,
   ): boolean {
     const key = approvalKey(sessionId, toolUseId);
     const resolver = this.pendingApprovals.get(key);
     if (!resolver) return false;
     this.pendingApprovals.delete(key);
+    if (decision === "allow" && updatedInput !== undefined) {
+      // Only the schema form carries updatedInput. The flat form silently
+      // discards it AND loses the allow, dropping the CLI into its own terminal
+      // picker — see HookResponse.
+      log.info("Approving with edited input", { sessionId, toolUseId });
+      resolver({
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow", updatedInput },
+        },
+      });
+      return true;
+    }
+    // Unedited path keeps the flat form, which is the one verified in use.
     resolver({
       hookSpecificOutput: {
         permissionDecision: decision,

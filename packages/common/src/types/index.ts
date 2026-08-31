@@ -339,6 +339,15 @@ export type ClientMessage =
       toolUseId: string;
       decision: "allow" | "deny";
       reason?: string;
+      /**
+       * Replacement tool input, sent with an `allow` to approve a *corrected*
+       * call rather than the one Claude proposed — fixing a wrong path is
+       * usually better than denying and re-prompting from a phone.
+       *
+       * Must be the complete input object, not a patch: Claude Code substitutes
+       * it wholesale. Omit to approve the call unchanged. Ignored on `deny`.
+       */
+      updatedInput?: unknown;
     }
   | {
       /**
