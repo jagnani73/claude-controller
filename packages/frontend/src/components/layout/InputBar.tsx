@@ -1,6 +1,7 @@
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, Slash as SlashIcon, Square, Terminal as TerminalIcon } from "lucide-react";
 import { forwardRef, type ReactNode, useImperativeHandle, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { inputPrefixHint, inputPrefixMode } from "./input-prefix";
 
 export interface InputBarHandle {
   /** Replace the textarea contents and focus it. Used by QueuePanel "edit" taps. */
@@ -105,9 +106,29 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const hasText = text.trim().length > 0;
   // Empty box + a live turn → the button stops generation instead of sending.
   const showStop = !hasText && !!isProcessing;
+  // A leading `!` or `/` changes how the CLI reads the message. The TUI says so
+  // in its footer; without this the phone gave no such warning, so a message
+  // meant as prose could silently run as a shell command.
+  const prefixMode = inputPrefixMode(text);
 
   return (
     <div className="mb-2 shrink-0 px-3 pb-2 pt-1">
+      {prefixMode && (
+        <div className="mx-auto mb-1 flex w-full max-w-4xl items-center gap-1.5 px-2">
+          {prefixMode === "shell" ? (
+            <TerminalIcon className="size-3 shrink-0 text-amber-500" />
+          ) : (
+            <SlashIcon className="size-3 shrink-0 text-muted-foreground" />
+          )}
+          <span
+            className={
+              prefixMode === "shell" ? "text-amber-500 text-xs" : "text-muted-foreground text-xs"
+            }
+          >
+            {inputPrefixHint(prefixMode)}
+          </span>
+        </div>
+      )}
       <div className="mx-auto flex w-full max-w-4xl items-center gap-2 rounded-2xl border border-border/60 bg-card/80 p-2 backdrop-blur transition-colors focus-within:border-accent/40">
         {settingsSlot}
         <textarea
