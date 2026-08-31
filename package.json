@@ -22,13 +22,6 @@
     "tsx": "^4.21.0",
     "typescript": "^5.7.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "node-pty",
-      "esbuild",
-      "@biomejs/biome"
-    ]
-  },
   "workspaces": [
     "packages/*"
   ]

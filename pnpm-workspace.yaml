@@ -1,2 +1,11 @@
 packages:
-    - "packages/*"
+  - "packages/*"
+
+# pnpm 11 no longer reads `pnpm.onlyBuiltDependencies` from package.json; build
+# approval lives here. node-pty is a native module and is load-bearing — without
+# its build step the backend cannot spawn a PTY at all, so a fresh install that
+# skips it produces a backend that fails at runtime rather than at install time.
+allowBuilds:
+  node-pty: true
+  esbuild: true
+  "@biomejs/biome": true
