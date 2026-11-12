@@ -153,6 +153,13 @@ export class SessionBus extends EventEmitter<BusEvents> {
       });
       return false;
     }
+    // One compaction reaches the bus twice: PostCompact carries the summary, and
+    // the transcript then writes it again as an `isCompactSummary` user entry
+    // (with a preamble, so the texts differ). Keep whichever arrives first.
+    if (event.kind === "compact_summary" && this.isRepeatCompactSummary()) {
+      log.debug("Dropping repeat compact summary", { sessionId: this.sessionId });
+      return false;
+    }
     this.events.push(event);
     log.debug("Event", {
       sessionId: this.sessionId,
@@ -160,6 +167,27 @@ export class SessionBus extends EventEmitter<BusEvents> {
       logSize: this.events.length,
     });
     return true;
+  }
+
+  /**
+   * True when the log already holds a compact summary with nothing but
+   * compaction bookkeeping after it, i.e. this one describes the same
+   * compaction. Ordering, not timestamps: either source may arrive first, and
+   * separate compactions are always separated by real conversation.
+   */
+  private isRepeatCompactSummary(): boolean {
+    const bookkeeping: ReadonlySet<SessionBusEvent["kind"]> = new Set([
+      "compact_start",
+      "compact_end",
+      "permission_mode",
+      "model_switch",
+    ]);
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      const kind = this.events[i].kind;
+      if (kind === "compact_summary") return true;
+      if (!bookkeeping.has(kind)) return false;
+    }
+    return false;
   }
 
   /**
