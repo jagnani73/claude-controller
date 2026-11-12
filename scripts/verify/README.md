@@ -20,8 +20,9 @@ pnpm verify:agents          # do agents, names, SendMessage traffic and per-agen
 
 `verify:approval-edit` needs a **running backend**: `PermissionRequest` does not
 fire under headless `claude -p` (there is nobody to prompt) and did not reproduce
-in a bare PTY either. A real controller session is the only place it fires. The
-others spawn the CLI directly and need nothing running.
+in a bare PTY either. A real controller session is the only place it fires.
+`verify:agents` and `verify:plan-relay` need one too, because what they check
+lives in the controller. The others spawn the CLI directly and need nothing running.
 
 Exit codes: `0` pass, `1` a real regression, `2` inconclusive (the probe itself
 failed — fix that before reading anything into the result).
@@ -43,8 +44,9 @@ binary and about a minute of wall clock.
 | `hooks-fire.mjs` | Hook events silently no longer firing; safe mode no longer suppressing them (either direction is a surprise worth knowing). |
 | `model-switch.mjs` | `PostModelSwitch` disappearing, or `requested_model` being renamed — which would degrade model reconciliation to family-matching with no error. |
 | `approval-edit.mjs` | The two PermissionRequest response shapes diverging. `updatedInput` is honoured only in the schema form; on the flat form the CLI discards the whole response, loses the allow, and falls back to a terminal picker the phone cannot see — the session hangs with no error. Verified to genuinely fail by reverting the shape. |
-| `permission-cycle.mjs` | The Shift+Tab cycle gaining or losing a stop. `cycleDistance()` writes a keystroke count from `cycleCanIncludeAuto()`; if that count is wrong the session lands in a permission mode the phone did not pick, and the JSONL only records the mode in a periodic metadata block — so the *next prompt runs* under the wrong mode before anything corrects it. Caught `opusplan` being wrongly excluded from auto. |
-| `agents.mjs` | The agents view losing a source with no error. Runs a real two-teammate team through a running controller and asserts: agents arrive over `agent_update` (SubagentStart/Stop), they carry names (`agent-<id>.meta.json` still read), at least one agent-to-agent `SendMessage` arrives as `agent_message`, `subscribe_agent` replays an agent's own transcript, and a subscribe for an unknown agent gets `agent_unavailable`. A teammate that sent an approving `shutdown_response` must end `done`; if no teammate got that far the run says so instead of failing. Parent links are not asserted: teammates hang off the lead and the probe spawns no nested subagent. Teammates legitimately have no `toolUseId`, so only an unnamed agent lacking one counts as a lost parent link. Control: `INCONCLUSIVE` if no agent ever arrives. It does not use the `status_line` readiness signal alone: with `remoteControlAtStartup` the first render can lag well past boot, so it falls back to a 50s timer. |
+| `permission-cycle.mjs` | The Shift+Tab cycle gaining or losing a stop. `cycleDistance()` writes a keystroke count from `cycleCanIncludeAuto()`; if that count is wrong the session lands in a permission mode the phone did not pick, and the JSONL only records the mode in a periodic metadata block — so the *next prompt runs* under the wrong mode before anything corrects it. Caught `opusplan` being wrongly excluded from auto, and `haiku` gaining the auto stop on 2.1.322. |
+| `agents.mjs` | The agents view losing a source with no error. Runs a real two-teammate team through a running controller and asserts: agents arrive over `agent_update` (SubagentStart/Stop), they carry names (`agent-<id>.meta.json` still read), at least one agent-to-agent `SendMessage` arrives as `agent_message`, `subscribe_agent` replays an agent's own transcript, and a subscribe for an unknown agent gets `agent_unavailable`. A teammate that sent an approving `shutdown_response` must end `done`; if no teammate got that far the run says so instead of failing. Parent links are not asserted: teammates hang off the lead and the probe spawns no nested subagent. Teammates legitimately have no `toolUseId`, so only an unnamed agent lacking one counts as a lost parent link. Control: `INCONCLUSIVE` if no agent ever arrives. |
+| `plan-relay.mjs` | The plan card answering into the void. The card is drawn from PreToolUse ~2.4s before the CLI renders its picker; a digit written in that window went into the main prompt box, and the picker stayed open with nothing on the phone able to answer it. The controller now waits for the picker-open signal (ExitPlanMode's notification-only PermissionRequest). The probe plans in a plan-mode Sonnet session, answers **approve-manual 500ms after the card**, and asserts a non-error tool_result and the mode becoming `default`. Control: `INCONCLUSIVE` if no ExitPlanMode card arrives. |
 | `question-relay.mjs` | The AskUserQuestion picker changing shape under a script that still "succeeds". Drives the real `buildKeystrokes` and asserts the CLI committed the option asked for. Verified to genuinely fail by neutering the DOWN key: the probe reported `committed "Red", not the requested "Green"`. |
 
 ## Every probe has a control
@@ -63,6 +65,14 @@ surface: the TUI must first report `default` (proving the footer is readable and
 the spawn took the `--permission-mode` we passed), and Shift+Tab must then change
 what it reports (proving keystrokes are landing). Without both, "auto never
 appeared in the cycle" is indistinguishable from "the TUI never rendered."
+
+## Readiness for controller probes
+
+The probes that drive a running controller wait for the session's first
+`status_line` before sending a prompt, with a bounded fallback (`waitForReady` in
+`lib/controller.mjs`, 50s): with `remoteControlAtStartup` the CLI sits at
+"/rc connecting…" and the first render can lag well past boot while the prompt is
+already usable. Each run prints which signal won (`status_line` or `timer`).
 
 ## What this does NOT cover
 
@@ -84,6 +94,10 @@ focused option with `❯`, and the committed answer is echoed as
 *position* rather than the label, because stripping ANSI collapses the option
 list onto one line and ink draws each label twice (`1. RedRed`).
 
+The cursor glyph changed under it once already: `❯` up to 2.1.251, ASCII `>` on
+2.1.322. The probe accepts both, but only directly before an option of its own
+question, since a bare `>` appears elsewhere on screen.
+
 Treat a green run as "the hook contracts held, Shift+Tab lands where we think,
 and the question relay selects what it was asked for" — not "every relay works".
 
@@ -93,3 +107,10 @@ and the question relay selects what it was asked for" — not "every relay works
 `~/.local/bin` — deliberately **not** PATH, because this project has already been
 bitten by a machine with two installs where PATH order selected a build 31
 versions behind the intended one.
+
+`CONTROLLER_WS` points the controller probes at a backend other than
+`ws://127.0.0.1:4577`. `VERIFY_CWD` sets the session cwd for the probes that use
+the repo by default (`permission-cycle`, `question-relay`, `approval-edit`,
+`agents`, `plan-relay`): use it from a checkout the CLI has never trusted (a fresh
+worktree, where the folder-trust dialog swallows the prompt) or one outside the
+backend's `WORK_DIR`. `hooks-fire` and `model-switch` use the process cwd.

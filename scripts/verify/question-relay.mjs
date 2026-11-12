@@ -16,7 +16,15 @@
 
 import { join } from "node:path";
 import { platform } from "node:process";
-import { backendRequire, childEnv, claudeBin, repoRoot, targetVersion, wait } from "./lib/env.mjs";
+import {
+  backendRequire,
+  childEnv,
+  claudeBin,
+  repoRoot,
+  sessionCwd,
+  targetVersion,
+  wait,
+} from "./lib/env.mjs";
 
 const pty = backendRequire("node-pty");
 const { buildKeystrokes, CHUNK_DELAY_MS } = backendRequire(
@@ -64,7 +72,7 @@ function spawnCli() {
     name: "xterm-256color",
     cols: 120,
     rows: 40,
-    cwd: repoRoot,
+    cwd: sessionCwd,
     env: childEnv({ CLAUDE_CODE_EFFORT_LEVEL: "low" }),
   };
   return platform === "win32"
@@ -73,14 +81,20 @@ function spawnCli() {
 }
 
 /**
- * Which option number the picker is highlighting, from its `❯` cursor.
+ * Which option number the picker is highlighting, from its focus cursor.
  *
  * Deliberately reads the *number*, not the label: stripping ANSI collapses the
  * option list onto one line and ink draws each label twice ("1. RedRed"), so
  * label parsing is guesswork. The position is unambiguous.
+ *
+ * The cursor glyph is `❯` up to 2.1.251 and ASCII `>` on 2.1.322
+ * (`> 1. RedRed2. GreenGreen…`). A bare `>` is common on screen (the prompt
+ * box, quoted text), so it only counts immediately before an option number of
+ * THIS picker: `> N.` followed by one of our labels.
  */
+const CURSOR = new RegExp(`(?:❯|>)\\s*(\\d+)\\.\\s*(?:${OPTIONS.join("|")})`, "g");
 function cursorIndex(text) {
-  const hits = [...plain(text).matchAll(/❯\s*(\d+)\./g)];
+  const hits = [...plain(text).matchAll(CURSOR)];
   return hits.length ? Number(hits[hits.length - 1][1]) : null;
 }
 
@@ -180,7 +194,12 @@ console.log("\n================ RESULT ================");
 // The CLI echoes the committed answer as `⎿ · <question> → <answer>`. Anchor on
 // that arrow rather than scanning for the bare label: the label also appears in
 // the picker's own option list, so a redraw would read as a successful commit.
-const committed = after.match(/→\s*([A-Za-z]+)/)?.[1] ?? null;
+// Match a known label exactly, then a word boundary on the *label* side only:
+// ANSI stripping can run spinner text straight into the answer
+// ("GreenJitterbugging"), so `[A-Za-z]+` read a non-label. Labels are tried
+// longest-first so none can be a prefix match of another.
+const LABELS = [...OPTIONS].sort((a, b) => b.length - a.length).join("|");
+const committed = after.match(new RegExp(`→\\s*(${LABELS})(?![a-z])`))?.[1] ?? null;
 
 if (/declined to answer/.test(after)) {
   console.log(`FAIL  the relay cancelled the question instead of answering "${PICK}".`);

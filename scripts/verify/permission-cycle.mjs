@@ -19,7 +19,15 @@
 
 import { join } from "node:path";
 import { platform } from "node:process";
-import { backendRequire, childEnv, claudeBin, repoRoot, targetVersion, wait } from "./lib/env.mjs";
+import {
+  backendRequire,
+  childEnv,
+  claudeBin,
+  repoRoot,
+  sessionCwd,
+  targetVersion,
+  wait,
+} from "./lib/env.mjs";
 
 const pty = backendRequire("node-pty");
 
@@ -102,7 +110,7 @@ function decodeMode(chunk) {
 function spawnCli(model) {
   const bin = claudeBin();
   const args = ["--permission-mode", "default", "--model", model];
-  const opts = { name: "xterm-256color", cols: 120, rows: 40, cwd: repoRoot, env: childEnv() };
+  const opts = { name: "xterm-256color", cols: 120, rows: 40, cwd: sessionCwd, env: childEnv() };
   return platform === "win32"
     ? pty.spawn("cmd.exe", ["/c", bin, ...args], opts)
     : pty.spawn("/bin/bash", ["-c", [bin, ...args].join(" ")], opts);

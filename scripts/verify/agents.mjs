@@ -15,7 +15,7 @@
 // controller. Costs a few credits — it asks a Sonnet session to run a two-agent team.
 
 import { connect, createSession, send, waitForReady } from "./lib/controller.mjs";
-import { repoRoot, targetVersion } from "./lib/env.mjs";
+import { sessionCwd, targetVersion } from "./lib/env.mjs";
 
 const PROMPT =
   "Create an agent team with two teammates named alpha and beta. Have alpha send beta one " +
@@ -40,25 +40,14 @@ try {
 }
 
 const session = await createSession(ws, {
-  cwd: repoRoot,
+  cwd: sessionCwd,
   model: "sonnet",
   permissionMode: "acceptEdits",
   effort: "low",
 }).catch((err) => report(2, `INCONCLUSIVE - ${err.message}`));
 console.log(`session: ${session.id}`);
-// A status_line is the normal "stdin is live" signal, but a machine that starts the
-// CLI with remote control enabled leaves it at "/rc connecting…" and the first
-// render can be held back well past boot. The prompt is usable by then, so after a
-// bounded wait go ahead rather than call a working CLI broken.
-const READY_FALLBACK_MS = 50000;
-const statusLineReady = waitForReady(ws, session.id).then(() => "status_line");
-// Its own 120s timeout rejects long after the race is decided; keep that from
-// surfacing as an unhandled rejection mid-run.
-statusLineReady.catch(() => {});
-const ready = await Promise.race([
-  statusLineReady,
-  new Promise((r) => setTimeout(() => r("timer"), READY_FALLBACK_MS)),
-]).catch((err) => report(2, `INCONCLUSIVE - ${err.message}`));
+// status_line, or a bounded fallback when remote control delays the first render.
+const ready = await waitForReady(ws, session.id);
 console.log(`CLI is up (${ready}) - starting the team\n`);
 
 /** agentId -> latest node, as the frontend would hold it. */

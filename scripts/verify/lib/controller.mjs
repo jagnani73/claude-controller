@@ -49,13 +49,20 @@ export function connect() {
  * written — the run looked like a failed feature rather than a mistimed probe.
  * `status_line` only arrives once Claude Code has booted and rendered, which is
  * the observable moment stdin goes live.
+ *
+ * It is not the only signal, though: a machine that starts the CLI with remote
+ * control enabled (`remoteControlAtStartup`) sits at "/rc connecting…" and can
+ * hold the first render back well past boot, while the prompt is already usable.
+ * So after a bounded wait this goes ahead anyway rather than call a working CLI
+ * broken (that made approval-edit report INCONCLUSIVE). Resolves with which
+ * signal won: `"status_line"` or `"timer"`. Never rejects.
  */
-export function waitForReady(ws, sessionId, { timeoutMs = 120000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("CLI never reported a status_line — it may not have booted")),
-      timeoutMs,
-    );
+export function waitForReady(ws, sessionId, { fallbackMs = 50000 } = {}) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      ws.off("message", onMessage);
+      resolve("timer");
+    }, fallbackMs);
     const onMessage = (raw) => {
       let msg;
       try {
@@ -67,7 +74,7 @@ export function waitForReady(ws, sessionId, { timeoutMs = 120000 } = {}) {
         clearTimeout(timer);
         ws.off("message", onMessage);
         // Small settle after the first render before writing to stdin.
-        setTimeout(resolve, 3000);
+        setTimeout(() => resolve("status_line"), 3000);
       }
     };
     ws.on("message", onMessage);

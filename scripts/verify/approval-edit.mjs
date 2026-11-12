@@ -19,7 +19,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect, createSession, send, waitForReady } from "./lib/controller.mjs";
-import { repoRoot, targetVersion } from "./lib/env.mjs";
+import { sessionCwd, targetVersion } from "./lib/env.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "verify-approval-"));
 const target = join(dir, "APPROVAL_PROBE.md");
@@ -32,7 +32,20 @@ function cleanup() {
   }
 }
 
-function report(code, verdict, detail) {
+let ws;
+let sessionId = null;
+
+/** Every exit goes through here, so the session is stopped on every path. */
+async function report(code, verdict, detail) {
+  if (ws && sessionId) {
+    try {
+      send(ws, { type: "stop_session", sessionId });
+      // Give the frame a moment to leave before the process exits.
+      await new Promise((r) => setTimeout(r, 500));
+    } catch {
+      // the socket is already gone; the backend reaps the session on disconnect
+    }
+  }
   console.log("\n================ RESULT ================");
   console.log(verdict);
   if (detail) console.log(detail);
@@ -43,7 +56,6 @@ function report(code, verdict, detail) {
 console.log(`target : ${targetVersion()}`);
 console.log(`probe  : ${target}\n`);
 
-let ws;
 try {
   ws = await connect();
 } catch (err) {
@@ -53,15 +65,16 @@ try {
 // The session runs in the repo (a cwd known to start reliably) while the write
 // target stays outside it, so a run never touches tracked files.
 const session = await createSession(ws, {
-  cwd: repoRoot,
+  cwd: sessionCwd,
   model: "sonnet",
   permissionMode: "default",
   effort: "high",
 }).catch((err) => report(2, `INCONCLUSIVE - ${err.message}`));
+sessionId = session.id;
 
 console.log(`session: ${session.id}`);
-await waitForReady(ws, session.id).catch((err) => report(2, `INCONCLUSIVE - ${err.message}`));
-console.log("CLI is up — requesting a write\n");
+const ready = await waitForReady(ws, session.id);
+console.log(`CLI is up (${ready}) — requesting a write\n`);
 
 let sawApproval = false;
 let sawResult = false;

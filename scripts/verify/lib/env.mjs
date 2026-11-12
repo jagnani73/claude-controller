@@ -7,6 +7,14 @@ import { fileURLToPath } from "node:url";
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
+/**
+ * Where probe sessions run. Defaults to the repo, which is normally a trusted
+ * folder. `VERIFY_CWD` overrides it for a checkout the CLI has never been trusted
+ * in (a fresh worktree), where the folder-trust dialog would swallow the prompt,
+ * or one outside the controller's `WORK_DIR`, which the backend refuses.
+ */
+export const sessionCwd = process.env.VERIFY_CWD?.trim() || repoRoot;
+
 /** require() rooted in the backend package, so its deps (ws, node-pty) resolve. */
 export const backendRequire = createRequire(
   `file:///${join(repoRoot, "packages", "backend", "package.json").replaceAll("\\", "/")}`,
