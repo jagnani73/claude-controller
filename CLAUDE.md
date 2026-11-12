@@ -147,7 +147,7 @@ We drive a CLI we neither ship nor pin, and everything fragile here — the AskU
 
 Recorded in full (with evidence status for each) under *Known couplings to CLI input handling* in `docs/architecture.md`. The two worth knowing before touching the input path:
 
-- **A leading `!` enters shell mode — verified live.** Controller messages are bracketed pastes, and pasting is not exempt from prefix handling: `!echo hi` renders as `! echo hi` with a `! for shell mode` footer, so on submit it runs as a shell command instead of reaching Claude. A `!` anywhere else is inert. A leading `/` opens the slash-command palette, which *is* intended. Neither is escaped — that's a product decision, not an oversight.
+- **A leading `!` enters shell mode — verified live.** Controller messages are bracketed pastes, and pasting is not exempt from prefix handling: `!echo hi` renders as `! echo hi` with a `! for shell mode` footer, so on submit it runs as a shell command instead of reaching Claude. A `!` anywhere else is inert. A leading `/` opens the slash-command palette, which *is* intended — since 2.1.319 even after leading whitespace (` /compact` runs `/compact`). Neither is escaped or trimmed — that's a product decision, not an oversight.
 - **The submit `\r` can be captured by an unsolicited dialog below 2.1.247.** Upstream: install suggestions and the auto-mode offer now "wait until you've sent or cleared what you're typing, so the Enter that sends your prompt can't answer them". `submitWithConfirmation` writes exactly that Enter. Situational rather than systematic (it needs a suggestion to appear), so it is *not* part of the hard floor — unlike 2.1.235, which is.
 
 ## Reference: Claude Code Source

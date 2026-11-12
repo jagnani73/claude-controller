@@ -575,6 +575,14 @@ Pasting `/model` opens the command menu and submits as a slash command. This is
 the behaviour we want: a phone message of `/commit` should run the command, as
 the data-flow diagram above already shows.
 
+**A slash command after leading whitespace runs as a command since 2.1.319 —
+from the changelog, unverified.** Upstream: "Fixed slash commands typed after a
+leading space, tab or newline being sent to Claude as plain text instead of
+running". So a phone message of ` /compact` (or a newline then `/compact`) now
+runs `/compact` rather than reaching Claude as text, as it did on earlier builds.
+The controller neither trims nor escapes the message, consistent with the `/` and
+`!` notes above: what the user typed is what the CLI receives.
+
 **Plan-picker digit shortcuts are position-sensitive.** At high context usage the
 CLI inserts a "clear context" approve at position 1, shifting the elevated
 approve to 2 and manual to 3, so `buildPlanKeystrokes`' digits would select the
