@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { CompactTrigger } from "common/types";
 import { LoggerService } from "./logger.service.js";
 
 /**
@@ -66,13 +67,13 @@ export type SessionBusEvent =
       kind: "compact_start";
       sessionId: string;
       timestamp: string;
-      trigger: "manual" | "auto";
+      trigger: CompactTrigger;
     }
   | {
       kind: "compact_end";
       sessionId: string;
       timestamp: string;
-      trigger: "manual" | "auto";
+      trigger: CompactTrigger;
     }
   | {
       kind: "compact_summary";

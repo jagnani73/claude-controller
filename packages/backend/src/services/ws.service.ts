@@ -196,6 +196,7 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
         type: "compact_start",
         sessionId: event.sessionId,
         trigger: event.trigger,
+        timestamp: event.timestamp,
       };
     case "compact_end":
       return {

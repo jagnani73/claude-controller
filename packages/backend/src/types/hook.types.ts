@@ -4,6 +4,8 @@
  * Only the events we actually register hooks for are typed here.
  */
 
+import type { CompactTrigger } from "common/types";
+
 interface BaseHookPayload {
   session_id: string;
   transcript_path: string;
@@ -29,13 +31,13 @@ export interface PermissionRequestPayload extends BaseHookPayload {
 
 export interface PreCompactPayload extends BaseHookPayload {
   hook_event_name: "PreCompact";
-  trigger: "manual" | "auto";
+  trigger: CompactTrigger;
   custom_instructions: string | null;
 }
 
 export interface PostCompactPayload extends BaseHookPayload {
   hook_event_name: "PostCompact";
-  trigger: "manual" | "auto";
+  trigger: CompactTrigger;
   compact_summary: string;
 }
 

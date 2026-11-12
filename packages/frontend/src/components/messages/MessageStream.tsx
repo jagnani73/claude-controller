@@ -1,4 +1,4 @@
-import type { ClaudeModel, ServerMessage, ToolResult } from "common/types";
+import type { ClaudeModel, CompactTrigger, ServerMessage, ToolResult } from "common/types";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import {
   Fragment,
@@ -26,6 +26,35 @@ import { wsService } from "@/services/ws.service";
 const TOOL_GROUP_COLLAPSE_THRESHOLD = 3;
 
 const HISTORY_PAGE_SIZE = 20;
+
+/** Last-resort expiry for a compaction banner nothing else ended. */
+const COMPACT_BANNER_TIMEOUT_MS = 10 * 60 * 1000;
+
+interface CompactingState {
+  trigger: CompactTrigger;
+  /** ISO time the `PreCompact` hook reached the backend. */
+  startedAt: string;
+}
+
+/**
+ * Whether a transcript entry stamped `timestamp` was written after a compaction
+ * that began at `startedAt`. The hook arrives over HTTP but prompts and replies
+ * come through the transcript tail, so the prompt that triggered an automatic
+ * compaction can arrive *after* its start; comparing write times (both from the
+ * backend's machine) keeps that from ending the banner at once. An unparseable
+ * time counts as later, so the banner errs toward clearing.
+ */
+function wasWrittenAfter(timestamp: string, startedAt: string): boolean {
+  const written = Date.parse(timestamp);
+  const started = Date.parse(startedAt);
+  return Number.isNaN(written) || Number.isNaN(started) || written > started;
+}
+
+/** Banner lead-in, naming the trigger only when it is neither manual nor auto. */
+function compactingLabel(trigger: CompactTrigger): string {
+  if (trigger === "manual" || trigger === "auto") return "Compacting conversation…";
+  return `Compacting conversation (${trigger})…`;
+}
 
 export type StreamItem =
   | {
@@ -589,7 +618,7 @@ export function MessageStream({
   const [earliestIndex, setEarliestIndex] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [compacting, setCompacting] = useState(false);
+  const [compacting, setCompacting] = useState<CompactingState | null>(null);
 
   // Anchor tracking for scroll preservation on prepend.
   const prevScrollHeightRef = useRef(0);
@@ -622,7 +651,7 @@ export function MessageStream({
     setEarliestIndex(null);
     setHasMore(false);
     setLoadingHistory(false);
-    setCompacting(false);
+    setCompacting(null);
     setHasLiveActivity(false);
     hydratedRef.current = false;
     lastItemIdRef.current = undefined;
@@ -639,8 +668,22 @@ export function MessageStream({
     lastItemIdRef.current = lastId;
   }, [items]);
 
+  // The compaction banner must clear itself. Idle compaction (2.1.299+) may send
+  // a `compact_start` with no `compact_end`, or fail part-way, and nothing else
+  // ends it: so its summary, or any prompt or reply written after it began, also
+  // ends it, and a long timeout is the last resort.
+  useEffect(() => {
+    if (!compacting) return;
+    const timer = setTimeout(() => setCompacting(null), COMPACT_BANNER_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [compacting]);
+
+  const endCompactingIfAfter = (timestamp: string) =>
+    setCompacting((c) => (c && wasWrittenAfter(timestamp, c.startedAt) ? null : c));
+
   useWsMessage("user_prompt", (msg) => {
     if (msg.sessionId !== sessionId) return;
+    endCompactingIfAfter(msg.timestamp);
     dispatch({
       type: "user_prompt",
       sessionId: msg.sessionId,
@@ -651,6 +694,7 @@ export function MessageStream({
 
   useWsMessage("assistant_text", (msg) => {
     if (msg.sessionId !== sessionId) return;
+    endCompactingIfAfter(msg.timestamp);
     dispatch({
       type: "assistant_text",
       sessionId: msg.sessionId,
@@ -684,16 +728,18 @@ export function MessageStream({
 
   useWsMessage("compact_start", (msg) => {
     if (msg.sessionId !== sessionId) return;
-    setCompacting(true);
+    // A fresh object per start, so a repeated start restarts the timeout.
+    setCompacting({ trigger: msg.trigger, startedAt: msg.timestamp });
   });
 
   useWsMessage("compact_end", (msg) => {
     if (msg.sessionId !== sessionId) return;
-    setCompacting(false);
+    setCompacting(null);
   });
 
   useWsMessage("compact_summary", (msg) => {
     if (msg.sessionId !== sessionId) return;
+    setCompacting(null);
     dispatch({
       type: "compact_summary",
       sessionId: msg.sessionId,
@@ -1100,7 +1146,7 @@ export function MessageStream({
         {compacting && (
           <div className="mx-4 my-2 flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/6 px-3 py-2 text-sm text-warning">
             <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
-            Compacting conversation… Claude will be unresponsive until this finishes.
+            {compactingLabel(compacting.trigger)} Claude will be unresponsive until this finishes.
           </div>
         )}
         {waitingForReply && !compacting && <ThinkingIndicator startedAt={turnStartedAt} />}

@@ -29,6 +29,14 @@ export function isPermissionMode(value: string): value is PermissionMode {
   return (PERMISSION_MODES as readonly string[]).includes(value);
 }
 
+/**
+ * What started a compaction (`PreCompact`/`PostCompact` `trigger`). `manual` and
+ * `auto` are the values we have seen; idle compaction (2.1.299+) may report
+ * something else, so any string is accepted. The `Record<never, never>`
+ * intersection keeps the known values in autocomplete.
+ */
+export type CompactTrigger = "manual" | "auto" | (string & Record<never, never>);
+
 /** Session state */
 export type SessionStatus =
   | "running"
@@ -357,8 +365,16 @@ export type ServerMessage =
       hasMore: boolean;
     }
   | { type: "status_line"; sessionId: string; text: string }
-  | { type: "compact_start"; sessionId: string; trigger: "manual" | "auto" }
-  | { type: "compact_end"; sessionId: string; trigger: "manual" | "auto" }
+  | {
+      type: "compact_start";
+      sessionId: string;
+      trigger: CompactTrigger;
+      /** Backend receive time of the `PreCompact` hook (ISO). Lets the client
+       * tell activity written after the compaction began from activity that
+       * merely arrived late through the transcript tail. */
+      timestamp: string;
+    }
+  | { type: "compact_end"; sessionId: string; trigger: CompactTrigger }
   | { type: "compact_summary"; sessionId: string; text: string; timestamp: string }
   | { type: "interrupt"; sessionId: string; timestamp: string }
   | {
