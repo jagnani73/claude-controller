@@ -150,10 +150,14 @@ a valid empty object, so the plan picker still opens (`verify:plan-relay` passes
 Other hooks keep the default: they are observational and answer `{}` at once.
 
 `SessionStart` is **not** HTTP-capable in Claude Code, so the session id can't be
-learned from a hook. Instead it's discovered by watching
-`~/.claude/sessions/<pid>.json` (`session-locator.service.ts`). Because of this,
-**`Session.id` resolves asynchronously** — always `await session.ready` before
-relying on it.
+learned from a hook, and doesn't need to be: the controller chooses it. A fresh
+spawn generates a UUID and passes `--session-id <uuid>`; a resume passes
+`--resume <id>`. `Session.id` is therefore set in the constructor. (It used to be
+discovered from `~/.claude/sessions/<pid>.json` by cwd and start time, which
+mixed up sessions started in one folder at the same moment.) A fresh session's
+transcript, and possibly its project directory, appear only later;
+`TranscriptWatcher` waits for both. `await session.ready` before reading a
+resumed session's history, which drains asynchronously.
 
 The hooks listener binds **`127.0.0.1` only**. Claude Code's SSRF guard blocks
 hook POSTs to private IPs, and there's no reason for that endpoint to be reachable
@@ -432,7 +436,7 @@ short version:
 
 | Package | Runtime | Responsibility | Key deps |
 |---------|---------|----------------|----------|
-| `packages/backend` | Node.js | Spawn the CLI via `node-pty` with injected `--settings` hooks; run the loopback hooks listener; tail the transcript; resolve the session id via `session-locator`; normalize into `SessionBus`; serve the typed WS protocol. | `node-pty`, `ws`, `dotenv` |
+| `packages/backend` | Node.js | Spawn the CLI via `node-pty` with injected `--settings` hooks; run the loopback hooks listener; tail the transcript; choose each fresh session's id (`--session-id`); normalize into `SessionBus`; serve the typed WS protocol. | `node-pty`, `ws`, `dotenv` |
 | `packages/frontend` | Browser | React 19 + Vite + Tailwind 4 PWA. Renders structured message cards (`AssistantMessage`, `UserMessage`, `ToolCallCard`, `ApprovalCard`, `QuestionCard`) in `MessageStream`. Connects over WS. | React 19, Vite, Tailwind 4 |
 | `packages/common` | — | Shared TS types: `ServerMessage`, `ClientMessage`, `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`, `EffortLevel`. | — |
 

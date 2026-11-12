@@ -10,6 +10,9 @@ import type {
 } from "../types/transcript.types.js";
 import { unwrapPastedContent } from "../utils/pasted-content.js";
 
+/** How often to look for a project directory the CLI has not created yet. */
+const DIR_POLL_MS = 500;
+
 /** The user entry Claude Code writes when a turn is interrupted (seen on 2.1.322). */
 const INTERRUPT_MARKER_RE = /^\[Request interrupted by user( for tool use)?\]$/;
 
@@ -68,6 +71,7 @@ function parseLocalCommand(content: string): { name: string; args?: string } | n
 export class TranscriptWatcher {
   private watcher: FSWatcher | null = null;
   private dirWatcher: FSWatcher | null = null;
+  private dirPoll: NodeJS.Timeout | null = null;
   private offset = 0;
   private pendingBuffer = "";
   private stopped = false;
@@ -139,6 +143,22 @@ export class TranscriptWatcher {
   private watchForFile(): void {
     const dir = dirname(this.path);
     const targetName = basename(this.path);
+    // A folder Claude has never run in has no project directory until the CLI
+    // creates it, and fs.watch on a missing directory throws: the session would
+    // then stream nothing for its whole life. Wait for the directory instead.
+    if (!existsSync(dir)) {
+      this.dirPoll = setTimeout(() => {
+        this.dirPoll = null;
+        if (!this.stopped) this.watchForFile();
+      }, DIR_POLL_MS);
+      return;
+    }
+    // The file may have appeared while we waited for its directory.
+    if (existsSync(this.path)) {
+      this.watch();
+      this.scheduleDrain();
+      return;
+    }
     try {
       this.dirWatcher = watch(dir, (_event, filename) => {
         if (this.stopped) return;
@@ -165,6 +185,10 @@ export class TranscriptWatcher {
 
   stop(): void {
     this.stopped = true;
+    if (this.dirPoll) {
+      clearTimeout(this.dirPoll);
+      this.dirPoll = null;
+    }
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;

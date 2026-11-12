@@ -75,6 +75,9 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
       if (options.forceModel) args.push("--model", options.model);
     } else {
       args.push("--model", options.model);
+      // A fresh session's id is chosen by us, not discovered: several sessions
+      // started in one folder at once are otherwise indistinguishable.
+      if (options.newSessionId) args.push("--session-id", options.newSessionId);
     }
     if (options.settingsJson) {
       // Pass via file path, not inline — cmd.exe strips the quotes off inline JSON.

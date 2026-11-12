@@ -38,13 +38,6 @@ vi.mock("../src/services/pty.service.js", () => ({
   STRIPPED_CHILD_ENV: [],
 }));
 
-vi.mock("../src/services/session-locator.service.js", () => ({
-  SessionLocator: class {
-    start() {}
-    stop() {}
-  },
-}));
-
 vi.mock("../src/services/statusline.service.js", () => ({
   statusLineDumpScriptPath: () => "dump.cjs",
   statusLinePayloadPath: () => "payload.json",

@@ -39,6 +39,8 @@ export interface PtySpawnOptions {
   settingsJson?: string;
   /** When set, adds `--resume <id>` to pick up an existing session's transcript. */
   resumeSessionId?: string;
+  /** For a fresh spawn: the session id to create it with (`--session-id <uuid>`). */
+  newSessionId?: string;
   /**
    * Force `--model <alias>` even on resume. Default behavior on resume is to
    * omit `--model` so Claude Code preserves the session's last model. Set this

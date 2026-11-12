@@ -31,7 +31,7 @@ import { forgetSpawn, rememberSpawn } from "../services/orphan-reaper.service.js
 import { PtyService } from "../services/pty.service.js";
 import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.js";
 import { SessionBus, type SessionBusEvent } from "../services/session-bus.service.js";
-import { SessionLocator } from "../services/session-locator.service.js";
+
 import {
   readDumpedPayload,
   resolveStatusLineCommand,
@@ -95,7 +95,7 @@ export class Session extends EventEmitter<SessionEvents> {
   private pty: PtyService;
   private capturePath: string | null = null;
   private captureStream: WriteStream | null = null;
-  private locator: SessionLocator | null = null;
+
   private transcript: TranscriptWatcher | null = null;
   private currentModel: ClaudeModel;
   private currentEffort: EffortLevel | undefined;
@@ -203,30 +203,26 @@ export class Session extends EventEmitter<SessionEvents> {
       this.emit("exit", info);
     });
 
-    const idResolved = new Promise<void>((resolve) => {
-      if (config.resumeSessionId) {
-        this.resolveId(config.resumeSessionId);
-        resolve();
-        return;
-      }
-      this.once("idResolved", () => resolve());
+    // The session id is known before the CLI starts: a resume names it, and a
+    // fresh spawn chooses one and passes it as `--session-id`. It used to be
+    // discovered from ~/.claude/sessions/<pid>.json by cwd and start time, which
+    // could not tell apart several sessions started in one folder at once: they
+    // all claimed the first file and their output crossed.
+    const sessionId = config.resumeSessionId ?? randomUUID();
+    this.resolveId(sessionId);
+    // For a fresh session the transcript does not exist yet; the watcher waits
+    // for it (and for its project directory) and drains nothing until then.
+    this.transcript = new TranscriptWatcher(
+      resolveTranscriptPath(config.cwd, sessionId),
+      this.bus,
+      this.handleModelChange,
+      this.handleCliVersion,
+      this.handleEffortChange,
+    );
+    const drainDone = this.transcript.start().catch((err) => {
+      log.warn("Initial transcript drain failed", { token: this.spawnToken, error: err });
     });
-
-    let drainDone: Promise<void> = Promise.resolve();
-    if (config.resumeSessionId) {
-      const knownPath = resolveTranscriptPath(config.cwd, config.resumeSessionId);
-      this.transcript = new TranscriptWatcher(
-        knownPath,
-        this.bus,
-        this.handleModelChange,
-        this.handleCliVersion,
-        this.handleEffortChange,
-      );
-      drainDone = this.transcript.start().catch((err) => {
-        log.warn("Initial transcript drain failed", { token: this.spawnToken, error: err });
-      });
-    }
-    this.ready = Promise.all([idResolved, drainDone]).then(() => {
+    this.ready = drainDone.then(() => {
       // A resume's transcript has just been replayed, so the spawn calls that
       // parent each agent are now findable, and the lead's past SendMessage
       // calls can be backfilled (a subscriber may have snapshotted before this).
@@ -246,7 +242,6 @@ export class Session extends EventEmitter<SessionEvents> {
     const dumpScriptPath = statusLineDumpScriptPath();
     this.statusLinePayloadFile = statusLinePayloadPath(deps.serverConfig.dumpDir, this.spawnToken);
 
-    const spawnedAt = Date.now();
     this.pty.spawn({
       cwd: config.cwd,
       claudeBin: deps.serverConfig.claudeBin,
@@ -258,38 +253,11 @@ export class Session extends EventEmitter<SessionEvents> {
         statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
       }),
       resumeSessionId: config.resumeSessionId,
+      newSessionId: config.resumeSessionId ? undefined : sessionId,
       effort: this.currentEffort,
     });
 
-    // Resume already knows the session id, so skip the locator. For fresh
-    // spawns, watch ~/.claude/sessions/ — Claude Code v2.1.126+ writes
-    // <pid>.json there on startup; we match by cwd + spawnedAt because the
-    // pid in the file is claude.exe's, not the cmd.exe wrapper's pid.
-    if (!config.resumeSessionId) this.startSessionLocator(spawnedAt);
-
     this.startStatusLinePolling();
-  }
-
-  private startSessionLocator(spawnedAt: number): void {
-    this.locator = new SessionLocator(this.config.cwd, spawnedAt, (sessionId) => {
-      if (this._id) return;
-      this.resolveId(sessionId);
-      const path = resolveTranscriptPath(this.config.cwd, sessionId);
-      this.transcript = new TranscriptWatcher(
-        path,
-        this.bus,
-        this.handleModelChange,
-        this.handleCliVersion,
-        this.handleEffortChange,
-      );
-      void this.transcript.start().catch((err) =>
-        log.warn("Transcript watcher start failed", {
-          token: this.spawnToken,
-          error: (err as Error).message,
-        }),
-      );
-    });
-    this.locator.start();
   }
 
   private handleModelChange = (model: string): void => {
@@ -1332,7 +1300,7 @@ export class Session extends EventEmitter<SessionEvents> {
   stop(): void {
     log.info("Stopping", { token: this.spawnToken });
     this.teardownStatusLineAndCapture();
-    this.locator?.stop();
+
     this.transcript?.stop();
     this.pty.kill();
     this.setStatus("stopped");
