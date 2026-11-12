@@ -310,6 +310,14 @@ export class AgentRegistry extends EventEmitter<RegistryEvents> {
     return this.nodes.has(agentId);
   }
 
+  /** Whether any agent is running now (the idle reaper must not stop the session). */
+  hasRunning(): boolean {
+    for (const node of this.nodes.values()) {
+      if (node.status === "running") return true;
+    }
+    return false;
+  }
+
   /**
    * The agent's event bus, with its transcript fully drained so a replay sees
    * the whole history. Null when the agent is unknown or its transcript never
@@ -745,11 +753,7 @@ export class AgentRegistry extends EventEmitter<RegistryEvents> {
   }
 }
 
+/** Ids are kept apart from the event log, so this survives the log's retention cap. */
 function hasToolCall(bus: SessionBus, toolUseId: string): boolean {
-  const events = bus.getEventLog();
-  for (let i = events.length - 1; i >= 0; i--) {
-    const ev = events[i];
-    if (ev.kind === "tool_call" && ev.toolUseId === toolUseId) return true;
-  }
-  return false;
+  return bus.hasToolCall(toolUseId);
 }

@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { WriteStream } from "node:fs";
-import { createWriteStream, type FSWatcher, mkdirSync, readFileSync, watch } from "node:fs";
+import {
+  createWriteStream,
+  existsSync,
+  type FSWatcher,
+  mkdirSync,
+  readFileSync,
+  watch,
+} from "node:fs";
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -70,6 +77,9 @@ const PLAN_PICKER_OPEN_TIMEOUT_MS = 20_000;
 const PLAN_PICKER_SETTLE_MS = 300;
 /** How long after the key to wait for the ExitPlanMode tool_result. */
 const PLAN_CONFIRM_TIMEOUT_MS = 8_000;
+/** How long a respawn waits for the killed PTY's exit before spawning anyway.
+ *  PtyService ignores a late exit from a replaced process, so this is safe. */
+const RESPAWN_EXIT_TIMEOUT_MS = 5_000;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -137,6 +147,17 @@ export class Session extends EventEmitter<SessionEvents> {
   private statusSnapshot: SessionStatusSnapshot | null = null;
   /** Set during respawn() so the PTY exit handler doesn't propagate "stopped". */
   private respawning = false;
+  /** The respawn running now, and at most one queued behind it (see _doRespawn). */
+  private respawnRunning: Promise<void> | null = null;
+  private respawnQueued: Promise<void> | null = null;
+  /** `stop()` ran: resources are released and the session is never revived. */
+  private disposed = false;
+  /** `exit` was emitted; a second PTY death must not report it twice. */
+  private exitEmitted = false;
+  /** Last time anything happened: a live bus event, or input sent to the PTY. */
+  private _lastActivityAt: number;
+  /** Live tool calls with no result yet: a long-running tool emits nothing. */
+  private readonly openToolCalls = new Set<string>();
   private readonly deps: SessionDeps;
 
   get id(): string {
@@ -160,9 +181,9 @@ export class Session extends EventEmitter<SessionEvents> {
     return this.currentModel;
   }
   /**
-   * False once the PTY is gone. `SessionManager.stop` deliberately leaves a
-   * stopped session in `byId` (only `remove` evicts it), so anything reusing a
-   * registry hit has to check this or it will hand back a corpse.
+   * False once the PTY is gone. A stopped session stays in `SessionManager`'s
+   * `byId` until its exit evicts it, so anything reusing a registry hit has to
+   * check this or it will hand back a corpse.
    */
   get alive(): boolean {
     return this.status !== "stopped" && this.status !== "error";
@@ -181,6 +202,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.currentEffort = config.effort ?? readGlobalDefaultEffort();
     this.currentPermissionMode = config.permissionMode;
     this.createdAt = Date.now();
+    this._lastActivityAt = this.createdAt;
     this.pty = new PtyService();
 
     if (deps.serverConfig.capturePty) {
@@ -192,15 +214,10 @@ export class Session extends EventEmitter<SessionEvents> {
     });
 
     this.pty.on("exit", (info) => {
-      if (this.respawning) return;
-      this.teardownStatusLineAndCapture();
-      this.setStatus("stopped");
-      this.transcript?.stop();
-      // The agents ran inside the PTY that just exited. Keep what we know of them
-      // (a stopped session's tree is still worth reading) but stop tailing.
-      this._agents?.settleRunning();
-      this._agents?.stopWatching();
-      this.emit("exit", info);
+      // A respawn kills the PTY on purpose. But once `stop()` has run, an exit
+      // during a respawn is the real end and has to be reported.
+      if (this.respawning && !this.disposed) return;
+      this.handlePtyGone(info);
     });
 
     // The session id is known before the CLI starts: a resume names it, and a
@@ -525,6 +542,9 @@ export class Session extends EventEmitter<SessionEvents> {
     // Mirror JSONL permission-mode entries onto our state so unrelated
     // metadataChanged broadcasts don't ship a stale config value.
     this._bus.on("event", (event) => {
+      this.touch();
+      if (event.kind === "tool_call") this.openToolCalls.add(event.toolUseId);
+      else if (event.kind === "tool_result") this.openToolCalls.delete(event.toolUseId);
       if (event.kind === "model_switch") {
         this.handleModelSwitch(event.requestedModel, event.toModel);
         return;
@@ -550,6 +570,60 @@ export class Session extends EventEmitter<SessionEvents> {
     });
     log.info("Session id resolved", { token: this.spawnToken, id });
     this.emit("idResolved", id);
+  }
+
+  /**
+   * The PTY is gone for good (it exited, or a respawn could not replace it).
+   * Idempotent: `exit` is emitted once, which is what tells clients and lets
+   * `SessionManager` evict the session.
+   */
+  private handlePtyGone(info: { exitCode: number; signal?: number }): void {
+    this.teardownStatusLineAndCapture();
+    this.setStatus("stopped");
+    this.transcript?.stop();
+    this.openToolCalls.clear();
+    // The agents ran inside the PTY that just exited. Keep what we know of them
+    // (a stopped session's tree is still worth reading) but stop tailing.
+    this._agents?.settleRunning();
+    this._agents?.stopWatching();
+    if (this.exitEmitted) return;
+    this.exitEmitted = true;
+    this.emit("exit", info);
+  }
+
+  /** Last live activity (bus event or input), ms since epoch. */
+  get lastActivityAt(): number {
+    return this._lastActivityAt;
+  }
+
+  private touch(): void {
+    this._lastActivityAt = Date.now();
+  }
+
+  /**
+   * Whether stopping the PTY now loses nothing: the session can be resumed
+   * later from its transcript. A fresh session that never ran a turn has no
+   * transcript, so `--resume` would have nothing to pick up.
+   */
+  get resumable(): boolean {
+    const path = this.transcript?.path;
+    return path !== undefined && existsSync(path);
+  }
+
+  /**
+   * Why the session must not be idle-stopped right now, or null when nothing
+   * in the session itself is in progress. Callers add what the session cannot
+   * see (pending approvals, watching clients) and the idle duration.
+   */
+  idleBlocker(): string | null {
+    if (!this.alive || this.disposed) return "stopped";
+    if (!this._id || !this._bus) return "unresolved";
+    if (this.respawning || this.respawnRunning || this.respawnQueued) return "respawning";
+    if (this.hasInFlightTurn()) return "turn";
+    if (this.openToolCalls.size > 0) return "tool_running";
+    if (this.planPicker) return "plan_picker";
+    if (this._agents?.hasRunning()) return "agents_running";
+    return null;
   }
 
   /** Latest rendered status-line output (raw, may contain ANSI). */
@@ -661,6 +735,7 @@ export class Session extends EventEmitter<SessionEvents> {
 
   async sendInput(text: string): Promise<void> {
     log.debug("Input", { token: this.spawnToken, text: text.slice(0, 500) });
+    this.touch();
     // Post-interrupt redirect: when the prior turn was Esc'd before completion,
     // Claude Code's textarea retains the interrupted text and any new input gets
     // *appended* to it — the model then sees `<interrupted><redirect>` instead
@@ -958,6 +1033,7 @@ export class Session extends EventEmitter<SessionEvents> {
    * the AskUserQuestion picker) with arrow keys, Space, Enter, Tab, Esc.
    */
   sendKeystrokes(bytes: string): void {
+    this.touch();
     log.debug("Keystrokes", {
       token: this.spawnToken,
       hex: Array.from(bytes)
@@ -971,24 +1047,16 @@ export class Session extends EventEmitter<SessionEvents> {
   /** True when the most recent user_prompt was interrupted with no assistant since. */
   private shouldSynthRedirect(): boolean {
     if (!this._bus) return false;
-    const events = this._bus.getEventLog();
-    let lastUserIdx = -1;
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].kind === "user_prompt") {
-        lastUserIdx = i;
-        break;
-      }
-    }
-    if (lastUserIdx < 0) return false;
-    const after = events.slice(lastUserIdx + 1);
-    const hadInterrupt = after.some((e) => e.kind === "interrupt");
-    const hadAssistant = after.some((e) => e.kind === "assistant_text");
-    return hadInterrupt && !hadAssistant;
+    // Read from the bus's turn tracking, not its log: the log is capped and may
+    // have dropped the prompt during a long turn.
+    const { hasPrompt, kinds } = this._bus.sinceLastUserPrompt();
+    return hasPrompt && kinds.has("interrupt") && !kinds.has("assistant_text");
   }
 
   async sendSlashCommand(command: string): Promise<void> {
     const cmd = command.startsWith("/") ? command : `/${command}`;
     log.debug("Slash command", { token: this.spawnToken, command: cmd });
+    this.touch();
     // Same post-interrupt textarea problem as sendInput — without a respawn,
     // the slash command appends to leftover interrupted text and Claude Code
     // submits the whole concat as a regular user_prompt instead of parsing
@@ -1058,51 +1126,111 @@ export class Session extends EventEmitter<SessionEvents> {
    * post-interrupt redirect path (forced — Claude Code's textarea would
    * otherwise prepend the interrupted text to the new input).
    */
-  private async _doRespawn(): Promise<void> {
-    if (!this._id) return;
+  /**
+   * Respawns are serialized. Two can be requested at once (a settings change
+   * and a post-interrupt redirect, or two quick inputs), and running them
+   * concurrently made the second `spawn` throw "already running" with
+   * `respawning` left true for good. A request made while one is running waits
+   * for it and then runs once more; further requests join that queued one, since
+   * it reads the settings current when it spawns.
+   */
+  private _doRespawn(): Promise<void> {
+    if (!this.respawnRunning) {
+      const run = this.respawnOnce().finally(() => {
+        if (this.respawnRunning === run) this.respawnRunning = null;
+      });
+      this.respawnRunning = run;
+      return run;
+    }
+    if (!this.respawnQueued) {
+      const queued = this.respawnRunning
+        .catch(() => {})
+        .then(() => {
+          this.respawnQueued = null;
+          return this._doRespawn();
+        });
+      this.respawnQueued = queued;
+    }
+    return this.respawnQueued;
+  }
+
+  private async respawnOnce(): Promise<void> {
+    // A stopped session is never revived: `stop()` released its resources, and
+    // reopening it goes through a fresh resume instead.
+    if (!this._id || this.disposed || !this.alive) return;
     this.respawning = true;
-    const exited = new Promise<void>((resolve) => {
-      this.pty.once("exit", () => resolve());
-    });
-    // Immediate SIGKILL — Claude doesn't exit on one Ctrl+C and the 2s grace
-    // is dead time the user sees as respawn latency. We're about to --resume
-    // anyway; nothing graceful to preserve.
-    this.pty.kill({ immediate: true });
-    await exited;
+    try {
+      // A PTY that already exited emits no further `exit`, so waiting for one
+      // would hang forever. Only wait when there is something to kill.
+      if (this.pty.running) {
+        const exited = new Promise<void>((resolve) => {
+          this.pty.once("exit", () => resolve());
+        });
+        // Immediate SIGKILL — Claude doesn't exit on one Ctrl+C and the 2s grace
+        // is dead time the user sees as respawn latency. We're about to --resume
+        // anyway; nothing graceful to preserve.
+        this.pty.kill({ immediate: true });
+        const timedOut = await Promise.race([
+          exited.then(() => false),
+          delay(RESPAWN_EXIT_TIMEOUT_MS).then(() => true),
+        ]);
+        if (timedOut) {
+          log.warn("Killed PTY did not report its exit — respawning anyway", {
+            token: this.spawnToken,
+          });
+        }
+      }
+      // stop() may have run while we waited for the exit.
+      if (this.disposed) return;
 
-    // The retained observations describe the process we just killed. Replaying
-    // them against the new intent would revert it — reconciling `opus` against a
-    // stale `claude-sonnet-5` "corrects" the alias straight back to sonnet. The
-    // resumed session reports its own model and effort on its first turn.
-    this.reconciler.invalidate();
-    // Their host process is gone; none of the agents it was running still is.
-    this._agents?.settleRunning();
+      // The retained observations describe the process we just killed. Replaying
+      // them against the new intent would revert it — reconciling `opus` against a
+      // stale `claude-sonnet-5` "corrects" the alias straight back to sonnet. The
+      // resumed session reports its own model and effort on its first turn.
+      this.reconciler.invalidate();
+      // Their host process is gone; none of the agents it was running still is,
+      // and none of its tool calls will ever report a result.
+      this._agents?.settleRunning();
+      this.openToolCalls.clear();
 
-    const dumpScriptPath = statusLineDumpScriptPath();
-    const spawnedAt = Date.now();
-    this.pty.spawn({
-      cwd: this.config.cwd,
-      claudeBin: this.deps.serverConfig.claudeBin,
-      model: this.currentModel,
-      permissionMode: this.currentPermissionMode,
-      cols: this.deps.serverConfig.pty.cols,
-      rows: this.deps.serverConfig.pty.rows,
-      settingsJson: buildHooksConfig(this.deps.hooksBaseUrl, this.spawnToken, {
-        statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
-      }),
-      resumeSessionId: this._id,
-      forceModel: true,
-      effort: this.currentEffort,
-    });
-    // Claude Code takes a few seconds to boot before it reads stdin: it writes
-    // a `--resume` synthetic block to the JSONL (continue-from-here marker,
-    // attachments, /remote-control system message, ...) and only attaches its
-    // stdin reader once that's settled. Writing input earlier is silently
-    // dropped — the user sees "I changed settings, sent a message, nothing
-    // happened." Wait for the bus to receive a new transcript event after our
-    // spawnedAt, then for an 800ms quiet period (= Claude stopped writing).
-    await this.waitForReady(spawnedAt);
-    this.respawning = false;
+      const dumpScriptPath = statusLineDumpScriptPath();
+      const spawnedAt = Date.now();
+      this.pty.spawn({
+        cwd: this.config.cwd,
+        claudeBin: this.deps.serverConfig.claudeBin,
+        model: this.currentModel,
+        permissionMode: this.currentPermissionMode,
+        cols: this.deps.serverConfig.pty.cols,
+        rows: this.deps.serverConfig.pty.rows,
+        settingsJson: buildHooksConfig(this.deps.hooksBaseUrl, this.spawnToken, {
+          statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
+        }),
+        resumeSessionId: this._id,
+        forceModel: true,
+        effort: this.currentEffort,
+      });
+      // Claude Code takes a few seconds to boot before it reads stdin: it writes
+      // a `--resume` synthetic block to the JSONL (continue-from-here marker,
+      // attachments, /remote-control system message, ...) and only attaches its
+      // stdin reader once that's settled. Writing input earlier is silently
+      // dropped — the user sees "I changed settings, sent a message, nothing
+      // happened." Wait for the bus to receive a new transcript event after our
+      // spawnedAt, then for an 800ms quiet period (= Claude stopped writing).
+      await this.waitForReady(spawnedAt);
+    } finally {
+      this.respawning = false;
+      // A spawn that threw (cwd gone) or a new PTY that died while we waited
+      // left no process behind. Its exits were swallowed while `respawning`, so
+      // report the death here; otherwise the session would look alive forever
+      // with nothing behind it.
+      if (!this.pty.running && this.alive) {
+        log.error("PTY is not running after respawn — marking session stopped", {
+          token: this.spawnToken,
+        });
+        this.handlePtyGone({ exitCode: -1 });
+      }
+    }
+    this.touch();
     this.emit("metadataChanged");
   }
 
@@ -1237,6 +1365,7 @@ export class Session extends EventEmitter<SessionEvents> {
    */
   interrupt(): void {
     log.debug("Interrupt", { token: this.spawnToken });
+    this.touch();
     this.pty.write("\x1b");
     if (!this._bus) return;
     if (!this.hasInFlightTurn()) return;
@@ -1250,25 +1379,16 @@ export class Session extends EventEmitter<SessionEvents> {
   /** True iff the most recent user_prompt has no terminal event after it. */
   private hasInFlightTurn(): boolean {
     if (!this._bus) return false;
-    const events = this._bus.getEventLog();
-    let lastUserIdx = -1;
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].kind === "user_prompt") {
-        lastUserIdx = i;
-        break;
-      }
-    }
-    if (lastUserIdx < 0) return false;
-    const TERMINAL: ReadonlySet<string> = new Set([
+    // The bus tracks this outside its capped log (see sinceLastUserPrompt).
+    const { hasPrompt, kinds } = this._bus.sinceLastUserPrompt();
+    if (!hasPrompt) return false;
+    const TERMINAL: readonly SessionBusEvent["kind"][] = [
       "assistant_text",
       "compact_summary",
       "slash_command",
       "interrupt",
-    ]);
-    for (let i = lastUserIdx + 1; i < events.length; i++) {
-      if (TERMINAL.has(events[i].kind)) return false;
-    }
-    return true;
+    ];
+    return !TERMINAL.some((kind) => kinds.has(kind));
   }
 
   resize(cols: number, rows: number): void {
@@ -1297,9 +1417,17 @@ export class Session extends EventEmitter<SessionEvents> {
     unlink(this.statusLinePayloadFile).catch(() => {});
   }
 
+  /**
+   * Kill the PTY and release everything the session holds. Idempotent:
+   * `SessionManager` calls it again when it evicts a session whose PTY exited
+   * on its own, which is how a natural exit gets the same cleanup.
+   */
   stop(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     log.info("Stopping", { token: this.spawnToken });
     this.teardownStatusLineAndCapture();
+    this.openToolCalls.clear();
 
     this.transcript?.stop();
     this.pty.kill();

@@ -9,6 +9,7 @@ import { LoggerService } from "./services/logger.service.js";
 import { modelCatalog } from "./services/model-catalog.service.js";
 import { reapOrphans } from "./services/orphan-reaper.service.js";
 import { SessionManager } from "./services/session-manager.service.js";
+import { handleSessionEvicted, isSessionWatched } from "./services/ws.service.js";
 
 // Load packages/backend/.env relative to the compiled file (dist/index.js ->
 // ../.env), so the vars apply regardless of cwd. Must run before loadConfig().
@@ -42,6 +43,19 @@ const hooksService = new HooksService((token) => sessionManager.getHookTarget(to
 
 const hooksPort = await hooksService.start(config.hooksPort);
 sessionManager.setHooksBaseUrl(hooksService.baseUrl());
+
+// A stopped session is dropped from the registry (see SessionManager.evict).
+// When a resume of the same id is already running, its approvals and its
+// subscribers belong to it, so leave both alone.
+sessionManager.on("evicted", (session) => {
+  if (!session.resolved || sessionManager.get(session.id)) return;
+  hooksService.dropSession(session.id);
+  handleSessionEvicted(session);
+});
+sessionManager.startIdleReaper({
+  isWatched: isSessionWatched,
+  hasPendingApproval: (id) => hooksService.hasPendingApproval(id),
+});
 
 const server = startServer(config, sessionManager, hooksService);
 

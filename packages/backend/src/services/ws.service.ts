@@ -302,7 +302,8 @@ function subscribeToAgent(ws: WebSocket, session: Session, agentId: string): voi
         return;
       }
       const total = bus.getEventLogSize();
-      const startIdx = Math.max(0, total - INITIAL_REPLAY);
+      const floor = bus.getFirstRetainedIndex();
+      const startIdx = Math.max(floor, total - INITIAL_REPLAY);
       for (const event of bus.getEventLogSlice(startIdx, total)) {
         const msg = busEventToMessage(event);
         if (msg) send(ws, msg);
@@ -311,7 +312,7 @@ function subscribeToAgent(ws: WebSocket, session: Session, agentId: string): voi
         type: "history_available",
         sessionId: streamId,
         earliestIndex: startIdx,
-        hasMore: startIdx > 0,
+        hasMore: startIdx > floor,
       });
       const onEvent = (event: SessionBusEvent) => {
         const msg = busEventToMessage(event);
@@ -354,8 +355,10 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
   // Replay only the tail of the event log — chat-style. Older history is
   // pulled on demand via `fetch_history`.
   const bus: SessionBus = session.bus;
+  // Indices are absolute; `floor` is the oldest event the bus still retains.
   const total = bus.getEventLogSize();
-  const startIdx = Math.max(0, total - INITIAL_REPLAY);
+  const floor = bus.getFirstRetainedIndex();
+  const startIdx = Math.max(floor, total - INITIAL_REPLAY);
   for (const event of bus.getEventLogSlice(startIdx, total)) {
     const msg = busEventToMessage(event);
     if (msg) send(ws, msg);
@@ -364,7 +367,7 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
     type: "history_available",
     sessionId: session.id,
     earliestIndex: startIdx,
-    hasMore: startIdx > 0,
+    hasMore: startIdx > floor,
   });
 
   const onEvent = (event: SessionBusEvent) => {
@@ -432,6 +435,40 @@ function broadcast(msg: ServerMessage): void {
 
 export function broadcastSessionCreated(session: SessionInfo): void {
   broadcast({ type: "session_created", session });
+}
+
+/**
+ * Whether any client is looking at this session: subscribed to it, or to one
+ * of its agents. The idle reaper never stops a watched session.
+ */
+export function isSessionWatched(sessionId: string): boolean {
+  const agentPrefix = agentStreamId(sessionId, "");
+  for (const state of clients.values()) {
+    if (state.subscribedSessionId === sessionId) return true;
+    for (const streamId of state.agentSubs.keys()) {
+      if (streamId.startsWith(agentPrefix)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A session stopped and `SessionManager` evicted it. Tell every client, not
+ * just a subscriber: an idle stop happens with nobody subscribed, and other
+ * clients' session lists would otherwise keep showing it running (a duplicate
+ * for the subscriber is harmless). Then detach any subscription still holding
+ * the session's listeners. `subscribedSessionId` is left alone, so the client's
+ * own subscribe/unsubscribe flow is unchanged; its next subscribe resumes.
+ */
+export function handleSessionEvicted(session: Session): void {
+  const sessionId = session.id;
+  for (const [ws, state] of clients) {
+    send(ws, { type: "session_stopped", sessionId, exitCode: null });
+    if (state.subscribedSessionId === sessionId && state.cleanup) {
+      state.cleanup();
+      state.cleanup = null;
+    }
+  }
 }
 
 // Every client keeps the picker's learned aliases and family hints current.
@@ -873,24 +910,27 @@ function handleMessage(
     case "fetch_history": {
       const bus = busForHistory(sessionManager, msg.sessionId);
       if (!bus) {
-        // An agent whose transcript is not being tailed has no history to page
-        // through. Answer with an empty page so the viewer stops showing
-        // "loading earlier messages" and does not ask again.
-        if (parseAgentStreamId(msg.sessionId)) {
-          send(ws, {
-            type: "history_page",
-            sessionId: msg.sessionId,
-            events: [],
-            fromIndex: 0,
-            hasMore: false,
-          });
-        }
+        // An agent whose transcript is not being tailed, or a session that has
+        // stopped and been evicted, has no history to page through. Answer with
+        // an empty page so the viewer stops showing "loading earlier messages"
+        // and does not ask again.
+        send(ws, {
+          type: "history_page",
+          sessionId: msg.sessionId,
+          events: [],
+          fromIndex: 0,
+          hasMore: false,
+        });
         return;
       }
+      // Absolute indices: the bus may have dropped events below `floor` (see
+      // MAX_RETAINED_EVENTS). A page that reaches it reports `hasMore: false`;
+      // older history lives only in the transcript file.
       const total = bus.getEventLogSize();
-      const end = Math.min(total, Math.max(0, msg.beforeIndex));
+      const floor = bus.getFirstRetainedIndex();
+      const end = Math.min(total, Math.max(floor, msg.beforeIndex));
       const limit = Math.max(1, Math.min(100, msg.limit));
-      const start = Math.max(0, end - limit);
+      const start = Math.max(floor, end - limit);
       const events = bus
         .getEventLogSlice(start, end)
         .map(busEventToMessage)
@@ -900,7 +940,7 @@ function handleMessage(
         sessionId: msg.sessionId,
         events,
         fromIndex: start,
-        hasMore: start > 0,
+        hasMore: start > floor,
       });
       return;
     }

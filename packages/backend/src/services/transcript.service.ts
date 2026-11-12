@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, type FSWatcher, watch } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, dirname } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type {
   AssistantEntry,
   ContentBlock,
@@ -74,6 +75,15 @@ export class TranscriptWatcher {
   private dirPoll: NodeJS.Timeout | null = null;
   private offset = 0;
   private pendingBuffer = "";
+  /**
+   * One decoder for the life of the watcher. Each drain reads whatever bytes
+   * the file has grown by, which can end mid-way through a multibyte UTF-8
+   * character (emoji, CJK) the CLI is still writing. Decoding each range on its
+   * own turned both halves into U+FFFD; the decoder holds the incomplete tail
+   * bytes back until the next drain completes them. `offset` stays a byte
+   * offset, and `pendingBuffer` still holds the incomplete *line*.
+   */
+  private readonly decoder = new StringDecoder("utf8");
   private stopped = false;
   private readInFlight: Promise<void> | null = null;
   private pendingRead = false;
@@ -253,12 +263,18 @@ export class TranscriptWatcher {
     const stream = createReadStream(this.path, {
       start: this.offset,
       end: size - 1,
-      encoding: "utf8",
     });
 
     let chunk = "";
-    for await (const piece of stream) {
-      chunk += piece;
+    try {
+      for await (const piece of stream) {
+        chunk += this.decoder.write(piece as Buffer);
+      }
+    } catch (err) {
+      // The range is re-read from the unchanged offset next time, so drop any
+      // partial character this failed read left in the decoder.
+      this.decoder.end();
+      throw err;
     }
     this.offset = size;
 
@@ -489,11 +505,8 @@ export class TranscriptWatcher {
   }
 
   private interruptSinceLastPrompt(): boolean {
-    const events = this.bus.getEventLog();
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].kind === "interrupt") return true;
-      if (events[i].kind === "user_prompt") return false;
-    }
-    return false;
+    // Tracked by the bus outside its (capped) log, so a trimmed prompt can't
+    // make this miss an interrupt.
+    return this.bus.sinceLastUserPrompt().kinds.has("interrupt");
   }
 }

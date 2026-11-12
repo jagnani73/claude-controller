@@ -143,26 +143,35 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
       env.CLAUDE_CODE_EFFORT_LEVEL = options.effort;
     }
 
-    this.process = pty.spawn(shell, shellArgs, {
+    const proc = pty.spawn(shell, shellArgs, {
       name: "xterm-256color",
       cols: options.cols,
       rows: options.rows,
       cwd: options.cwd,
       env,
     });
+    this.process = proc;
 
-    this.process.onData((data) => {
-      this.emit("data", data);
+    proc.onData((data) => {
+      // A killed process can still flush output after its replacement spawned.
+      if (this.process === proc) this.emit("data", data);
     });
 
-    this.process.onExit(({ exitCode, signal }) => {
+    proc.onExit(({ exitCode, signal }) => {
+      // `kill({immediate})` forgets the process at once, so its exit can arrive
+      // after a respawn has started the next one. Reporting it then would clear
+      // the live process and tell the session it died.
+      if (this.process !== null && this.process !== proc) {
+        log.info("Replaced process exited", { exitCode, signal });
+        return;
+      }
       log.info("Process exited", { exitCode, signal });
       this.process = null;
       this.emit("exit", { exitCode, signal });
     });
 
     // Catch async socket errors from conpty to prevent crashes
-    const socket = (this.process as unknown as { _socket?: NodeJS.EventEmitter })._socket;
+    const socket = (proc as unknown as { _socket?: NodeJS.EventEmitter })._socket;
     if (socket) {
       socket.on("error", (err: Error) => {
         log.warn("PTY socket error", { error: err.message });
@@ -207,11 +216,16 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
       this.process = null;
       return;
     }
-    this.process.write("\x03");
+    const proc = this.process;
+    proc.write("\x03");
 
+    // Only the process this call was asked to kill: a respawn may have
+    // replaced it within the grace period.
     setTimeout(() => {
-      if (this.process) {
-        this.process.kill();
+      if (this.process === proc) {
+        try {
+          proc.kill();
+        } catch {}
         this.process = null;
       }
     }, 2000);

@@ -25,6 +25,7 @@ const captured: {
 } = {};
 
 class FakePty extends EventEmitter {
+  running = true;
   spawn = vi.fn();
   write = vi.fn();
   kill = vi.fn(() => {

@@ -28,6 +28,14 @@ export const DEFAULT_PTY_COLS = 120;
 export const DEFAULT_PTY_ROWS = 40;
 
 /**
+ * Minutes a session may sit idle and unwatched before its PTY is stopped (it
+ * resumes transparently when reopened). Long enough that stepping away from the
+ * phone mid-task never costs anything; short enough that a day of opening past
+ * chats does not leave dozens of `claude --resume` processes behind.
+ */
+export const DEFAULT_IDLE_STOP_MINUTES = 30;
+
+/**
  * Command used to launch Claude Code. Bare name by default, so it resolves off
  * PATH like a normal `claude` invocation.
  *

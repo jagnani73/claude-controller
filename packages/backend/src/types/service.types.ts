@@ -20,6 +20,11 @@ export interface ServerConfig {
     cols: number;
     rows: number;
   };
+  /**
+   * Stop a session's PTY once it has been idle this long with nobody watching
+   * (see `SessionManager.startIdleReaper`). 0 disables. `IDLE_STOP_MINUTES`.
+   */
+  idleStopMs: number;
 }
 
 // ─── PTY Service ─────────────────────────────────────────────────────

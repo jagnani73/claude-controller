@@ -175,6 +175,11 @@ Claude Code writes a structured per-session transcript at:
 
 A `TranscriptWatcher` (`transcript.service.ts`) tails this file with `fs.watch`
 for **all content** — assistant text, tool calls, tool results, user prompts.
+It reads raw bytes from a byte offset and decodes them with one `StringDecoder`
+kept for the watcher's life: a drain can end in the middle of a multibyte UTF-8
+character the CLI is still writing (emoji, CJK), and decoding each byte range on
+its own turned both halves into U+FFFD. Incomplete *lines* are buffered
+separately, as before.
 
 The `<encoded-cwd>` segment replaces **every non-alphanumeric character** with
 `-`, not just the path separators. Getting this wrong is the least debuggable
@@ -315,6 +320,30 @@ Every event from both sources normalizes into a per-session **`SessionBus`**
 to the phone as typed `ServerMessage`s, and applies inbound `ClientMessage`s.
 Shared message types live in `packages/common` (`ServerMessage`, `ClientMessage`,
 `SessionConfig`, `SessionInfo`, `PermissionMode`, `ClaudeModel`, `EffortLevel`).
+
+### Event log retention
+
+Each bus keeps an in-memory event log for subscribe replay (the newest 20) and
+`fetch_history` paging. It is **capped** (`MAX_RETAINED_EVENTS` = 5,000 events and
+`MAX_RETAINED_BYTES` ≈ 16 MiB of serialized events, never below 50 events): tool
+results are stored whole, and a backend running for days otherwise grew without
+limit. Past either limit the oldest events are dropped in one batch, down to 90%.
+
+- **Indices are absolute.** `getEventLogSize()` is the count of events ever
+  appended, `getFirstRetainedIndex()` the oldest one still held, and
+  `getEventLogSlice(start, end)` takes absolute indices, so a client's
+  `earliestIndex` means the same event after a trim.
+- **Paging past the window** returns an empty page (or a short one) with
+  `hasMore: false`. The transcript JSONL on disk is the full history; the
+  controller does not reload trimmed events from it.
+- **Lookbacks that must survive a trim don't read the log.** The bus tracks the
+  kinds seen since the newest `user_prompt` (`sinceLastUserPrompt`, used by
+  `hasInFlightTurn`, the post-interrupt redirect check and the transcript's
+  interrupt dedupe) and every `tool_call` id (`hasToolCall`, used for agent
+  parent links). The interrupt-concat echo and repeat compact-summary checks only
+  read the newest few events, which the 50-event floor covers. The agent
+  registry's `SendMessage` backfill reads the retained log, so on a huge resumed
+  transcript the oldest messages may be missing from the agents feed.
 
 ### Data flow
 
@@ -465,6 +494,38 @@ graph TD
 
 - **Phone disconnect** is cheap: the PTY keeps running on the laptop; on reconnect
   the server replays the recent transcript tail.
+- **Idle stop.** A session nobody uses doesn't keep its PTY forever: opening a past
+  chat spawns `claude --resume`, which used to live until an explicit Stop or a
+  backend shutdown. `SessionManager.startIdleReaper` sweeps every
+  `min(60s, timeout/4)` and stops a session once it has been idle for
+  `ServerConfig.idleStopMs` (`IDLE_STOP_MINUTES`, default 30, `0` disables) with
+  **all** of: no client subscribed to it or to one of its agents (watching counts
+  as activity, so the clock restarts when the phone leaves), no turn in flight, no
+  tool call without a result (a long build emits nothing for minutes), no pending
+  approval or AskUserQuestion, no open plan picker, no running agent, no respawn,
+  and a transcript on disk to resume from (a fresh session that never ran a turn is
+  never stopped). Activity is any live bus event or input written to the PTY.
+  Reopening it takes the ordinary resume path; the id and transcript are untouched.
+- **Eviction.** A stopped session is dropped from `SessionManager` once its PTY
+  exits (deferred a tick, so subscribers send `session_stopped` first), or 5s
+  after `stop()` if no exit is ever reported. Eviction runs the idempotent
+  `Session.stop()` (so a natural exit gets the same cleanup: transcript and
+  statusline watchers, agent registry, timers, the orphan-reaper record), denies
+  and forgets any approvals the hooks service still holds for it, broadcasts
+  `session_stopped` to every client (an idle stop has no subscriber) and detaches
+  any subscription still holding its listeners. Both are skipped when a resume of
+  the same id is already running. After eviction the id is unknown: hooks for its
+  spawn token answer `{}`, `fetch_history` gets an empty final page, and
+  subscribe resumes it.
+- **Respawns are serialized.** A respawn requested while one runs waits for it and
+  runs once more (further requests join that one). It only waits for the old PTY's
+  exit when one is running (an exited PTY emits no further exit, which used to hang
+  it with `respawning` stuck true), gives up waiting after 5s, and resets
+  `respawning` in a `finally`. If no PTY is running afterwards (spawn threw, or the
+  new process died while starting) the session is marked stopped and `exit` is
+  emitted. `PtyService` ignores the late exit and output of a process it has
+  already replaced, and its delayed kill only targets the process it was asked to
+  kill.
 - **Backend restart** loses the in-memory session registry (there's no database).
   Transcripts persist on disk, so a session can be resumed via `claude --resume`
   (the subscribe path can disk-discover a single session). See the Roadmap's

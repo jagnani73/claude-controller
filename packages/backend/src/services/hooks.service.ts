@@ -92,6 +92,29 @@ export class HooksService {
     return `http://${LOOPBACK_HOST}:${this.port}`;
   }
 
+  /** Whether a PermissionRequest (tool approval or AskUserQuestion) is held for this session. */
+  hasPendingApproval(sessionId: string): boolean {
+    const prefix = approvalKey(sessionId, "");
+    for (const key of this.pendingApprovals.keys()) {
+      if (key.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Forget the approvals held for a session that has stopped and been evicted.
+   * Its PTY is gone, so nobody is waiting on the HTTP response; answering deny
+   * just closes it out instead of keeping the resolver for the backend's life.
+   */
+  dropSession(sessionId: string): void {
+    const prefix = approvalKey(sessionId, "");
+    for (const [key, resolver] of this.pendingApprovals) {
+      if (!key.startsWith(prefix)) continue;
+      this.pendingApprovals.delete(key);
+      resolver(buildApprovalResponse("deny", "session stopped").response);
+    }
+  }
+
   /**
    * Resolve a pending approval from the phone. Returns false if not pending.
    *
