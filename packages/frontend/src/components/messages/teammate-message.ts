@@ -49,6 +49,22 @@ const HIDDEN_TYPES: ReadonlySet<string> = new Set([
   "shutdown_approved",
 ]);
 
+const collapse = (s: string): string => s.replace(/\s+/g, " ").trim();
+
+/**
+ * Whether a summary tells the reader anything the body does not. When a sender
+ * gives none, the CLI fills `summary` with a truncated copy of the text (seen on
+ * 2.1.322, ending in "..."), which would print the same words twice.
+ */
+export function summaryAddsInfo(summary: string | undefined, text: string): boolean {
+  if (!summary) return false;
+  const head = collapse(summary)
+    .replace(/(\.\.\.|\u2026)$/, "")
+    .trimEnd();
+  if (!head) return false;
+  return !collapse(text).startsWith(head);
+}
+
 function parseAttrs(raw: string): Record<string, string> {
   const attrs: Record<string, string> = {};
   for (const m of raw.matchAll(ATTR_RE)) attrs[m[1]] = m[2];

@@ -2,6 +2,7 @@ import type { AgentMessage, AgentNode, AgentStatus } from "common/types";
 import { ArrowRight, ChevronLeft, MessagesSquare, Network } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MessageStream } from "@/components/messages/MessageStream";
+import { summaryAddsInfo } from "@/components/messages/teammate-message";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/ui/StatusDot";
 import {
@@ -177,7 +178,9 @@ function AgentSummary({ node, onBack }: { node: AgentNode; onBack: () => void })
         <StatusDot tone={STATUS_TONE[node.status]} pulse={node.status === "running"}>
           {node.status}
         </StatusDot>
-        <span className="font-mono text-[11px]">{node.agentType}</span>
+        {node.agentType !== node.name && (
+          <span className="font-mono text-[11px]">{node.agentType}</span>
+        )}
         {node.background && <span className="font-mono text-[11px]">background</span>}
         <span className="font-mono text-[11px]">started {formatAgo(node.startedAt)}</span>
       </div>
@@ -224,7 +227,8 @@ function TreeView({
                   <span className="truncate text-sm font-medium text-foreground">
                     {agentLabel(node)}
                   </span>
-                  {node.name && (
+                  {/* Teammates are typed by their own name; repeating it says nothing. */}
+                  {node.name && node.agentType !== node.name && (
                     <span className="truncate font-mono text-[11px] text-muted-foreground/70">
                       {node.agentType}
                     </span>
@@ -294,7 +298,7 @@ function MessagesView({
                 {new Date(m.timestamp).toLocaleTimeString()}
               </span>
             </div>
-            {m.summary && m.summary !== m.text && (
+            {summaryAddsInfo(m.summary, m.text) && (
               <div className="mt-1 text-xs text-muted-foreground">{m.summary}</div>
             )}
             <div className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground/90">

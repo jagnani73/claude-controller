@@ -1,6 +1,6 @@
 import { AtSign } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { TeammateMessage as ParsedMessage } from "./teammate-message";
+import { type TeammateMessage as ParsedMessage, summaryAddsInfo } from "./teammate-message";
 
 // Claude Code assigns each teammate a colour name; map it to fixed utility
 // classes (Tailwind only keeps classes it can see written out in full).
@@ -47,7 +47,9 @@ export function TeammateMessage({ message, timestamp }: TeammateMessageProps) {
             <AtSign className="size-3" strokeWidth={2} />
             {from}
           </span>
-          {summary && <span className="text-muted-foreground">{summary}</span>}
+          {summary && (body.kind !== "text" || summaryAddsInfo(summary, body.text)) && (
+            <span className="text-muted-foreground">{summary}</span>
+          )}
         </div>
 
         {body.kind === "text" && (
