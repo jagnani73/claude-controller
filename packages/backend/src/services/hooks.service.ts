@@ -44,6 +44,8 @@ export class HooksService {
   private server: Server | null = null;
   private port = 0;
   private pendingApprovals = new Map<string, (response: HookResponse) => void>();
+  /** Suffix that makes every synthesized approval id unique (see synthesizeToolUseId). */
+  private approvalSeq = 0;
 
   constructor(private readonly targetLookup: TargetLookup) {}
 
@@ -81,12 +83,7 @@ export class HooksService {
       this.server = null;
     }
     for (const [, resolver] of this.pendingApprovals) {
-      resolver({
-        hookSpecificOutput: {
-          permissionDecision: "deny",
-          permissionDecisionReason: "controller shutting down",
-        },
-      });
+      resolver(buildApprovalResponse("deny", "controller shutting down").response);
     }
     this.pendingApprovals.clear();
   }
@@ -323,7 +320,7 @@ export class HooksService {
       return {};
     }
 
-    const toolUseId = synthesizeToolUseId(payload);
+    const toolUseId = synthesizeToolUseId(payload, ++this.approvalSeq);
 
     bus.push({
       kind: "approval_request",
@@ -354,9 +351,16 @@ function approvalKey(sessionId: string, toolUseId: string): string {
   return `${sessionId}:${toolUseId}`;
 }
 
-function synthesizeToolUseId(payload: PermissionRequestPayload): string {
+/**
+ * PermissionRequest carries no `tool_use_id`, so the card gets a synthesized one.
+ * The sequence suffix makes it unique per request: Claude often retries a call
+ * with the identical input (e.g. after an edit the CLI rejected), and a
+ * content-only id collided with the first card, which the frontend dedupes by
+ * id, so the retry's approval never appeared and the session hung on it.
+ */
+function synthesizeToolUseId(payload: PermissionRequestPayload, seq: number): string {
   const input = JSON.stringify(payload.tool_input ?? null);
-  return `pr:${payload.tool_name}:${hashString(input)}`;
+  return `pr:${payload.tool_name}:${hashString(input)}:${seq.toString(36)}`;
 }
 
 function hashString(s: string): string {

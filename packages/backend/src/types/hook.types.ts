@@ -125,30 +125,21 @@ export type HookEventName = HookPayload["hook_event_name"];
 /**
  * Subset of the hook response contract we actually return.
  *
- * NB the shape: `claude-code-source` (v2.1.87) defines PermissionRequest's
- * output as `{ hookEventName, decision: { behavior, updatedInput } }`, which is
- * *not* what we send — we send the flatter `permissionDecision` form, and it is
- * verified working against 2.1.251 for both allow and deny. The snapshot
- * predates the build we drive, so live behaviour wins over the schema; don't
- * "fix" this to match the snapshot without re-testing an actual approval.
+ * PermissionRequest decisions use only the schema form
+ * `{ hookEventName, decision: { behavior, ... } }` (see `buildApprovalResponse`).
+ * The PreToolUse-style flat `{ permissionDecision }` form worked for a plain
+ * allow/deny on 2.1.251 but is ignored on 2.1.322 — the CLI opened its own
+ * terminal picker the phone cannot see, for allow and deny alike (checked live)
+ * — so it is no longer part of this type.
  */
 export type HookResponse =
   | Record<string, never>
   | {
-      /** Flat form — verified working on 2.1.251 for plain allow/deny. */
-      hookSpecificOutput: {
-        permissionDecision: "allow" | "deny";
-        permissionDecisionReason?: string;
-      };
-    }
-  | {
       /**
-       * Schema form, required to carry `updatedInput`.
-       *
-       * Adding `updatedInput` to the flat form does NOT work: the CLI ignores
-       * the whole response and falls through to its own terminal picker, which
-       * the phone cannot see — the session then hangs with no error anywhere.
-       * Verified against 2.1.251 by observing the picker in a PTY capture.
+       * Schema form — the only PermissionRequest shape the hooks reference
+       * documents, and the only one 2.1.322 honours. A response it does not
+       * honour falls through to the CLI's own terminal picker, which the phone
+       * cannot see — the session then hangs with no error anywhere.
        */
       hookSpecificOutput: {
         hookEventName: "PermissionRequest";
