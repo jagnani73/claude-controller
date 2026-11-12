@@ -264,38 +264,36 @@ export class AgentRegistry extends EventEmitter<RegistryEvents> {
 
   /** A `SendMessage` tool call, from the PreToolUse hook. */
   handleSendMessage(p: PreToolUsePayload): void {
-    if (this.messageIds.has(p.tool_use_id)) return;
-    const parsed = parseSendMessageInput(p.tool_input);
-    if (!parsed.to && !parsed.text) {
-      // Nothing to show and nobody to show it to: a malformed input, not a message.
-      log.info("ignoring a SendMessage with no recipient and no text", {
-        toolUseId: p.tool_use_id,
-      });
-      return;
+    const message = this.recordMessage(
+      p.tool_use_id,
+      p.agent_id ?? null,
+      p.tool_input,
+      new Date().toISOString(),
+    );
+    if (message) this.emit("message", message);
+  }
+
+  /**
+   * Rebuild what the hooks would have reported, from the transcripts. The
+   * message log and shutdown approvals only fill from live hooks, so after a
+   * backend restart a session's agent conversation would be empty and every
+   * shut-down teammate would read `idle`. Each `SendMessage` is in its sender's
+   * own transcript under the same tool_use id the hook carried, so replaying
+   * them cannot duplicate a live message. Opening every agent's transcript also
+   * lets nested agents find their parents. Safe to call repeatedly.
+   */
+  backfill(): void {
+    this.harvest(this.deps.mainBus, null);
+    for (const agentId of this.nodes.keys()) {
+      if (this.watchers.has(agentId) || !this.jsonlPaths.has(agentId)) continue;
+      void this.ensureWatcher(agentId);
     }
-    this.messageIds.add(p.tool_use_id);
-    const message: AgentMessage = {
-      id: p.tool_use_id,
-      fromAgentId: p.agent_id ?? null,
-      to: parsed.to,
-      toAgentId: this.resolveRecipient(parsed.to),
-      kind: parsed.kind,
-      summary: parsed.summary,
-      text: parsed.text,
-      timestamp: new Date().toISOString(),
-    };
-    this.noteShutdownTraffic(p.agent_id, parsed);
-    this.messages.push(message);
-    if (this.messages.length > MAX_MESSAGES) {
-      const dropped = this.messages.shift();
-      if (dropped) this.messageIds.delete(dropped.id);
-    }
-    this.emit("message", message);
   }
 
   /** Current agents (oldest first) plus the message log, after re-reading disk. */
   getSnapshot(): { agents: AgentNode[]; messages: AgentMessage[] } {
     this.scan();
+    this.backfill();
     const agents = [...this.nodes.values()]
       .map((n) => ({ ...n }))
       .sort((a, b) => a.startedAt - b.startedAt);
@@ -394,6 +392,64 @@ export class AgentRegistry extends EventEmitter<RegistryEvents> {
     node.status = next;
     if (next !== "running") node.activity = undefined;
     return true;
+  }
+
+  /**
+   * Add one `SendMessage` to the log, in time order. Returns null when it is
+   * already known (the hook and the transcript describe the same call) or is
+   * not a message at all.
+   */
+  private recordMessage(
+    id: string,
+    senderId: string | null,
+    input: unknown,
+    timestamp: string,
+  ): AgentMessage | null {
+    if (this.messageIds.has(id)) return null;
+    const parsed = parseSendMessageInput(input);
+    if (!parsed.to && !parsed.text) {
+      // Nothing to show and nobody to show it to: a malformed input, not a message.
+      log.info("ignoring a SendMessage with no recipient and no text", { toolUseId: id });
+      return null;
+    }
+    this.messageIds.add(id);
+    const message: AgentMessage = {
+      id,
+      fromAgentId: senderId,
+      to: parsed.to,
+      toAgentId: this.resolveRecipient(parsed.to),
+      kind: parsed.kind,
+      summary: parsed.summary,
+      text: parsed.text,
+      timestamp,
+    };
+    this.noteShutdownTraffic(senderId ?? undefined, parsed);
+    // Live messages arrive in order; harvested ones can be older than what is
+    // already here. ISO timestamps compare correctly as strings.
+    let at = this.messages.length;
+    while (at > 0 && this.messages[at - 1].timestamp > timestamp) at--;
+    this.messages.splice(at, 0, message);
+    if (this.messages.length > MAX_MESSAGES) {
+      const dropped = this.messages.shift();
+      if (dropped) this.messageIds.delete(dropped.id);
+    }
+    return message;
+  }
+
+  /** Replay the `SendMessage` calls recorded on one bus (the sender's transcript). */
+  private harvest(bus: SessionBus, ownerId: string | null): void {
+    for (const event of bus.getEventLog()) {
+      if (event.kind !== "tool_call" || event.name !== "SendMessage") continue;
+      const message = this.recordMessage(event.toolUseId, ownerId, event.input, event.timestamp);
+      if (message) this.emit("message", message);
+    }
+    if (!ownerId) return;
+    // A teammate whose own transcript shows it agreed to stop, and that is not
+    // running now, has finished: the hook that would have said so is gone.
+    const node = this.nodes.get(ownerId);
+    if (node && node.status === "idle" && this.hasAgreedToStop(node)) {
+      if (this.setStatus(node, "done")) this.emitUpdate(node);
+    }
   }
 
   /** Record whether a teammate agreed to or declined a shutdown, from its own `SendMessage`. */
@@ -665,6 +721,8 @@ export class AgentRegistry extends EventEmitter<RegistryEvents> {
         break;
       }
     }
+    // Its own SendMessage calls (and any shutdown it agreed to) are now known.
+    this.harvest(entry.bus, agentId);
     // Spawns made by this agent are now visible; settle any child waiting on them.
     this.reresolveParents();
   }

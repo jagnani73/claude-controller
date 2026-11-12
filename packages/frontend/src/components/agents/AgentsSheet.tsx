@@ -275,37 +275,40 @@ function MessagesView({
   return (
     <div className="h-full overflow-y-auto px-3 py-3">
       <ul className="flex flex-col gap-2">
-        {messages.map((m) => (
-          <li key={m.id} className="rounded-xl border border-border/60 bg-card/50 px-3 py-2">
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <Party
-                label={labelForId(agents, m.fromAgentId)}
-                agentId={m.fromAgentId}
-                onSelect={onSelect}
-              />
-              <ArrowRight className="size-3 text-muted-foreground/60" strokeWidth={1.75} />
-              <Party
-                label={recipientLabel(agents, m)}
-                agentId={m.toAgentId ?? null}
-                onSelect={onSelect}
-              />
-              {m.kind !== "message" && (
-                <span className="rounded-md border border-warning/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-warning">
-                  {m.kind.replaceAll("_", " ")}
+        {/* Backfilled messages can arrive after newer live ones; show them in time order. */}
+        {[...messages]
+          .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))
+          .map((m) => (
+            <li key={m.id} className="rounded-xl border border-border/60 bg-card/50 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <Party
+                  label={labelForId(agents, m.fromAgentId)}
+                  agentId={m.fromAgentId}
+                  onSelect={onSelect}
+                />
+                <ArrowRight className="size-3 text-muted-foreground/60" strokeWidth={1.75} />
+                <Party
+                  label={recipientLabel(agents, m)}
+                  agentId={m.toAgentId ?? null}
+                  onSelect={onSelect}
+                />
+                {m.kind !== "message" && (
+                  <span className="rounded-md border border-warning/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-warning">
+                    {m.kind.replaceAll("_", " ")}
+                  </span>
+                )}
+                <span className="ml-auto font-mono text-[11px] text-muted-foreground/60">
+                  {new Date(m.timestamp).toLocaleTimeString()}
                 </span>
+              </div>
+              {summaryAddsInfo(m.summary, m.text) && (
+                <div className="mt-1 text-xs text-muted-foreground">{m.summary}</div>
               )}
-              <span className="ml-auto font-mono text-[11px] text-muted-foreground/60">
-                {new Date(m.timestamp).toLocaleTimeString()}
-              </span>
-            </div>
-            {summaryAddsInfo(m.summary, m.text) && (
-              <div className="mt-1 text-xs text-muted-foreground">{m.summary}</div>
-            )}
-            <div className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
-              {m.text}
-            </div>
-          </li>
-        ))}
+              <div className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
+                {m.text}
+              </div>
+            </li>
+          ))}
       </ul>
     </div>
   );

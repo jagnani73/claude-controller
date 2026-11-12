@@ -228,7 +228,10 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     this.ready = Promise.all([idResolved, drainDone]).then(() => {
       // A resume's transcript has just been replayed, so the spawn calls that
-      // parent each agent are now findable.
+      // parent each agent are now findable, and the lead's past SendMessage
+      // calls can be backfilled (a subscriber may have snapshotted before this).
+      this._agents?.scan();
+      this._agents?.backfill();
       this._agents?.reresolveParents();
     });
 
