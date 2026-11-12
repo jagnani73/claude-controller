@@ -504,24 +504,53 @@ fails silently rather than loudly — so the version is tracked explicitly.
 
 ```
 packages/common/src/version.ts
-  CLAUDE_CODE_TARGET_VERSION              the build we're verified against
+  CLAUDE_CODE_TARGET_VERSION              fallback / last-verified build (static)
+  CLAUDE_CODE_MINIMUM_VERSION             hard floor for the question relay (static)
   CLAUDE_CODE_REFERENCE_SNAPSHOT_VERSION  the frozen claude-code-source/ snapshot
-  classifyCliVersion(observed)            -> "match" | "older" | "newer"
+  classifyCliVersion(observed, ref)       -> "match" | "older" | "newer"
+packages/backend/src/services/cli-version.service.ts
+  resolveCliReference(claudeBin)          runs `<claudeBin> --version` once at startup
 ```
 
-- `CLAUDE_CODE_TARGET_VERSION` is the single canonical number. Bump only after
-  re-verifying the relays. Comments should reference it rather than restating a
-  version; genuine behavioral minimums ("since v2.1.126 …") stay inline, since
-  those record when a behavior appeared rather than what we tested against.
-- The **transcript** is the runtime source: Claude Code stamps `version` on every
-  `user`/`assistant`/`system`/`attachment` entry. `TranscriptWatcher.noteCliVersion`
-  → `Session.handleCliVersion` warns on mismatch and publishes `cliVersion` /
-  `cliVersionStatus` on `SessionInfo`. The statusline payload also carries a
-  version but only flows when a statusline command is configured, so it is not a
-  dependable source. A mismatch is informational, never fatal.
+- **The drift reference is the installed binary.** At startup the backend runs
+  `<claudeBin> --version` once (`execFile`, no shell, 10s timeout), parses the
+  leading dotted version ("2.1.322 (Claude Code)" → `2.1.322`), logs it at info,
+  and hands it to every `Session` via `SessionDeps.cliReferenceVersion`.
+  `Session.handleCliVersion` and `getInfo()` classify the running session's
+  version against it. It is resolved once: a backend that outlives an upgrade
+  keeps comparing against the build it started with until restarted.
+- **Fallback.** If the probe fails (binary missing, timeout, unparseable output)
+  the reference is the static `CLAUDE_CODE_TARGET_VERSION` and this is logged at
+  **error** (warn is outside the default log level). That constant is now only
+  this fallback and the last build the relays were manually verified against;
+  bump it after re-verifying them. `scripts/verify/` reads it from the built
+  common package and is deliberately **not** dynamic.
+- **What the status now means.** A non-`match` `cliVersionStatus` says *this
+  session is running a different build than the one installed now* (typically a
+  session resumed across an upgrade, or a PATH change under a long-lived
+  backend). It no longer says *a build we have not verified*: an up-to-date
+  install always matches itself, whether or not the relays were ever tested on
+  it. Verification is still a manual act (`pnpm verify:*` plus the picker pass).
+- **The minimum floor stays static.** `CLAUDE_CODE_MINIMUM_VERSION` /
+  `isBelowMinimumVersion` guard the AskUserQuestion keystroke relay, which
+  silently produces wrong answers on old builds. That is correctness, not drift,
+  so it is never derived from the installed binary and keeps its error-level log.
+- The **transcript** is the runtime source of the *session's* version: Claude Code
+  stamps `version` on every `user`/`assistant`/`system`/`attachment` entry.
+  `TranscriptWatcher.noteCliVersion` → `Session.handleCliVersion` warns on
+  mismatch and publishes `cliVersion` / `cliVersionStatus` on `SessionInfo`. The
+  statusline payload also carries a version but only flows when a statusline
+  command is configured, so it is not a dependable source. A mismatch is
+  informational, never fatal. The UI does not currently display the version.
 - Which binary runs is decided by the environment: the PTY spawns bare `claude`
   off PATH unless `CLAUDE_BIN` pins an absolute path. On a machine with multiple
-  installs, PATH order silently picks the build.
+  installs, PATH order silently picks the build; the startup probe runs the same
+  `claudeBin`, so it reports the build the PTY will launch.
+
+Model names follow the same principle: nothing in the UI hard-codes a model name
+or version. `common/model.ts` `parseModelId` / `formatModelName` read the
+transcript model id structurally (`claude-sonnet-5-5` → "Sonnet 5.5"; no lookup
+table), and the top-bar badge shows nothing until a model has been observed.
 
 ## Known couplings to CLI input handling
 
