@@ -308,7 +308,20 @@ export class HooksService {
     // (→ PlanCard) and resolved by the keystroke relay driving that picker. So
     // firing an approval_request here would only duplicate the PlanCard and
     // strand a never-resolved hold — skip it.
-    if (payload.tool_name === "ExitPlanMode") return {};
+    //
+    // It is, however, the one structured signal that the picker is OPEN: it
+    // fires ~2.4s after PreToolUse and within ~50ms of the picker rendering
+    // (bare-PTY timeline on 2.1.322). `Session.answerPlan` writes nothing until
+    // it has arrived, because a digit typed before the picker exists lands in
+    // the main prompt box instead (see the comment there).
+    if (payload.tool_name === "ExitPlanMode") {
+      bus.push({
+        kind: "plan_picker_open",
+        sessionId: bus.sessionId,
+        timestamp: new Date().toISOString(),
+      });
+      return {};
+    }
 
     const toolUseId = synthesizeToolUseId(payload);
 

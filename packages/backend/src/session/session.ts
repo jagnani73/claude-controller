@@ -17,7 +17,7 @@ import type {
   SessionStatus,
   SessionStatusSnapshot,
 } from "common/types";
-import { isClaudeModel, isEffortLevel, isPermissionMode } from "common/types";
+import { isClaudeModel, isEffortLevel, isPermissionMode, planTextOf } from "common/types";
 import {
   CLAUDE_CODE_MINIMUM_VERSION,
   CLAUDE_CODE_TARGET_VERSION,
@@ -62,6 +62,15 @@ const SUBMIT_RETRY_MS = 250;
 const QUESTION_SUBMIT_ATTEMPTS = 4;
 const QUESTION_SUBMIT_RETRY_MS = 500;
 
+/** How long `answerPlan` waits for the ExitPlanMode picker to open before it
+ *  gives up — having written nothing. The card arrives ~2.4s before the picker. */
+const PLAN_PICKER_OPEN_TIMEOUT_MS = 20_000;
+/** Margin between the picker-open signal and the first key. The hook fires
+ *  ~10-50ms before the render; a key 300ms after the render committed. */
+const PLAN_PICKER_SETTLE_MS = 300;
+/** How long after the key to wait for the ExitPlanMode tool_result. */
+const PLAN_CONFIRM_TIMEOUT_MS = 8_000;
+
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class Session extends EventEmitter<SessionEvents> {
@@ -78,6 +87,10 @@ export class Session extends EventEmitter<SessionEvents> {
   private _id: string | null = null;
   private _bus: SessionBus | null = null;
   private _agents: AgentRegistry | null = null;
+  /** The pending ExitPlanMode call, from its PreToolUse `tool_call` until its
+   *  `tool_result`; `openedAt` is set once the picker is up. See answerPlan. */
+  private planPicker: { toolUseId: string; hasPlan: boolean; openedAt: number | null } | null =
+    null;
   private status: SessionStatus = "running";
   private pty: PtyService;
   private capturePath: string | null = null;
@@ -545,6 +558,7 @@ export class Session extends EventEmitter<SessionEvents> {
         this.handleModelSwitch(event.requestedModel, event.toModel);
         return;
       }
+      this.trackPlanPicker(event);
       if (event.kind !== "permission_mode") return;
       const mode = event.mode;
       // Ignore modes we don't model (`dontAsk`, `bypassPermissions`; 2.1.321+
@@ -813,15 +827,55 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   /**
+   * Follow the ExitPlanMode picker's lifecycle off the bus: its `tool_call`
+   * (pushed from PreToolUse, before the picker exists), `plan_picker_open` (the
+   * notification-only PermissionRequest, as the picker renders) and its
+   * `tool_result` (resolved, by us or at the terminal).
+   */
+  private trackPlanPicker(event: SessionBusEvent): void {
+    if (event.kind === "tool_call" && event.name === "ExitPlanMode") {
+      this.planPicker = {
+        toolUseId: event.toolUseId,
+        hasPlan: planTextOf(event.input) !== null,
+        openedAt: null,
+      };
+    } else if (event.kind === "plan_picker_open") {
+      if (this.planPicker && this.planPicker.openedAt === null) {
+        this.planPicker.openedAt = Date.now();
+      }
+    } else if (event.kind === "tool_result" && event.toolUseId === this.planPicker?.toolUseId) {
+      this.planPicker = null;
+    }
+  }
+
+  /** Whether the pending ExitPlanMode call carried plan text. False when the
+   *  call is unknown, which callers treat as planless (the safe reading). */
+  planPickerHasPlan(toolUseId: string): boolean {
+    return this.planPicker?.toolUseId === toolUseId && this.planPicker.hasPlan;
+  }
+
+  /**
    * Drive the `ExitPlanMode` ink picker with a pre-built keystroke script, then
    * (for non-cancel responses) confirm the plan registered via the bus
    * `tool_result` for `toolUseId`.
    *
-   * Unlike `answerQuestion`, we DON'T resend Enter on a miss: the plan picker
-   * commits on an atomic single keystroke (`1`/`2`, or Shift+Tab after typed
-   * feedback) — there's no focus-flush race to paper over, and a stray `\r`
-   * would commit the *default-focused* option (auto-accept), silently changing
-   * the user's decision. So we confirm-or-fail.
+   * GATED ON THE PICKER BEING OPEN. The card is drawn from PreToolUse, ~2.4s
+   * before the picker renders, so a fast tap used to write its digit into the
+   * void: the response was never confirmed, the picker stayed open with nothing
+   * on the phone able to answer it. Worse than lost — in a bare PTY on 2.1.322
+   * a `2` written at PreToolUse time went into the *main prompt box*, and
+   * reappeared there (`> 2`) once the picker closed, to be prepended to the
+   * user's next prompt. (An early Esc would be worse still: it interrupts the
+   * turn.) So nothing is written until `plan_picker_open` — ExitPlanMode's
+   * notification-only PermissionRequest, which fires as the picker renders —
+   * has arrived for this call, plus a short settle. If it never arrives within
+   * PLAN_PICKER_OPEN_TIMEOUT_MS we fail having written nothing, so there is
+   * never junk to clean out of the prompt. No PTY output is read.
+   *
+   * Then one write and no resend, unlike `answerQuestion`: the digit commits
+   * atomically once the picker is up, and a resend racing the tool_result's
+   * trip through the transcript would land in the main prompt (above), while a
+   * stray `\r` would commit the *default-focused* option. So we confirm-or-fail.
    *
    * `resultingMode` (when the decision approves the plan) is the permission mode
    * the picker exits into — set optimistically on confirmation so the top bar
@@ -834,20 +888,45 @@ export class Session extends EventEmitter<SessionEvents> {
     toolUseId: string,
     resultingMode?: PermissionMode,
   ): Promise<void> {
+    const bus = this._bus;
+    if (!bus) return;
+    const isMine = (): boolean => this.planPicker?.toolUseId === toolUseId;
+    if (isMine() && this.planPicker?.openedAt === null) {
+      await this.waitForBusEvent(
+        bus,
+        (e) =>
+          e.kind === "plan_picker_open" || (e.kind === "tool_result" && e.toolUseId === toolUseId),
+        PLAN_PICKER_OPEN_TIMEOUT_MS,
+      );
+    }
+    const openedAt = isMine() ? this.planPicker?.openedAt : null;
+    if (openedAt == null) {
+      // Unknown call, resolved meanwhile (e.g. at the terminal) or never opened.
+      // Only the last needs surfacing; a resolved call already has its result.
+      if (isMine() || !this.planPicker) {
+        log.warn("Plan picker never opened — nothing was sent", {
+          token: this.spawnToken,
+          toolUseId,
+        });
+        if (isMine()) {
+          this.failPlan(toolUseId, "The CLI never opened its plan prompt; nothing was sent.");
+        }
+      }
+      return;
+    }
+    const settle = openedAt + PLAN_PICKER_SETTLE_MS - Date.now();
+    if (settle > 0) await delay(settle);
+    if (!isMine()) return; // answered at the terminal during the settle
+    const matches = (e: SessionBusEvent): boolean =>
+      e.kind === "tool_result" && e.toolUseId === toolUseId;
+    // Listen before writing: the result can land before the write returns.
+    const result = this.waitForBusEvent(bus, matches, PLAN_CONFIRM_TIMEOUT_MS);
     for (let i = 0; i < chunks.length; i++) {
       if (i > 0) await delay(chunks[i - 1].settleMs ?? CHUNK_DELAY_MS);
       this.sendKeystrokes(chunks[i].bytes);
     }
     if (!confirm) return;
-    const bus = this._bus;
-    if (!bus) return;
-    const matches = (e: SessionBusEvent): boolean =>
-      e.kind === "tool_result" && e.toolUseId === toolUseId;
-    const confirmed = await this.waitForBusEvent(
-      bus,
-      matches,
-      QUESTION_SUBMIT_ATTEMPTS * QUESTION_SUBMIT_RETRY_MS,
-    );
+    const confirmed = await result;
     if (confirmed) {
       if (resultingMode) this.notePermissionMode(resultingMode);
       return;

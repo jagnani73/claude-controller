@@ -19,6 +19,28 @@
 // thing (and `1` would also clear context). We can't detect that without the
 // statusline context% (deliberately not a data source), so the mapping is
 // correct at normal context and best-effort at high context.
+//
+// THE TWO-OPTION VARIANT (observed in a bare PTY on 2.1.322). When the model
+// calls ExitPlanMode without having written a plan, the CLI shows a different
+// picker:
+//     Exit plan mode?
+//     1. Yes, and switch to default (ask each time) for this session
+//     2. No
+// and the PreToolUse input is `{}` (with a plan it carries `plan` and
+// `planFilePath`, which the CLI fills in from the plan file). There `1` exited
+// plan mode (tool_response `plan: null`) and Esc rejected ("User rejected
+// Claude's plan", still in plan mode) — so `2`, our approve-manual, would mean
+// No: the opposite of what the phone asked for.
+//
+// The input can also be `{}` while a plan file exists (seen twice through the
+// controller; not reproduced — consistent with the CLI reading the file before
+// a parallel Write landed), and then the picker may be the full three-option
+// one. The phone cannot see which is showing and we do not parse the screen,
+// so the rule for a planless input is the subset that means the same thing on
+// both pickers: approve = `1` ("Yes" on either), keep planning = Esc. `2` is
+// never sent for a planless input. The cost is that a planless approve lands
+// in default on the variant but auto/acceptEdits on the full picker, so no
+// optimistic mode is noted for it (ws.service).
 
 import type { PlanDecision } from "common/types";
 import type { KeystrokeChunk } from "./question.input.js";
@@ -36,6 +58,9 @@ export interface BuildPlanKeystrokesArgs {
   decision: PlanDecision;
   /** When true, keep planning (Esc) and ignore `decision`. */
   cancel?: boolean;
+  /** The ExitPlanMode input had no plan text (`planTextOf` is null): any
+   *  approve becomes `1`, never `2`. See the header. */
+  planless?: boolean;
 }
 
 export interface PlanKeystrokeScript {
@@ -44,6 +69,7 @@ export interface PlanKeystrokeScript {
 
 export function buildPlanKeystrokes(args: BuildPlanKeystrokesArgs): PlanKeystrokeScript {
   if (args.cancel) return { chunks: [{ bytes: KEY.ESC }] };
+  if (args.planless) return { chunks: [{ bytes: KEY.PRIMARY }] };
   switch (args.decision) {
     case "approve-primary":
       return { chunks: [{ bytes: KEY.PRIMARY }] };

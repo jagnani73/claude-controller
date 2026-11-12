@@ -504,8 +504,26 @@ export interface ToolResult {
  *   "use auto mode" when the model supports it, else "auto-accept edits".
  * - `approve-manual` → "manually approve edits" (position 2) → default mode.
  * The Stop/keep-planning action uses the `cancel` flag (Esc), not a decision.
+ *
+ * For a planless call (see {@link planTextOf}) the CLI may show a two-option
+ * "Exit plan mode? 1. Yes / 2. No" picker instead, so both decisions mean
+ * "Yes" (`1`) there and `2` is never sent.
  */
 export type PlanDecision = "approve-primary" | "approve-manual";
+
+/**
+ * The plan text of an `ExitPlanMode` input, or null when it has none.
+ *
+ * Load-bearing, not cosmetic: a call with no plan text is the case where the
+ * CLI (2.1.322) can show the two-option "Exit plan mode?" picker, in which `2`
+ * means *No*. Frontend (which card to draw) and backend (which keys to send)
+ * must agree on it, so it lives here.
+ */
+export function planTextOf(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const plan = (input as { plan?: unknown }).plan;
+  return typeof plan === "string" && plan.trim() ? plan : null;
+}
 
 /** Client → Server messages */
 export type ClientMessage =

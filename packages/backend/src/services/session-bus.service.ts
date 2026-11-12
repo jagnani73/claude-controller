@@ -64,6 +64,16 @@ export type SessionBusEvent =
       source?: string;
     }
   | {
+      /**
+       * The `ExitPlanMode` picker is open (its notification-only
+       * `PermissionRequest` fired). Backend-internal: `Session.answerPlan` waits
+       * for it before writing a single key — see the comment there.
+       */
+      kind: "plan_picker_open";
+      sessionId: string;
+      timestamp: string;
+    }
+  | {
       kind: "compact_start";
       sessionId: string;
       timestamp: string;

@@ -42,9 +42,45 @@ that registers **blocking** hooks which POST to a loopback-only endpoint:
 - **`PreCompact` / `PostCompact`** — compaction lifecycle.
 - **`PreToolUse`** (scoped to `ExitPlanMode`) — the only signal that arrives
   *before* the plan picker opens, so the plan card renders in time.
+  ExitPlanMode's own `PermissionRequest` is notification-only (answering it
+  resolves nothing) but it is the **picker-open** signal: see *Plan picker
+  timing* below.
 - **`PostModelSwitch`** (CLI ≥ 2.1.251) — an out-of-band `/model`, carrying the
   requested *alias* rather than just the resolved id. `PreModelSwitch` is
   deliberately not registered: it exists to block or confirm a switch.
+
+#### Plan picker timing and the two-option variant
+
+Measured in a bare PTY on 2.1.322 (a hook listener plus timestamps on the
+render): `PreToolUse(ExitPlanMode)` fires ~2.4s before the picker exists, and the
+ExitPlanMode `PermissionRequest` fires 10–50ms before it renders. The PlanCard is
+drawn from the first, so a fast tap used to write its digit before the picker
+existed. That digit is not merely lost: written at PreToolUse time, a `2` went into
+the **main prompt box** and was still there (`> 2`) once the picker was dismissed,
+ready to be prepended to the user's next prompt (an early Esc would interrupt the
+turn instead). Through the controller this showed up as "Plan response could not
+be confirmed by the CLI" with the picker left open and nothing able to answer it.
+
+So `hooks.service` turns that `PermissionRequest` into a backend-internal
+`plan_picker_open` bus event, and `Session.answerPlan` writes **nothing** until it
+has arrived for the pending call (plus a 300ms settle), within 20s; otherwise it
+fails having written nothing. Then one write and no resend, confirmed by the
+`tool_result` within 8s: a resend racing that result through the transcript would
+itself land in the prompt box. No PTY output is read. `pnpm verify:plan-relay`
+answers 500ms after the card, the case that used to fail.
+
+When the model calls ExitPlanMode **without a plan**, the PreToolUse input is `{}`
+(with one it carries `plan` and `planFilePath`) and the CLI shows a different
+picker: `Exit plan mode? 1. Yes, and switch to default (ask each time) for this
+session / 2. No`. There `1` exits plan mode and Esc rejects, as on the full
+picker, but `2` means **No**, the opposite of our approve-manual. Input `{}` was
+also seen twice with a plan file on disk (not reproduced; consistent with the CLI
+reading the file before a parallel Write landed), when the full picker may be
+showing instead. The phone cannot tell which, so for a planless input
+(`planTextOf` is null) the card is drawn as "Exit plan mode?" with Yes (`1`) / No
+(Esc), the backend maps any approve to `1` and never sends `2`, and no optimistic
+mode is noted (`1` exits to default on the variant but auto/acceptEdits on the
+full picker).
 
 A blocked hook **holds the CLI** until the phone responds — this is how one-tap
 approvals work. The pending HTTP response is unblocked by

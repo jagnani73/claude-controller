@@ -135,10 +135,12 @@ function listChildEntries(dirPath: string, workDir: string): DirEntry[] {
  * counterpart — `model_switch` drives `Session`'s stored alias, and the result
  * already reaches the client as `session_metadata`, so forwarding it too would
  * be redundant and would need a protocol addition the frontend doesn't use.
+ * `plan_picker_open` only gates `Session.answerPlan`'s keystrokes.
  */
 function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
   switch (event.kind) {
     case "model_switch":
+    case "plan_picker_open":
       return null;
     case "user_prompt":
       return {
@@ -624,9 +626,13 @@ function handleMessage(
         send(ws, { type: "error", sessionId: msg.sessionId, message: "Session not found" });
         return;
       }
+      // A planless call may be showing the two-option "Exit plan mode?" picker,
+      // where `2` means No; see plan.input.ts. Unknown counts as planless.
+      const planless = !session.planPickerHasPlan(msg.toolUseId);
       const { chunks } = buildPlanKeystrokes({
         decision: msg.decision,
         cancel: msg.cancel,
+        planless,
       });
       if (chunks.length === 0) {
         if (!msg.cancel)
@@ -643,17 +649,20 @@ function handleMessage(
       // permission-mode entry eventually agrees, but only at the next
       // session-metadata block, so it is not a prompt correction. For a model
       // whose cycle is unverified we do not guess: no optimistic mode is noted
-      // and the JSONL entry is left to report it.
+      // and the JSONL entry is left to report it. Nor for a planless call: `1`
+      // there exits to default on the two-option picker but to auto/acceptEdits
+      // on the full one, and the phone cannot tell which is showing.
       const autoSupport = autoCycleSupport(session.model);
-      const resultingMode: PermissionMode | undefined = msg.cancel
-        ? undefined
-        : msg.decision === "approve-primary"
-          ? autoSupport === null
-            ? undefined
-            : autoSupport
-              ? "auto"
-              : "acceptEdits"
-          : "default";
+      const resultingMode: PermissionMode | undefined =
+        msg.cancel || planless
+          ? undefined
+          : msg.decision === "approve-primary"
+            ? autoSupport === null
+              ? undefined
+              : autoSupport
+                ? "auto"
+                : "acceptEdits"
+            : "default";
       // Drive the ink plan picker with the keystroke script and confirm via the
       // tool_result for this toolUseId. Cancel (Esc) is terminal — no confirm.
       void session.answerPlan(chunks, !msg.cancel, msg.toolUseId, resultingMode).catch((err) => {

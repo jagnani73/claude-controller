@@ -1,5 +1,6 @@
 import { autoCycleSupport } from "common/permission-cycle";
 import type { ClaudeModel, PlanDecision, ToolResult } from "common/types";
+import { planTextOf } from "common/types";
 import { ClipboardCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -30,9 +31,14 @@ type PlanAction = PlanDecision | "cancel";
  * manually approve → default. We never touch the shifting later positions
  * (Ultraplan / feedback); "Keep planning" sends Esc (cancel). See
  * `plan.input.ts` for the high-context limitation.
+ *
+ * A call with no plan text is drawn as "Exit plan mode?" with Yes / No: the CLI
+ * may be showing its two-option picker, where `2` means No, so the card offers
+ * nothing that would need `2` (Yes → `1`, No → Esc; the backend enforces it).
  */
 export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCardProps) {
-  const plan = useMemo(() => extractPlan(input), [input]);
+  const plan = useMemo(() => planTextOf(input), [input]);
+  const planless = plan === null;
   const [submitted, setSubmitted] = useState<PlanAction | null>(null);
   // Gate on a live socket: plan_response is a one-shot action — don't lock the
   // card and queue a response that fires (stale) on a later reconnect.
@@ -70,22 +76,26 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
   };
 
   const lockedLabel =
-    submitted === "approve-primary"
-      ? `Approved · ${primaryLabel}`
-      : submitted === "approve-manual"
-        ? "Approved · manual approvals"
-        : submitted === "cancel"
-          ? "Kept planning"
-          : result?.isError
-            ? "Couldn't deliver"
-            : "Responded";
+    planless && submitted === "approve-primary"
+      ? "Exited plan mode"
+      : submitted === "approve-primary"
+        ? `Approved · ${primaryLabel}`
+        : submitted === "approve-manual"
+          ? "Approved · manual approvals"
+          : submitted === "cancel"
+            ? "Kept planning"
+            : result?.isError
+              ? "Couldn't deliver"
+              : "Responded";
 
   return (
     <div className="px-4 py-2">
       <div className="overflow-hidden rounded-xl border border-accent/40 bg-accent/[0.04]">
         <div className="flex items-center gap-2 border-b border-accent/30 px-3 py-2">
           <ClipboardCheck className="size-3.5 text-accent" strokeWidth={2} />
-          <span className="font-mono text-xs uppercase tracking-wider text-accent">Plan ready</span>
+          <span className="font-mono text-xs uppercase tracking-wider text-accent">
+            {planless ? "Exit plan mode?" : "Plan ready"}
+          </span>
           {isLocked && (
             <span className="ml-auto text-xs text-muted-foreground/70">
               {result?.isError ? "error" : submitted ? "sent" : "answered"}
@@ -98,9 +108,9 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
             <Markdown text={plan} />
           </div>
         ) : (
-          <pre className="overflow-x-auto border-b border-accent/20 bg-muted/20 px-3 py-2 font-mono text-[12px] text-foreground/85">
-            {formatValue(input)}
-          </pre>
+          <div className="border-b border-accent/20 px-3 py-2 text-sm text-muted-foreground">
+            Claude wants to leave plan mode without a written plan.
+          </div>
         )}
 
         {isLocked ? (
@@ -121,6 +131,25 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
                 </pre>
               </details>
             )}
+          </div>
+        ) : planless ? (
+          <div className="flex gap-2 p-2">
+            <Button
+              className="flex-1"
+              onClick={() => respond("approve-primary")}
+              disabled={!connected}
+              title={connected ? undefined : "Reconnecting…"}
+            >
+              Yes, exit plan mode
+            </Button>
+            <Button
+              variant="secondary"
+              className="flex-1"
+              onClick={keepPlanning}
+              disabled={!connected}
+            >
+              No, keep planning
+            </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-2 p-2">
@@ -156,12 +185,6 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
       </div>
     </div>
   );
-}
-
-function extractPlan(input: unknown): string | null {
-  if (!input || typeof input !== "object") return null;
-  const plan = (input as { plan?: unknown }).plan;
-  return typeof plan === "string" && plan.trim() ? plan : null;
 }
 
 function formatValue(v: unknown): string {
