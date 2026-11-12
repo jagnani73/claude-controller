@@ -87,14 +87,67 @@ approvals work. The pending HTTP response is unblocked by
 `hooks.service.resolveApproval()` when the phone sends `approval_response`.
 
 An approval can also carry `updatedInput`, letting the phone approve a *corrected*
-call (`ApprovalCard`'s Edit… mode) rather than only allow or deny. The response
-shape differs by path, and that detail is load-bearing: plain allow/deny uses the
-flat `{permissionDecision}` form, while `updatedInput` is honoured only in the
-schema form `{hookEventName, decision:{behavior, updatedInput}}`. Attaching
-`updatedInput` to the flat form makes the CLI discard the whole response and fall
-back to its own terminal picker — invisible to the phone, so the session hangs
-with no error. Both forms are verified against 2.1.251 and re-verified on 2.1.322
-(`pnpm verify:approval-edit`).
+call (`ApprovalCard`'s Edit… mode) rather than only allow or deny.
+
+**Every decision uses the schema form** `{hookEventName: "PermissionRequest",
+decision: {behavior, updatedInput? | message}}` (`buildApprovalResponse`). A
+response the CLI does not honour falls back to its own terminal picker — invisible
+to the phone, so the session hangs with no error. The PreToolUse-style flat
+`{permissionDecision}` form used to work for a plain allow/deny (2.1.251) but is
+**ignored on 2.1.322 for both**: checked live through the controller, a flat allow
+and a flat deny each left the CLI on `Do you want to create PROBE.md? 1. Yes …
+3. No` with no tool_result. (An `updatedInput` on the flat form had always been
+ignored the same way.) With the schema form, a plain allow writes the file, a deny
+returns its `message` to Claude as the error tool_result (a deny without a reason
+sends a default message), and an edit runs the edited call. `verify:approval-edit`
+only exercises the edit path, so re-test a plain allow and deny by hand when
+touching this.
+
+Since 2.1.300 an `updatedInput` is validated like Claude's own input. Observed on
+2.1.322: an unknown key (`bogus_key`) is dropped and the call runs with the rest;
+input the tool rejects denies the call. The transcript then records the *model's*
+original `tool_use` (real `toolu_` id) and an error `tool_result`, e.g.
+
+```text
+PermissionRequest hook for Write returned updatedInput that failed schema validation: Write failed due to the following issue:
+The required parameter `content` is missing
+The tool input from the model was valid; the hook's rewrite of it was not.
+```
+
+(a wrong type reads ``The parameter `content` type is expected as `string` but
+provided as `number` ``). The card id is synthesized (`pr:<tool>:<hash>:<seq>`;
+PermissionRequest has no `tool_use_id`), so `approval-outcome.ts` pairs each
+approval with its tool call by tool name + input (sorted keys) and, when that
+call's result carries this prefix, `ApprovalCard` shows "Edit rejected by Claude
+Code" with the reason instead of "Approved · edited". The `<seq>` suffix keeps
+ids unique: Claude often retries a rejected call with identical input, and a
+content-only id collided with the first card, which the frontend dedupes by id,
+so the retry's approval never appeared.
+
+**The PermissionRequest hook fails closed** (`onFailure: "block"`, 2.1.295+, and
+`timeout: 86400`). Hooks reference: a failure is "an HTTP hook's connection fails,
+or the response status isn't 2xx", a timeout, or invalid output ("a 2xx body that
+is neither empty nor a JSON object", or one failing schema validation); "With
+`"block"` set, a failure does what exit code 2 does on that event, except on
+`PermissionRequest`, where it denies the request." Without it a failure is a
+non-blocking error and the call goes to the normal permission flow — for us, the
+invisible terminal picker. The http default timeout is 600s ("Seconds before
+canceling … Defaults: 600 for command, http, and mcp_tool"). Live on 2.1.322
+(throwaway runs pointing the hook at a closed port, or never answering):
+
+| Case | default | `onFailure: "block"` |
+|---|---|---|
+| backend unreachable | terminal picker, hang | error tool_result `[http hook]: failed; blocking because onFailure is "block"` / `the request failed (ECONNREFUSED)` |
+| no answer, `timeout: 20` | terminal picker, hang | after 20s: `[http hook]: timed out; blocking because onFailure is "block"` |
+| answered after 330s, `timeout: 900` | — | honoured (edit applied) |
+
+So a slow phone is unaffected up to the timeout (no shorter cap in the CLI's HTTP
+client), which is set to a day rather than 600s; after it, or if the backend is
+gone, the call is denied visibly instead of hanging, and the card shows "Denied
+by Claude Code · the approval hook failed" (same pairing as above). The
+`{}` the backend returns for ExitPlanMode's notification-only PermissionRequest is
+a valid empty object, so the plan picker still opens (`verify:plan-relay` passes).
+Other hooks keep the default: they are observational and answer `{}` at once.
 
 `SessionStart` is **not** HTTP-capable in Claude Code, so the session id can't be
 learned from a hook. Instead it's discovered by watching
@@ -729,12 +782,14 @@ unverified.** 2.1.301: "Esc cancels only from NORMAL" in vim mode.
 INSERT mode would only switch to NORMAL. The relay assumes the default editing
 mode; `verify:question-relay` runs without vim mode.
 
-**Edited approvals are validated since 2.1.300 — from the changelog, re-tested
-in the plain case.** Upstream: "updatedInput from PreToolUse and PermissionRequest
-hooks is now validated like Claude's own input: unknown keys are dropped, and
-input the tool rejects denies the call". `verify:approval-edit` passes on 2.1.322
-with a valid edit; an edit with a misspelled key is now silently dropped and an
-invalid one becomes a denial, which the card does not explain yet.
+**Edited approvals are validated since 2.1.300 — verified live on 2.1.322.**
+Upstream: "updatedInput from PreToolUse and PermissionRequest hooks is now
+validated like Claude's own input: unknown keys are dropped, and input the tool
+rejects denies the call". An unknown key is dropped silently (the call runs); a
+missing required field or a wrong type denies the call with a `PermissionRequest
+hook for <Tool> returned updatedInput that failed schema validation: …` tool_result,
+which the approval card now shows (see *1. HTTP hooks* above). A misspelled *required*
+key is therefore a rejection, a misspelled optional one is silently lost.
 
 ## Reference: Claude Code source
 
