@@ -26,6 +26,7 @@ pnpm verify:hooks           # CLI probe: do our hook events still fire?  (spawns
 pnpm verify:model-switch    # CLI probe: is the PostModelSwitch payload intact?  (ditto)
 pnpm verify:permission-cycle # CLI probe: does Shift+Tab still walk the cycle we predict?  (free — no prompt)
 pnpm verify:question-relay  # CLI probe: does the picker relay still select the option asked for?  (costs credits)
+pnpm verify:agents          # CLI probe: do agents, names, SendMessage traffic and per-agent history still reach the controller?  (needs pnpm dev:backend; costs credits)
 ```
 
 Tests live in `packages/*/tests/` (outside `src`, which is each package's build `rootDir`) and cover pure logic only. Anything needing a real CLI lives in `scripts/verify/` — see its README, and note it deliberately does **not** cover the keystroke relays.

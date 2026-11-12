@@ -13,8 +13,9 @@ pnpm verify:model-switch    # does PostModelSwitch still carry requested_model?
 pnpm verify:permission-cycle # does Shift+Tab still walk the cycle we predict?
 pnpm verify:question-relay  # does the picker relay still select the option asked for?
 
-pnpm dev:backend            # required for the next one only
+pnpm dev:backend            # required for the next two only
 pnpm verify:approval-edit   # does approving with updatedInput run the edited call?
+pnpm verify:agents          # do agents, names, SendMessage traffic and per-agent history reach the controller?
 ```
 
 `verify:approval-edit` needs a **running backend**: `PermissionRequest` does not
@@ -43,6 +44,7 @@ binary and about a minute of wall clock.
 | `model-switch.mjs` | `PostModelSwitch` disappearing, or `requested_model` being renamed — which would degrade model reconciliation to family-matching with no error. |
 | `approval-edit.mjs` | The two PermissionRequest response shapes diverging. `updatedInput` is honoured only in the schema form; on the flat form the CLI discards the whole response, loses the allow, and falls back to a terminal picker the phone cannot see — the session hangs with no error. Verified to genuinely fail by reverting the shape. |
 | `permission-cycle.mjs` | The Shift+Tab cycle gaining or losing a stop. `cycleDistance()` writes a keystroke count from `cycleCanIncludeAuto()`; if that count is wrong the session lands in a permission mode the phone did not pick, and the JSONL only records the mode in a periodic metadata block — so the *next prompt runs* under the wrong mode before anything corrects it. Caught `opusplan` being wrongly excluded from auto. |
+| `agents.mjs` | The agents view losing a source with no error. Runs a real two-teammate team through a running controller and asserts: agents arrive over `agent_update` (SubagentStart/Stop), they carry names (`agent-<id>.meta.json` still read), at least one agent-to-agent `SendMessage` arrives as `agent_message`, `subscribe_agent` replays an agent's own transcript, and a subscribe for an unknown agent gets `agent_unavailable`. A teammate that sent an approving `shutdown_response` must end `done`; if no teammate got that far the run says so instead of failing. Parent links are not asserted: teammates hang off the lead and the probe spawns no nested subagent. Teammates legitimately have no `toolUseId`, so only an unnamed agent lacking one counts as a lost parent link. Control: `INCONCLUSIVE` if no agent ever arrives. It does not use the `status_line` readiness signal alone: with `remoteControlAtStartup` the first render can lag well past boot, so it falls back to a 50s timer. |
 | `question-relay.mjs` | The AskUserQuestion picker changing shape under a script that still "succeeds". Drives the real `buildKeystrokes` and asserts the CLI committed the option asked for. Verified to genuinely fail by neutering the DOWN key: the probe reported `committed "Red", not the requested "Green"`. |
 
 ## Every probe has a control

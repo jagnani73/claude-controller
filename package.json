@@ -19,6 +19,7 @@
     "verify:hooks": "node scripts/verify/hooks-fire.mjs",
     "verify:model-switch": "node scripts/verify/model-switch.mjs",
     "verify:approval-edit": "node scripts/verify/approval-edit.mjs",
+    "verify:agents": "node scripts/verify/agents.mjs",
     "verify:permission-cycle": "node scripts/verify/permission-cycle.mjs",
     "verify:question-relay": "node scripts/verify/question-relay.mjs"
   },
