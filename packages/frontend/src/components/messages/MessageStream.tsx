@@ -5,12 +5,14 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
 } from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
+import { approvalOutcomes } from "@/components/messages/approval-outcome";
 import { Markdown } from "@/components/messages/Markdown";
 import { PlanCard } from "@/components/messages/PlanCard";
 import { QuestionCard } from "@/components/messages/QuestionCard";
@@ -603,6 +605,10 @@ export function MessageStream({
 }: MessageStreamProps) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const items = state.items;
+  // An answered approval can still end in a denial the card cannot see on its
+  // own (an edit the CLI rejected, a failed/timed-out hook): read it off the
+  // matching tool call's result.
+  const outcomes = useMemo(() => approvalOutcomes(items), [items]);
 
   // An AskUserQuestion is pending while its tool item has no result yet.
   const hasPendingQuestion = items.some(
@@ -1095,6 +1101,7 @@ export function MessageStream({
                     toolInput={item.toolInput}
                     resolved={item.resolved}
                     agentLabel={item.agentLabel}
+                    outcome={outcomes.get(item.id)}
                   />
                 );
               case "compact_summary":

@@ -1,5 +1,6 @@
 import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
+import type { ApprovalOutcome } from "@/components/messages/approval-outcome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,6 +14,12 @@ interface ApprovalCardProps {
   resolved?: "allow" | "deny";
   /** Set when a subagent, not the lead, is asking — names who. */
   agentLabel?: string;
+  /**
+   * What Claude Code did instead of what was answered: the edit was rejected,
+   * or the hook failed and the call was denied. Overrides the decision line and
+   * locks the card — the request it would answer is gone.
+   */
+  outcome?: ApprovalOutcome;
 }
 
 type Mode = "idle" | "deny" | "edit";
@@ -24,6 +31,7 @@ export function ApprovalCard({
   toolInput,
   resolved,
   agentLabel,
+  outcome,
 }: ApprovalCardProps) {
   const [decision, setDecision] = useState<"allow" | "deny" | null>(resolved ?? null);
   const [mode, setMode] = useState<Mode>("idle");
@@ -109,7 +117,18 @@ export function ApprovalCard({
           </pre>
         )}
 
-        {decision ? (
+        {outcome ? (
+          <div className="px-3 py-3 text-sm">
+            <div className="text-center text-destructive">
+              {outcome.kind === "edit_rejected"
+                ? "Edit rejected by Claude Code · the call did not run"
+                : "Denied by Claude Code · the approval hook failed"}
+            </div>
+            <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
+              {outcome.reason}
+            </div>
+          </div>
+        ) : decision ? (
           <div className="px-3 py-3 text-center text-sm text-muted-foreground">
             {decision === "allow" ? (wasEdited ? "Approved · edited" : "Approved") : "Denied"}
             {decision === "deny" && reason.trim() && (
