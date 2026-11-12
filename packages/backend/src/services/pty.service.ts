@@ -46,6 +46,8 @@ export const STRIPPED_CHILD_ENV = [
   "CLAUDE_CODE_EXECPATH",
   "CLAUDE_PID",
   "CLAUDE_EFFORT",
+  // 2.1.317+: makes a nested CLI reuse the parent's session id and transcript
+  "CLAUDE_CODE_DISABLE_NESTED_SESSION_ID",
   // Disables hooks entirely — see (2) above
   "CLAUDE_CODE_SAFE_MODE",
 ] as const;
