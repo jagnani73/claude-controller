@@ -118,6 +118,9 @@ export class TranscriptWatcher {
     // a relay that is in fact running on a perfectly good build. Only the last
     // stamp in the file describes the process now writing it.
     if (this.lastCliVersion) this.onCliVersion?.(this.lastCliVersion);
+    // stop() may have run while the drain was awaiting: attaching a watcher now
+    // would leave an fs handle open that nothing will ever close.
+    if (this.stopped) return;
     // Since v2.1.126 Claude Code doesn't pre-create the transcript JSONL on
     // session start — it only appears after the first user message. Watch the
     // parent dir until our file shows up, then attach the file-level watcher.
