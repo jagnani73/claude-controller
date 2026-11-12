@@ -38,10 +38,43 @@ interface InternalQueueItem {
   timestamp: string;
   sessionId: string;
   status: QueueStatus;
+  /**
+   * "Send now" was requested for this pending item: it sits at the head of
+   * the pending queue and is dispatched as soon as the interrupt it asked for
+   * ends the active send (see `handleSendNow`). At most one item has it.
+   */
+  sendNow?: boolean;
+}
+
+/**
+ * The user entry Claude Code writes to the transcript when a turn is Esc'd
+ * (`[Request interrupted by user]`, `… for tool use]`). It reaches us as a
+ * `user_prompt` but is the CLI's marker, not something this viewer sent.
+ * Observed live on 2.1.322: it lands ~100ms *after* the bus `interrupt` echo,
+ * i.e. after a send-now has already put its item in flight.
+ */
+function isInterruptMarker(text: string): boolean {
+  return text.startsWith("[Request interrupted by user");
 }
 
 function hasActiveSend(queue: readonly InternalQueueItem[]): boolean {
   return queue.some((it) => it.status === "in-flight" || it.status === "bus-acked");
+}
+
+/**
+ * Move the pending item `id` to the head of the pending items, flagged
+ * `sendNow` (any earlier flag is cleared). Active items keep their place and
+ * the other pending items keep their relative order.
+ */
+function promoteToHead(queue: readonly InternalQueueItem[], id: string): InternalQueueItem[] {
+  const target = queue.find((it) => it.id === id && it.status === "pending");
+  if (!target) return [...queue];
+  const rest = queue
+    .filter((it) => it !== target)
+    .map((it) => (it.sendNow ? { ...it, sendNow: false } : it));
+  const firstPending = rest.findIndex((it) => it.status === "pending");
+  const at = firstPending === -1 ? rest.length : firstPending;
+  return [...rest.slice(0, at), { ...target, sendNow: true }, ...rest.slice(at)];
 }
 
 export function SessionView() {
@@ -113,7 +146,7 @@ export function SessionView() {
     if (!target) return current;
     const head = current[idx];
     const next = [...current];
-    next[idx] = { ...head, status: "in-flight" };
+    next[idx] = { ...head, status: "in-flight", sendNow: false };
     wsService.send({
       type: "input",
       sessionId: head.sessionId,
@@ -126,6 +159,20 @@ export function SessionView() {
     });
     return next;
   }, []);
+
+  /**
+   * Send the interrupt a pending send-now is waiting on, once the active item
+   * is bus-acked (the backend only interrupts a turn whose user_prompt it has
+   * seen). Shares the Esc arming gate: if an interrupt is already out (Esc was
+   * pressed, or a previous send-now fired), its echo will dispatch the
+   * promoted item, so a second one is never sent.
+   */
+  const fireSendNowInterrupt = useCallback(() => {
+    if (!queueRef.current.some((it) => it.status === "bus-acked")) return;
+    if (!interruptArmedRef.current) return;
+    interruptArmedRef.current = false;
+    wsService.send({ type: "interrupt", sessionId });
+  }, [sessionId]);
 
   useEffect(() => {
     setTakenOver(false);
@@ -156,6 +203,10 @@ export function SessionView() {
     // It is not something this viewer sent, so it must not acknowledge a queued
     // send or become the text Up-arrow recalls.
     if (parseTeammateText(msg.text)) return;
+    // Likewise the CLI's interrupt marker: acking on it would retire a
+    // send-now item before its own echo (hiding its preview through the
+    // redirect respawn) and re-arm Esc while that respawn is still running.
+    if (isInterruptMarker(msg.text)) return;
     // Fresh turn re-arms Esc — the previous interrupt (if any) is over.
     interruptArmedRef.current = true;
     if (!msg.text.startsWith("/")) setRecallText(msg.text);
@@ -167,6 +218,11 @@ export function SessionView() {
     const next = [...queueRef.current];
     next[idx] = { ...next[idx], status: "bus-acked" };
     writeQueue(next);
+    // A send-now requested while this item was still in flight deferred its
+    // interrupt until now: before the echo the backend has no running turn to
+    // interrupt (its idle gate would swallow the event and nothing would
+    // dispatch the promoted item).
+    if (next.some((it) => it.sendNow)) fireSendNowInterrupt();
   });
 
   useWsMessage("assistant_text", (msg) => {
@@ -180,9 +236,15 @@ export function SessionView() {
 
   useWsMessage("interrupt", (msg) => {
     if (msg.sessionId !== sessionId) return;
-    // Interrupt ends whatever was in-flight. Pending tail is left alone
-    // (the user pressed Esc to stop, not to fast-forward).
-    writeQueue(queueRef.current.filter((it) => it.status === "pending"));
+    // Interrupt ends whatever was in-flight; it is never resent. Pending tail
+    // is left alone (the user pressed Esc to stop, not to fast-forward) —
+    // unless a send-now asked for this interrupt, in which case its item is the
+    // pending head and goes out now as an ordinary `input`. Arriving after the
+    // backend logged the interrupt, that input takes Session.sendInput's
+    // redirect path (respawn → clean textarea), so the CLI never prepends the
+    // interrupted text and exactly one user_prompt carries the promoted text.
+    const remaining = queueRef.current.filter((it) => it.status === "pending");
+    writeQueue(remaining.some((it) => it.sendNow) ? dispatchHeadIfIdle(remaining) : remaining);
   });
 
   useWsMessage("error", (msg) => {
@@ -217,7 +279,7 @@ export function SessionView() {
   const inFlightItem = queue.find((it) => it.status === "in-flight");
   const pendingItems: QueueItem[] = queue
     .filter((it) => it.status === "pending")
-    .map((it) => ({ id: it.id, text: it.text }));
+    .map((it) => ({ id: it.id, text: it.text, sendingNow: it.sendNow === true }));
   const isProcessing = hasActiveSend(queue);
   /** Most recent pending item — Esc pops this back into the input. */
   const queueTail = pendingItems.length > 0 ? pendingItems[pendingItems.length - 1].text : null;
@@ -273,6 +335,72 @@ export function SessionView() {
     interruptArmedRef.current = false;
     wsService.send({ type: "interrupt", sessionId });
   }, [sessionId]);
+
+  /**
+   * "Send now" for a pending item: interrupt the current turn and send this
+   * item next, ahead of the rest of the queue (whose order is preserved).
+   *
+   * Sequence: promote to the pending head → WS `interrupt` → wait for the bus
+   * `interrupt` echo → the `interrupt` handler dispatches the head as a normal
+   * `input`. Waiting for the echo (rather than sending `input` right behind
+   * the interrupt) keeps the queue unambiguous — the interrupted item is
+   * retired before the promoted one goes in flight, so the next user_prompt
+   * echo can only belong to it — and guarantees the backend already logged the
+   * interrupt, which is what makes Session.sendInput respawn for a clean
+   * textarea. If the turn ends before the interrupt lands (no echo), the
+   * normal assistant_text boundary dispatches the head instead.
+   *
+   * Why not the CLI's own send-now (ctrl+enter / ctrl+x ctrl+s since 2.1.275):
+   * that acts on Claude Code's internal queue, which the controller never
+   * fills — queued messages live here, on the phone, and only reach the PTY
+   * one at a time — and driving it would mean synthesizing keystrokes whose
+   * outcome we cannot confirm. Interrupt + redirect is the path the backend
+   * already handles (respawn, concat-echo drop).
+   */
+  const handleSendNow = useCallback(
+    (id: string) => {
+      const promoted = promoteToHead(queueRef.current, id);
+      if (!hasActiveSend(promoted)) {
+        // Nothing running from this view's point of view: just send it.
+        writeQueue(dispatchHeadIfIdle(promoted));
+        return;
+      }
+      writeQueue(promoted);
+      // If the active item is still in flight, the user_prompt handler fires
+      // this once it is acked.
+      fireSendNowInterrupt();
+    },
+    [writeQueue, dispatchHeadIfIdle, fireSendNowInterrupt],
+  );
+
+  /**
+   * Ctrl/Cmd+Enter in the input bar. With text: queue it and send it now. With
+   * an empty box: send the oldest queued item now. Slash commands are not
+   * queued, so they just go out as usual.
+   */
+  const handleSubmitNow = useCallback(
+    (text: string | null) => {
+      if (text === null) {
+        const head = queueRef.current.find((it) => it.status === "pending");
+        if (head) handleSendNow(head.id);
+        return;
+      }
+      if (text.startsWith("/")) {
+        submitInput(sessionId, text);
+        return;
+      }
+      const item: InternalQueueItem = {
+        id: crypto.randomUUID(),
+        text,
+        timestamp: new Date().toISOString(),
+        sessionId,
+        status: "pending",
+      };
+      queueRef.current = [...queueRef.current, item];
+      handleSendNow(item.id);
+    },
+    [sessionId, submitInput, handleSendNow],
+  );
 
   // Opening a session points the sidebar's shared folder state (WorkspaceContext
   // currentPath) at that session's cwd, so the picker breadcrumbs and "Recent
@@ -385,6 +513,7 @@ export function SessionView() {
               queue={pendingItems}
               onEdit={handleEditQueued}
               onRemove={handleRemoveQueued}
+              onSendNow={handleSendNow}
             />
             {!hasPendingQuestion && (
               <InputBar
@@ -395,6 +524,7 @@ export function SessionView() {
                 queueTail={queueTail}
                 onPopQueueTail={handlePopQueueTail}
                 onInterrupt={handleInterrupt}
+                onSubmitNow={handleSubmitNow}
                 settingsSlot={
                   <SessionSettingsPopover
                     session={session}

@@ -29,6 +29,13 @@ interface InputBarProps {
   /** Esc keystroke when the queue is empty — interrupts Claude's current turn. */
   onInterrupt?: () => void;
   /**
+   * Ctrl/Cmd+Enter — "send now": interrupt the running turn and send this
+   * text next, ahead of anything queued. With an empty box it is called with
+   * `null` and sends the oldest queued item now. The counterpart of Esc: Esc
+   * pulls the newest queued item back, Ctrl+Enter pushes the oldest forward.
+   */
+  onSubmitNow?: (text: string | null) => void;
+  /**
    * Whether a send is in-flight. When true and the input is empty, the send
    * button morphs into a Stop button that calls `onInterrupt` — the on-screen
    * equivalent of Esc-to-interrupt (so phones, which have no Esc key, can stop
@@ -50,7 +57,16 @@ interface InputBarProps {
 const SAME_TEXT_DEDUP_MS = 500;
 
 export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar(
-  { onSubmit, settingsSlot, recallText, queueTail, onPopQueueTail, onInterrupt, isProcessing },
+  {
+    onSubmit,
+    settingsSlot,
+    recallText,
+    queueTail,
+    onPopQueueTail,
+    onInterrupt,
+    onSubmitNow,
+    isProcessing,
+  },
   ref,
 ) {
   const [text, setText] = useState("");
@@ -82,19 +98,24 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     [],
   );
 
-  const send = () => {
+  /** `sendNow` (Ctrl/Cmd+Enter): interrupt and send this next instead of queueing. */
+  const send = (sendNow = false) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      if (sendNow) onSubmitNow?.(null);
+      return;
+    }
     const last = lastSentRef.current;
-    const now = Date.now();
-    if (last && last.text === trimmed && now - last.at < SAME_TEXT_DEDUP_MS) {
+    const at = Date.now();
+    if (last && last.text === trimmed && at - last.at < SAME_TEXT_DEDUP_MS) {
       // One physical action fired twice (touch+click on mobile, autorepeated
       // keydown, etc.). Drop the second so we don't enqueue or send a
       // duplicate the user didn't intend.
       return;
     }
-    lastSentRef.current = { text: trimmed, at: now };
-    onSubmit(trimmed);
+    lastSentRef.current = { text: trimmed, at };
+    if (sendNow && onSubmitNow) onSubmitNow(trimmed);
+    else onSubmit(trimmed);
     setText("");
     // Reset the auto-grown height — the inline `style.height` set by onChange
     // persists across the value clearing, so without this the box stays tall
@@ -145,7 +166,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              send();
+              send(e.ctrlKey || e.metaKey);
               return;
             }
             if (e.key === "Escape") {
@@ -175,7 +196,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         <Button
           type="button"
           size="icon-sm"
-          onClick={showStop ? () => onInterrupt?.() : send}
+          onClick={showStop ? () => onInterrupt?.() : () => send()}
           disabled={!hasText && !isProcessing}
           aria-label={showStop ? "Stop generating" : "Send"}
           className="shrink-0"
