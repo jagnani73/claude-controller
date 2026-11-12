@@ -79,4 +79,6 @@ export interface SessionEvents {
 export interface ClientState {
   subscribedSessionId: string | null;
   cleanup: (() => void) | null;
+  /** Open agent-transcript subscriptions, keyed by agent stream id. */
+  agentSubs: Map<string, () => void>;
 }

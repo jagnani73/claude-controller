@@ -24,6 +24,7 @@ import {
   classifyCliVersion,
   isBelowMinimumVersion,
 } from "common/version";
+import { AgentRegistry } from "../services/agent-registry.service.js";
 import { LoggerService } from "../services/logger.service.js";
 import { forgetSpawn, rememberSpawn } from "../services/orphan-reaper.service.js";
 import { PtyService } from "../services/pty.service.js";
@@ -75,6 +76,7 @@ export class Session extends EventEmitter<SessionEvents> {
   readonly ready: Promise<void>;
   private _id: string | null = null;
   private _bus: SessionBus | null = null;
+  private _agents: AgentRegistry | null = null;
   private status: SessionStatus = "running";
   private pty: PtyService;
   private capturePath: string | null = null;
@@ -131,6 +133,11 @@ export class Session extends EventEmitter<SessionEvents> {
     if (!this._bus) throw new Error("Session bus not yet ready");
     return this._bus;
   }
+  /** Subagents/teammates this session has spawned. Available once the id resolves. */
+  get agents(): AgentRegistry {
+    if (!this._agents) throw new Error("Session agents not yet ready");
+    return this._agents;
+  }
   get resolved(): boolean {
     return this._id !== null;
   }
@@ -172,6 +179,10 @@ export class Session extends EventEmitter<SessionEvents> {
       this.teardownStatusLineAndCapture();
       this.setStatus("stopped");
       this.transcript?.stop();
+      // The agents ran inside the PTY that just exited. Keep what we know of them
+      // (a stopped session's tree is still worth reading) but stop tailing.
+      this._agents?.settleRunning();
+      this._agents?.stopWatching();
       this.emit("exit", info);
     });
 
@@ -198,7 +209,11 @@ export class Session extends EventEmitter<SessionEvents> {
         log.warn("Initial transcript drain failed", { token: this.spawnToken, error: err });
       });
     }
-    this.ready = Promise.all([idResolved, drainDone]).then(() => undefined);
+    this.ready = Promise.all([idResolved, drainDone]).then(() => {
+      // A resume's transcript has just been replayed, so the spawn calls that
+      // parent each agent are now findable.
+      this._agents?.reresolveParents();
+    });
 
     log.info("Created", {
       token: this.spawnToken,
@@ -491,6 +506,16 @@ export class Session extends EventEmitter<SessionEvents> {
     if (this._id) return;
     this._id = id;
     this._bus = new SessionBus(id);
+    this._agents = new AgentRegistry({
+      sessionId: id,
+      mainBus: this._bus,
+      // Without hook context (a resumed session no agent has run in yet) the
+      // agents live beside the transcript: <projectDir>/<sessionId>/subagents.
+      subagentsDir: () => {
+        const transcriptPath = this.transcript?.path ?? resolveTranscriptPath(this.config.cwd, id);
+        return join(dirname(transcriptPath), id, "subagents");
+      },
+    });
     // Leave a trail for the startup reaper. Only possible now: the record is
     // keyed on the session id, which is exactly what we did not have at spawn.
     rememberSpawn({
@@ -968,6 +993,8 @@ export class Session extends EventEmitter<SessionEvents> {
     // stale `claude-sonnet-5` "corrects" the alias straight back to sonnet. The
     // resumed session reports its own model and effort on its first turn.
     this.reconciler.invalidate();
+    // Their host process is gone; none of the agents it was running still is.
+    this._agents?.settleRunning();
 
     const dumpScriptPath = statusLineDumpScriptPath();
     const spawnedAt = Date.now();
@@ -1178,6 +1205,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.transcript?.stop();
     this.pty.kill();
     this.setStatus("stopped");
+    this._agents?.dispose();
     this._bus?.dispose();
     // We got to run teardown, so there is nothing for the startup reaper to
     // clean up. The record only earns its keep when this never runs.

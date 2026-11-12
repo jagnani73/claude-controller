@@ -4,12 +4,15 @@ import { homedir } from "node:os";
 import { dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { cycleCanIncludeAuto } from "common/permission-cycle";
 import type {
+  AgentMessage,
+  AgentNode,
   ClientMessage,
   DirEntry,
   PermissionMode,
   ServerMessage,
   SessionInfo,
 } from "common/types";
+import { agentStreamId, parseAgentStreamId } from "common/types";
 import ignore, { type Ignore } from "ignore";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
@@ -176,6 +179,7 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
         toolUseId: event.toolUseId,
         toolName: event.toolName,
         toolInput: event.toolInput,
+        ...(event.agent ? { agent: event.agent } : {}),
       };
     case "permission_mode":
       return {
@@ -221,6 +225,103 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
 }
 
 const INITIAL_REPLAY = 20;
+
+function closeAgentSubs(state: ClientState): void {
+  for (const cleanup of state.agentSubs.values()) cleanup();
+  state.agentSubs.clear();
+}
+
+/**
+ * Resolve the bus behind a history request. An agent stream id names a virtual
+ * session, so its bus lives in the owning session's agent registry rather than
+ * in the session manager.
+ */
+function busForHistory(sessionManager: SessionManager, id: string): SessionBus | null {
+  const session = sessionManager.get(id);
+  if (session) return session.bus;
+  const agent = parseAgentStreamId(id);
+  if (!agent) return null;
+  const owner = sessionManager.get(agent.sessionId);
+  return owner?.resolved ? owner.agents.peekAgentBus(agent.agentId) : null;
+}
+
+/** Tell the viewer an agent stream cannot be served, so it stops waiting for one. */
+function sendAgentUnavailable(
+  ws: WebSocket,
+  streamId: string,
+  reason: "unknown_agent" | "transcript_missing" | "failed",
+  message: string,
+): void {
+  send(ws, { type: "agent_unavailable", sessionId: streamId, reason, message });
+}
+
+/**
+ * Attach a client to one agent's transcript. Read-only: the stream carries the
+ * same events a session does, addressed by the agent's stream id.
+ */
+function subscribeToAgent(ws: WebSocket, session: Session, agentId: string): void {
+  const state = clients.get(ws);
+  if (!state) return;
+  const streamId = agentStreamId(session.id, agentId);
+  state.agentSubs.get(streamId)?.();
+
+  let cancelled = false;
+  let detach = () => {};
+  state.agentSubs.set(streamId, () => {
+    cancelled = true;
+    detach();
+  });
+
+  void session.agents
+    .getAgentBus(agentId)
+    .then((bus) => {
+      if (cancelled) return;
+      if (!bus) {
+        // Say why rather than send an empty history, which the viewer cannot
+        // tell apart from an agent that simply has not written anything yet.
+        if (session.agents.hasAgent(agentId)) {
+          log.info("Agent transcript unavailable", { sessionId: session.id, agentId });
+          sendAgentUnavailable(
+            ws,
+            streamId,
+            "transcript_missing",
+            "This agent's transcript file was not found.",
+          );
+        } else {
+          log.info("Subscribe for an unknown agent", { sessionId: session.id, agentId });
+          sendAgentUnavailable(ws, streamId, "unknown_agent", "This agent is not known.");
+        }
+        return;
+      }
+      const total = bus.getEventLogSize();
+      const startIdx = Math.max(0, total - INITIAL_REPLAY);
+      for (const event of bus.getEventLogSlice(startIdx, total)) {
+        const msg = busEventToMessage(event);
+        if (msg) send(ws, msg);
+      }
+      send(ws, {
+        type: "history_available",
+        sessionId: streamId,
+        earliestIndex: startIdx,
+        hasMore: startIdx > 0,
+      });
+      const onEvent = (event: SessionBusEvent) => {
+        const msg = busEventToMessage(event);
+        if (msg) send(ws, msg);
+      };
+      bus.on("event", onEvent);
+      detach = () => bus.off("event", onEvent);
+    })
+    .catch((err) => {
+      log.error("Agent subscribe failed", {
+        agentId,
+        error: (err as Error).stack ?? (err as Error).message,
+      });
+      if (!cancelled) {
+        sendAgentUnavailable(ws, streamId, "failed", "Loading this agent's transcript failed.");
+      }
+    });
+}
 
 function subscribeToSession(ws: WebSocket, session: Session): void {
   const state = clients.get(ws);
@@ -276,11 +377,20 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
   const onStatusLine = (text: string) => {
     send(ws, { type: "status_line", sessionId: session.id, text });
   };
+  const agents = session.agents;
+  const onAgentUpdate = (agent: AgentNode) => {
+    send(ws, { type: "agent_update", sessionId: session.id, agent });
+  };
+  const onAgentMessage = (message: AgentMessage) => {
+    send(ws, { type: "agent_message", sessionId: session.id, message });
+  };
 
   bus.on("event", onEvent);
   session.on("exit", onExit);
   session.on("metadataChanged", onMetadataChanged);
   session.on("statusLine", onStatusLine);
+  agents.on("update", onAgentUpdate);
+  agents.on("message", onAgentMessage);
 
   state.subscribedSessionId = session.id;
   state.cleanup = () => {
@@ -288,7 +398,17 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
     session.off("exit", onExit);
     session.off("metadataChanged", onMetadataChanged);
     session.off("statusLine", onStatusLine);
+    agents.off("update", onAgentUpdate);
+    agents.off("message", onAgentMessage);
+    closeAgentSubs(state);
   };
+
+  // The agent tree, rebuilt from disk so a session resumed after its agents
+  // finished still shows them. Sent after the listeners are attached so an
+  // update racing the snapshot is not lost (a duplicate is harmless: updates
+  // carry whole nodes). Sent even when empty, so a reconnect clears agents the
+  // client still remembers from before.
+  send(ws, { type: "agents_snapshot", sessionId: session.id, ...agents.getSnapshot() });
 
   // Replay the latest status line so reconnecting clients see it immediately.
   const cachedStatus = session.getStatusLine();
@@ -682,10 +802,49 @@ function handleMessage(
       return;
     }
 
-    case "fetch_history": {
+    case "subscribe_agent": {
       const session = sessionManager.get(msg.sessionId);
-      if (!session) return;
-      const bus = session.bus;
+      if (!session?.resolved) {
+        log.info("subscribe_agent for a session that is not available", {
+          sessionId: msg.sessionId,
+        });
+        sendAgentUnavailable(
+          ws,
+          agentStreamId(msg.sessionId, msg.agentId),
+          "unknown_agent",
+          "This session is not running.",
+        );
+        return;
+      }
+      subscribeToAgent(ws, session, msg.agentId);
+      return;
+    }
+
+    case "unsubscribe_agent": {
+      const state = clients.get(ws);
+      const streamId = agentStreamId(msg.sessionId, msg.agentId);
+      state?.agentSubs.get(streamId)?.();
+      state?.agentSubs.delete(streamId);
+      return;
+    }
+
+    case "fetch_history": {
+      const bus = busForHistory(sessionManager, msg.sessionId);
+      if (!bus) {
+        // An agent whose transcript is not being tailed has no history to page
+        // through. Answer with an empty page so the viewer stops showing
+        // "loading earlier messages" and does not ask again.
+        if (parseAgentStreamId(msg.sessionId)) {
+          send(ws, {
+            type: "history_page",
+            sessionId: msg.sessionId,
+            events: [],
+            fromIndex: 0,
+            hasMore: false,
+          });
+        }
+        return;
+      }
       const total = bus.getEventLogSize();
       const end = Math.min(total, Math.max(0, msg.beforeIndex));
       const limit = Math.max(1, Math.min(100, msg.limit));
@@ -712,7 +871,7 @@ export function handleConnection(
   hooksService: HooksService,
   config: ServerConfig,
 ): void {
-  clients.set(ws, { subscribedSessionId: null, cleanup: null });
+  clients.set(ws, { subscribedSessionId: null, cleanup: null, agentSubs: new Map() });
 
   log.info("Client connected");
 
@@ -736,6 +895,7 @@ export function handleConnection(
     log.info("Client disconnected");
     const state = clients.get(ws);
     if (state?.cleanup) state.cleanup();
+    if (state) closeAgentSubs(state);
     clients.delete(ws);
   });
 }

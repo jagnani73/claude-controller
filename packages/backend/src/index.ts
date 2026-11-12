@@ -27,7 +27,7 @@ if (reaped > 0) log.warn("Reaped orphaned PTYs from a previous run", { count: re
 
 const sessionManager = new SessionManager(config);
 
-const hooksService = new HooksService((sessionId) => sessionManager.getBus(sessionId));
+const hooksService = new HooksService((token) => sessionManager.getHookTarget(token));
 
 const hooksPort = await hooksService.start(config.hooksPort);
 sessionManager.setHooksBaseUrl(hooksService.baseUrl());

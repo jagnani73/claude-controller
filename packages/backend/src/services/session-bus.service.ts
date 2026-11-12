@@ -42,6 +42,8 @@ export type SessionBusEvent =
       toolUseId: string;
       toolName: string;
       toolInput: unknown;
+      /** Set when a subagent, not the lead, is the one asking. */
+      agent?: { id: string; label: string };
     }
   | {
       kind: "permission_mode";

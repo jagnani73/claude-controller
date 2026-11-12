@@ -163,6 +163,105 @@ export interface DirEntry {
   isDir: boolean;
 }
 
+// ─── Agents (subagents / teammates) ───────────────────────────────
+//
+// Every subagent a session spawns writes its own sidechain transcript. The
+// controller treats each one as a *virtual session*: same transcript pipeline,
+// same event shapes, addressed by a composite stream id instead of a PTY-backed
+// session id. Anything that needs a real PTY (input, interrupt, respawn) must
+// reject these ids — see `parseAgentStreamId`.
+
+const AGENT_STREAM_SEP = "::agent::";
+
+/**
+ * A composite id under which one agent's events travel. Branded so the compiler
+ * can tell it from a PTY-backed session id: handing one to `SessionManager` is a
+ * bug the type system should catch, not something found at runtime.
+ */
+export type AgentStreamId = string & { readonly __brand: "AgentStreamId" };
+
+/** Build the stream id for one agent (`<sessionId>::agent::<agentId>`). */
+export function agentStreamId(sessionId: string, agentId: string): AgentStreamId {
+  return `${sessionId}${AGENT_STREAM_SEP}${agentId}` as AgentStreamId;
+}
+
+/** Inverse of {@link agentStreamId}; null for an ordinary (PTY-backed) session id. */
+export function parseAgentStreamId(id: string): { sessionId: string; agentId: string } | null {
+  const at = id.indexOf(AGENT_STREAM_SEP);
+  if (at <= 0) return null;
+  const agentId = id.slice(at + AGENT_STREAM_SEP.length);
+  if (!agentId) return null;
+  return { sessionId: id.slice(0, at), agentId };
+}
+
+/**
+ * Lifecycle of one agent.
+ *  - `running` - a SubagentStart has fired and no stop has followed. Reset to `idle`
+ *    when the session's process exits or respawns (nothing is running then).
+ *  - `idle`    - stopped but may wake again (a teammate waiting on its inbox).
+ *  - `done`    - will not run again: its `meta.json` says `finished`, or it stopped
+ *    after agreeing to a shutdown request. A start (a wake) takes it back to
+ *    `running`; teammates ended any other way (a torn-down team, a kill) are not
+ *    detectable and stay `idle`.
+ */
+export type AgentStatus = "running" | "idle" | "done";
+
+/** One node of the agent tree. */
+export interface AgentNode {
+  agentId: string;
+  /** Id under which this agent's transcript events and history are addressed. */
+  streamId: AgentStreamId;
+  /** Teammate name (`alpha`); absent for an unnamed subagent. */
+  name?: string;
+  /** Agent type (`general-purpose`, `code-reviewer`, …). */
+  agentType: string;
+  /** The `description` the parent gave the Agent tool call. */
+  description?: string;
+  /** Agent that spawned this one; null for the lead (the main session). */
+  parentAgentId: string | null;
+  /** The parent's `Agent` tool_use id this agent was spawned from. */
+  toolUseId?: string;
+  spawnDepth?: number;
+  status: AgentStatus;
+  /** Launched with `run_in_background` (or as a teammate). */
+  background?: boolean;
+  startedAt: number;
+  lastActivityAt: number;
+  /** Most recent tool the agent called — a cheap "what is it doing" hint. */
+  activity?: string;
+  /** The agent's last assistant message, from its SubagentStop. */
+  lastMessage?: string;
+}
+
+/** One agent-to-agent (or lead-to-agent) `SendMessage`. */
+export interface AgentMessage {
+  id: string;
+  /** Sending agent; null when the lead sent it. */
+  fromAgentId: string | null;
+  /** Recipient exactly as addressed: a teammate name, an agent id, or `*`. */
+  to: string;
+  /**
+   * Resolved recipient. Three states on purpose: a string is a known agent, `null`
+   * is the lead, and absent means unresolved or a broadcast (`to` is then the only
+   * truth). `fromAgentId` uses `null` for the lead the same way.
+   */
+  toAgentId?: string | null;
+  /**
+   * `message` for ordinary text, otherwise the structured protocol type. The known
+   * ones are listed for autocomplete; the CLI may add more, so any string is valid.
+   */
+  kind:
+    | "message"
+    | "shutdown_request"
+    | "shutdown_response"
+    | "shutdown_approved"
+    | "shutdown_rejected"
+    | (string & Record<never, never>);
+  summary?: string;
+  text: string;
+  timestamp: string;
+}
+
 // ─── WebSocket message protocol ───────────────────────────────────
 
 /** Server → Client messages */
@@ -201,6 +300,22 @@ export type ServerMessage =
       toolUseId: string;
       toolName: string;
       toolInput: unknown;
+      /** Set when a subagent (not the lead) is the one asking; `label` is its name, else its type. */
+      agent?: { id: string; label: string };
+    }
+  | { type: "agents_snapshot"; sessionId: string; agents: AgentNode[]; messages: AgentMessage[] }
+  | { type: "agent_update"; sessionId: string; agent: AgentNode }
+  | { type: "agent_message"; sessionId: string; message: AgentMessage }
+  | {
+      /**
+       * A `subscribe_agent` that cannot be served. Without this the viewer cannot
+       * tell a missing transcript from an agent that simply has not written yet.
+       * `sessionId` is the agent's stream id, as on its other events.
+       */
+      type: "agent_unavailable";
+      sessionId: string;
+      reason: "unknown_agent" | "transcript_missing" | "failed";
+      message: string;
     }
   | { type: "permission_mode"; sessionId: string; mode: PermissionMode }
   | { type: "session_taken_over"; sessionId: string }
@@ -417,6 +532,18 @@ export type ClientMessage =
       type: "unsubscribe";
       sessionId: string;
     }
+  | {
+      /**
+       * Start receiving one agent's transcript events (read-only). Replays the
+       * tail of its history under `agentStreamId(sessionId, agentId)`, the same
+       * way `subscribe` does for a session. Several agents can be watched at once,
+       * but all of them end when the session subscription does.
+       */
+      type: "subscribe_agent";
+      sessionId: string;
+      agentId: string;
+    }
+  | { type: "unsubscribe_agent"; sessionId: string; agentId: string }
   | { type: "create_session"; config: SessionConfig }
   | { type: "stop_session"; sessionId: string }
   | { type: "list_dirs"; path: string }

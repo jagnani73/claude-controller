@@ -8,7 +8,10 @@ import type {
   PostCompactPayload,
   PreCompactPayload,
   PreToolUsePayload,
+  SubagentStartPayload,
+  SubagentStopPayload,
 } from "../types/hook.types.js";
+import type { AgentRegistry } from "./agent-registry.service.js";
 import { buildApprovalResponse } from "./approval-response.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
@@ -17,14 +20,23 @@ const log = LoggerService.scoped("hooks");
 
 const LOOPBACK_HOST = "127.0.0.1";
 
-type BusLookup = (sessionId: string) => SessionBus | null;
+/** What a hook needs to act on: the session's bus and its agent registry. */
+export interface HookTarget {
+  bus: SessionBus;
+  agents: AgentRegistry;
+}
+
+type TargetLookup = (spawnToken: string) => HookTarget | null;
 
 /**
  * HTTP listener for Claude Code hook POSTs.
  *
- * Claude Code only supports HTTP hooks for certain events — `SessionStart` is
- * command-only, for example. We therefore register just `PermissionRequest`,
- * which blocks until the phone approves or denies via `resolveApproval()`.
+ * Claude Code only supports HTTP hooks for certain events - `SessionStart` is
+ * command-only, for example. It serves every event listed in `HOOK_SYNC`
+ * (`hooks-config.ts`). Only `PermissionRequest` ever blocks: it is held until the
+ * phone approves or denies via `resolveApproval()`. The rest (compaction, plan
+ * cards, model switches, subagent start/stop, `SendMessage`) are observed and
+ * answered `{}` at once.
  *
  * Binds loopback-only — Claude Code's SSRF guard blocks private IPs.
  */
@@ -33,7 +45,7 @@ export class HooksService {
   private port = 0;
   private pendingApprovals = new Map<string, (response: HookResponse) => void>();
 
-  constructor(private readonly busLookup: BusLookup) {}
+  constructor(private readonly targetLookup: TargetLookup) {}
 
   /**
    * Start the loopback hooks listener; returns the actually-bound port.
@@ -151,21 +163,31 @@ export class HooksService {
     event: HookEventName,
     payload: HookPayload,
   ): Promise<HookResponse> {
-    const bus = this.busLookup(sessionId);
-    if (!bus) {
-      log.warn("no bus for session", { sessionId, event });
+    const target = this.targetLookup(sessionId);
+    if (!target) {
+      // error, not warn: warn is outside the default log level, and for a
+      // PermissionRequest this means the CLI falls back to a terminal picker the
+      // phone cannot see.
+      log.error("no bus for session", { sessionId, event });
       return {};
     }
+    const { bus, agents } = target;
 
     switch (event) {
       case "PermissionRequest":
-        return this.handlePermissionRequest(bus, payload as PermissionRequestPayload);
+        return this.handlePermissionRequest(bus, agents, payload as PermissionRequestPayload);
+      case "SubagentStart":
+        agents.handleStart(payload as SubagentStartPayload);
+        return {};
+      case "SubagentStop":
+        agents.handleStop(payload as SubagentStopPayload);
+        return {};
       case "PreCompact":
         return this.handlePreCompact(bus, payload as PreCompactPayload);
       case "PostCompact":
         return this.handlePostCompact(bus, payload as PostCompactPayload);
       case "PreToolUse":
-        return this.handlePreToolUse(bus, payload as PreToolUsePayload);
+        return this.handlePreToolUse(bus, agents, payload as PreToolUsePayload);
       case "PostModelSwitch":
         return this.handleModelSwitch(bus, payload as ModelSwitchPayload);
     }
@@ -204,8 +226,15 @@ export class HooksService {
    */
   private async handlePreToolUse(
     bus: SessionBus,
+    agents: AgentRegistry,
     payload: PreToolUsePayload,
   ): Promise<HookResponse> {
+    // Registered with its own matcher: the agent-to-agent conversation. Purely
+    // observational — we never decide anything about a message.
+    if (payload.tool_name === "SendMessage") {
+      agents.handleSendMessage(payload);
+      return {};
+    }
     if (payload.tool_name === "ExitPlanMode") {
       const input = payload.tool_input;
       // Surface the input shape — we need real evidence on whether the plan text
@@ -269,6 +298,7 @@ export class HooksService {
 
   private async handlePermissionRequest(
     bus: SessionBus,
+    agents: AgentRegistry,
     payload: PermissionRequestPayload,
   ): Promise<HookResponse> {
     // ExitPlanMode also fires a PermissionRequest, but it's notification-only:
@@ -289,6 +319,16 @@ export class HooksService {
       toolUseId,
       toolName: payload.tool_name,
       toolInput: payload.tool_input,
+      // A subagent asking is still answered from the same card, but the user
+      // should know it is not the lead that wants this.
+      ...(payload.agent_id
+        ? {
+            agent: {
+              id: payload.agent_id,
+              label: agents.labelFor(payload.agent_id) ?? payload.agent_type ?? "agent",
+            },
+          }
+        : {}),
     });
 
     return await new Promise<HookResponse>((resolve) => {

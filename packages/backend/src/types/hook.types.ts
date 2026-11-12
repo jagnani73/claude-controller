@@ -9,6 +9,16 @@ interface BaseHookPayload {
   transcript_path: string;
   cwd: string;
   permission_mode?: string;
+  /**
+   * Present when the hook fires from inside a subagent (a tool it called, a
+   * permission it needs); absent for the lead. Observed on 2.1.322 for
+   * PreToolUse and PostToolUse. The source snapshot documents it for every event,
+   * which `PermissionRequest` attribution relies on but has not been observed:
+   * the live probes ran with permissions bypassed. Always present on
+   * SubagentStart/Stop, where it names the agent itself.
+   */
+  agent_id?: string;
+  agent_type?: string;
 }
 
 export interface PermissionRequestPayload extends BaseHookPayload {
@@ -31,9 +41,10 @@ export interface PostCompactPayload extends BaseHookPayload {
 
 /**
  * Fires BEFORE a tool's permission check / interactive picker. We register it
- * scoped to `ExitPlanMode` only — it's the one signal that reaches us before
- * the plan picker opens (the `ExitPlanMode` `tool_use` is written to the JSONL
- * only after the picker resolves). Carries the real `tool_use_id`.
+ * scoped to `ExitPlanMode` — the one signal that reaches us before the plan
+ * picker opens (the `ExitPlanMode` `tool_use` is written to the JSONL only after
+ * the picker resolves) — and to `SendMessage`, whose input is the agent-to-agent
+ * conversation. Carries the real `tool_use_id`.
  */
 export interface PreToolUsePayload extends BaseHookPayload {
   hook_event_name: "PreToolUse";
@@ -70,12 +81,42 @@ export interface ModelSwitchPayload extends BaseHookPayload {
   prompt_id?: string;
 }
 
+/**
+ * A subagent (or teammate) started, including a teammate waking to handle a
+ * message. Shape observed on 2.1.322: it carries no name and no agent transcript
+ * path (`transcript_path` is the session's); both come from the agent's
+ * `.meta.json` and the paired SubagentStop.
+ */
+export interface SubagentStartPayload extends BaseHookPayload {
+  hook_event_name: "SubagentStart";
+  agent_id: string;
+  agent_type: string;
+}
+
+/**
+ * A subagent stopped. For a plain subagent that is the end; a teammate stops
+ * between messages and starts again, so a stop alone does not mean "finished".
+ * That is decided by the agent's `.meta.json` `finished` flag, or, for a
+ * teammate, by it having agreed to a shutdown request.
+ */
+export interface SubagentStopPayload extends BaseHookPayload {
+  hook_event_name: "SubagentStop";
+  agent_id: string;
+  agent_type: string;
+  /** Absent on the internal forked agents that stop without ever having started. */
+  agent_transcript_path?: string;
+  last_assistant_message?: string;
+  stop_hook_active?: boolean;
+}
+
 export type HookPayload =
   | PermissionRequestPayload
   | PreCompactPayload
   | PostCompactPayload
   | PreToolUsePayload
-  | ModelSwitchPayload;
+  | ModelSwitchPayload
+  | SubagentStartPayload
+  | SubagentStopPayload;
 
 export type HookEventName = HookPayload["hook_event_name"];
 

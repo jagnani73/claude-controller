@@ -1,6 +1,7 @@
 import type { SessionConfig, SessionInfo } from "common/types";
 import { Session } from "../session/session.js";
 import type { ServerConfig } from "../types/index.js";
+import type { HookTarget } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
 
@@ -81,6 +82,12 @@ export class SessionManager {
   getBus(spawnToken: string): SessionBus | null {
     const session = this.byToken.get(spawnToken);
     return session?.resolved ? session.bus : null;
+  }
+
+  /** Bus + agent registry for a hook POST, by the spawn token in its URL. */
+  getHookTarget(spawnToken: string): HookTarget | null {
+    const session = this.byToken.get(spawnToken);
+    return session?.resolved ? { bus: session.bus, agents: session.agents } : null;
   }
 
   list(): SessionInfo[] {

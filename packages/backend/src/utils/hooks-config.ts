@@ -25,6 +25,15 @@ const HOOK_SYNC: readonly { event: HookEventName; matcher?: string }[] = [
   // fire it — an unrecognized event name no longer invalidates the settings
   // file (upstream 2.1.101), so registering it is safe on older builds.
   { event: "PostModelSwitch" },
+  // The agents view. SubagentStart/Stop drive the live tree (a teammate stops
+  // and restarts around every message it handles). Both answer {} immediately.
+  { event: "SubagentStart" },
+  { event: "SubagentStop" },
+  // The agent-to-agent conversation: every SendMessage's input is who it is
+  // addressed to and what it says. Pre, not Post, so the feed shows a message
+  // as it is sent. A second PreToolUse entry alongside ExitPlanMode's — see
+  // buildHooksConfig, which must append rather than overwrite per event.
+  { event: "PreToolUse", matcher: "SendMessage" },
 ];
 
 /**
@@ -44,21 +53,23 @@ export function buildHooksConfig(
   sessionId: string,
   opts: SettingsOptions = {},
 ): string {
-  const hooks: Record<string, unknown> = {};
+  const hooks: Record<string, unknown[]> = {};
 
+  // Append per event: several entries may share one event with different
+  // matchers (PreToolUse is scoped to both ExitPlanMode and SendMessage), and
+  // assigning would silently drop all but the last.
   for (const { event, matcher } of HOOK_SYNC) {
-    hooks[event] = [
-      {
-        ...(matcher ? { matcher } : {}),
-        hooks: [
-          {
-            type: "http",
-            url: `${baseUrl}/hooks/${sessionId}/${event}`,
-            async: false,
-          },
-        ],
-      },
-    ];
+    hooks[event] ??= [];
+    hooks[event].push({
+      ...(matcher ? { matcher } : {}),
+      hooks: [
+        {
+          type: "http",
+          url: `${baseUrl}/hooks/${sessionId}/${event}`,
+          async: false,
+        },
+      ],
+    });
   }
 
   const settings: Record<string, unknown> = { hooks };
