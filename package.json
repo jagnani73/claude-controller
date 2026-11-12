@@ -21,7 +21,8 @@
     "verify:approval-edit": "node scripts/verify/approval-edit.mjs",
     "verify:agents": "node scripts/verify/agents.mjs",
     "verify:permission-cycle": "node scripts/verify/permission-cycle.mjs",
-    "verify:question-relay": "node scripts/verify/question-relay.mjs"
+    "verify:question-relay": "node scripts/verify/question-relay.mjs",
+    "verify:plan-relay": "node scripts/verify/plan-relay.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",

@@ -13,9 +13,10 @@ pnpm verify:model-switch    # does PostModelSwitch still carry requested_model?
 pnpm verify:permission-cycle # does Shift+Tab still walk the cycle we predict?
 pnpm verify:question-relay  # does the picker relay still select the option asked for?
 
-pnpm dev:backend            # required for the next two only
+pnpm dev:backend            # required for the next three only
 pnpm verify:approval-edit   # does approving with updatedInput run the edited call?
 pnpm verify:agents          # do agents, names, SendMessage traffic and per-agent history reach the controller?
+pnpm verify:plan-relay      # does a fast tap on the plan card still approve via the picker?
 ```
 
 `verify:approval-edit` needs a **running backend**: `PermissionRequest` does not
@@ -76,15 +77,20 @@ already usable. Each run prints which signal won (`status_line` or `timer`).
 
 ## What this does NOT cover
 
-**The plan picker.** `plan.input.ts` drives its ink picker by *digit* key, and
-the mapping is position-sensitive: at high context usage the CLI inserts a
-"clear context" approve at position 1, shifting the others down (see the KNOWN
-LIMITATION in that file). Reproducing high context on demand is the hard part,
-so it stays a manual step:
+**The plan picker at high context.** `plan-relay.mjs` covers the normal-context
+picker. The mapping is position-sensitive, though: at high context usage the CLI
+inserts a "clear context" approve at position 1, shifting the others down (see the
+KNOWN LIMITATION in `plan.input.ts`). Reproducing high context on demand is the
+hard part, so that variant stays a manual step:
 
-1. Start the controller (`pnpm dev:backend`, `pnpm dev:frontend`).
-2. In a plan-mode session, ask for a plan, approve via **Approve · manual**, and
-   confirm the mode badge flips to `DEFAULT`.
+1. Start the controller (`pnpm dev:backend`, `pnpm dev:frontend`) and fill a
+   plan-mode session's context until the picker offers "clear context".
+2. Approve via **Approve · manual**, and confirm the mode badge flips to `DEFAULT`.
+
+The **planless** two-option picker ("Exit plan mode? 1. Yes / 2. No") is not
+probed either: it needs the model to skip writing a plan, which it does not do
+reliably on request through the controller. Its rule (never send `2` for a
+planless input) is documented in `plan.input.ts`.
 
 The AskUserQuestion relay **is** covered now, by `question-relay.mjs`. An earlier
 version of this file claimed a picker selection could not be read off the
@@ -99,7 +105,8 @@ The cursor glyph changed under it once already: `❯` up to 2.1.251, ASCII `>` o
 question, since a bare `>` appears elsewhere on screen.
 
 Treat a green run as "the hook contracts held, Shift+Tab lands where we think,
-and the question relay selects what it was asked for" — not "every relay works".
+the question relay selects what it was asked for, and a fast plan tap lands" —
+not "every relay works".
 
 ## Configuration
 
