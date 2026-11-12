@@ -1,6 +1,7 @@
 import type { AgentMessage, AgentNode, AgentStatus } from "common/types";
 import { ArrowRight, ChevronLeft, MessagesSquare, Network } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Markdown } from "@/components/messages/Markdown";
 import { MessageStream } from "@/components/messages/MessageStream";
 import { summaryAddsInfo } from "@/components/messages/teammate-message";
 import { Button } from "@/components/ui/button";
@@ -304,8 +305,9 @@ function MessagesView({
               {summaryAddsInfo(m.summary, m.text) && (
                 <div className="mt-1 text-xs text-muted-foreground">{m.summary}</div>
               )}
-              <div className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
-                {m.text}
+              {/* Agents write markdown (code fences, lists) like any assistant turn. */}
+              <div className="mt-1 text-sm text-foreground/90">
+                <Markdown text={m.text} />
               </div>
             </li>
           ))}

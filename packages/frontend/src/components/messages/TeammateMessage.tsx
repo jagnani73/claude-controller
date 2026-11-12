@@ -1,5 +1,6 @@
 import { AtSign } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Markdown } from "./Markdown";
 import { type TeammateMessage as ParsedMessage, summaryAddsInfo } from "./teammate-message";
 
 // Claude Code assigns each teammate a colour name; map it to fixed utility
@@ -53,8 +54,8 @@ export function TeammateMessage({ message, timestamp }: TeammateMessageProps) {
         </div>
 
         {body.kind === "text" && (
-          <div className="mt-1.5 whitespace-pre-wrap wrap-break-word text-base leading-relaxed text-foreground/95">
-            {body.text}
+          <div className="mt-1.5 text-base text-foreground/95">
+            <Markdown text={body.text} />
           </div>
         )}
         {body.kind === "notice" && (
