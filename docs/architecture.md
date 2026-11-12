@@ -36,18 +36,23 @@ as typed messages. **PTY stdin is used for input only**; PTY stdout is dumped to
 ### 1. HTTP hooks
 
 The CLI is launched with a `--settings` JSON (written to a temp file, not inline)
-that registers **blocking** hooks which POST to a loopback-only endpoint:
+that registers synchronous HTTP hooks which POST to a loopback-only endpoint.
+Only **`PermissionRequest` blocks the action** until the phone answers (and fails
+closed); every other hook is a signal whose handler answers `{}` at once:
 
-- **`PermissionRequest`** — tool approvals **and** AskUserQuestion.
+- **`PermissionRequest`** — tool approvals **and** AskUserQuestion. Blocking.
 - **`PreCompact` / `PostCompact`** — compaction lifecycle.
 - **`PreToolUse`** (scoped to `ExitPlanMode`) — the only signal that arrives
   *before* the plan picker opens, so the plan card renders in time.
   ExitPlanMode's own `PermissionRequest` is notification-only (answering it
   resolves nothing) but it is the **picker-open** signal: see *Plan picker
   timing* below.
+- **`PreToolUse`** (scoped to `SendMessage`) — the agent-to-agent message feed.
+  A second `PreToolUse` entry, so `buildHooksConfig` appends per event.
 - **`PostModelSwitch`** (CLI ≥ 2.1.251) — an out-of-band `/model`, carrying the
   requested *alias* rather than just the resolved id. `PreModelSwitch` is
   deliberately not registered: it exists to block or confirm a switch.
+- **`SubagentStart` / `SubagentStop`** — which agents are running (the agents view).
 
 #### Plan picker timing and the two-option variant
 
@@ -63,7 +68,7 @@ be confirmed by the CLI" with the picker left open and nothing able to answer it
 
 So `hooks.service` turns that `PermissionRequest` into a backend-internal
 `plan_picker_open` bus event, and `Session.answerPlan` writes **nothing** until it
-has arrived for the pending call (plus a 300ms settle), within 20s; otherwise it
+has arrived for the tracked call (plus a 300ms settle), within 20s; otherwise it
 fails having written nothing. Then one write and no resend, confirmed by the
 `tool_result` within 8s: a resend racing that result through the transcript would
 itself land in the prompt box. No PTY output is read. `pnpm verify:plan-relay`
@@ -89,8 +94,8 @@ approvals work. The pending HTTP response is unblocked by
 An approval can also carry `updatedInput`, letting the phone approve a *corrected*
 call (`ApprovalCard`'s Edit… mode) rather than only allow or deny.
 
-**Every decision uses the schema form** `{hookEventName: "PermissionRequest",
-decision: {behavior, updatedInput? | message}}` (`buildApprovalResponse`). A
+**Every decision uses the schema form** `{hookSpecificOutput: {hookEventName:
+"PermissionRequest", decision: {behavior, updatedInput? | message}}}` (`buildApprovalResponse`). A
 response the CLI does not honour falls back to its own terminal picker — invisible
 to the phone, so the session hangs with no error. The PreToolUse-style flat
 `{permissionDecision}` form used to work for a plain allow/deny (2.1.251) but is
@@ -425,7 +430,35 @@ sequenceDiagram
   session with no live PTY (stopped or absent) is answered with `error` code
   `session_stopped`; `SessionView` puts the item back at the head of its queue and
   shows "Session stopped" with a Resume action (a subscribe). A session known to
-  be stopped is not re-subscribed on reconnect, since that would resume it.
+  be stopped is not re-subscribed on reconnect, since that would resume it,
+  unless a Resume was in progress: its answer may have died with the old socket,
+  so it is asked again. A subscribe whose resumed PTY died while booting gets
+  `subscribe_failed` instead of attaching to the corpse. The bus `session_stopped`
+  puts an in-flight item back at the queue head, drops a bus-acked one (its turn
+  was killed), re-arms Esc and ends a pending Resume.
+- **Undelivered input is reported.** When an `input` reaches a live PTY but the
+  respawn throws or the submit is never confirmed (`submitWithConfirmation`
+  returns false and logs at error), the client gets `error` code `input_failed`;
+  `SessionView` puts the item back at the queue head behind a Retry banner and
+  dispatches nothing until Retry (a late echo of the same text acks it instead).
+- **Resends are tied to sockets.** Every `input` write records the generation of
+  the socket it went out on. After a reconnect with nothing new in the replay,
+  only an in-flight item written to an older socket is resent; one buffered
+  offline was flushed on the new socket before the re-subscribe and is merely
+  waiting for its echo. Card responses (approval / question / plan) are kept by
+  `wsService.sendResponse` and written again on each new socket until the card
+  sees its outcome (a `tool_result`, an expiry, an edit outcome; otherwise they
+  age out after 10 minutes). Repeats are safe: `hooks.service` remembers the
+  approvals it resolved and ignores a repeat (rather than answering
+  `approval_expired`, which would mark a delivered answer "Not delivered"), and
+  `Session.claimAnswer` lets a question or plan call be answered once, so a
+  repeated digit never lands in the prompt box.
+- **A resume's replayed turn is ended.** The initial drain is silent, but the bus's
+  turn tracking still sees it; a transcript that ends on an unanswered prompt
+  would read as a turn in flight forever (blocking the idle reaper, gating Esc,
+  forcing a redirect respawn). `SessionBus.endReplayedTurn` forgets it once the
+  drain is done, and the open-tool and plan-picker trackers are cleared too. A
+  session idle past the timeout but held open logs its blocker once.
 - **Queues are per session.** `SessionView` keeps each session's queue in a
   module-level store, so switching chats keeps queued prompts. They are
   dispatched only while their session is on screen: the backend streams only the
