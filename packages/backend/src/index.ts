@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 import { loadConfig } from "./config.js";
 import { startServer } from "./server.js";
+import { resolveCliReference } from "./services/cli-version.service.js";
 import { HooksService } from "./services/hooks.service.js";
 import { LoggerService } from "./services/logger.service.js";
 import { reapOrphans } from "./services/orphan-reaper.service.js";
@@ -25,7 +26,12 @@ const config = loadConfig();
 const reaped = reapOrphans();
 if (reaped > 0) log.warn("Reaped orphaned PTYs from a previous run", { count: reaped });
 
-const sessionManager = new SessionManager(config);
+// The installed binary's version is the drift reference for every session's
+// reported version. Resolved once, here, because the spawned `claude` can't
+// change underneath a running backend without a restart anyway.
+const cliReference = await resolveCliReference(config.claudeBin);
+
+const sessionManager = new SessionManager(config, cliReference.version);
 
 const hooksService = new HooksService((token) => sessionManager.getHookTarget(token));
 

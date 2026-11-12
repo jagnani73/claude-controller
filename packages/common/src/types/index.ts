@@ -152,9 +152,10 @@ export interface SessionInfo {
    */
   cliVersion?: string;
   /**
-   * How `cliVersion` compares to `CLAUDE_CODE_TARGET_VERSION` — the build our
-   * keystroke relays and JSONL parsing are verified against. Anything but
-   * "match" means the relays may be driving a CLI they were not tested on.
+   * How `cliVersion` compares to the installed Claude Code binary, whose version
+   * the backend resolves once at startup (falling back to the static
+   * `CLAUDE_CODE_TARGET_VERSION` if that probe fails). Anything but "match" means
+   * this session runs a different build than the one installed now.
    */
   cliVersionStatus?: CliVersionStatus;
 }

@@ -349,22 +349,27 @@ export class Session extends EventEmitter<SessionEvents> {
     if (this.reconcileEffortFromRuntime()) this.emit("metadataChanged");
   };
 
+  /** Version the session's CLI is compared against for drift (not the hard floor). */
+  private get cliReferenceVersion(): string {
+    return this.deps.cliReferenceVersion ?? CLAUDE_CODE_TARGET_VERSION;
+  }
+
   /**
    * Record which Claude Code build is actually driving this session and warn if
-   * it isn't the one we're verified against.
+   * it isn't the one installed now (the drift reference resolved at startup, or
+   * the static fallback when that probe failed — see `cliReferenceVersion`).
    *
-   * This matters because the controller spawns `claude` off PATH (or
-   * `CLAUDE_BIN`), so the binary that runs is decided by the environment, not by
-   * us — a machine with two installs can silently drive a build our keystroke
-   * relays were never tested on. A mismatch is not fatal and must not block the
-   * session: most versions change nothing we depend on. It's logged at warn and
-   * surfaced on `SessionInfo` so the drift is visible when a picker or the
-   * transcript parse starts misbehaving.
+   * A mismatch means this session runs a different build than the installed
+   * one, e.g. it was resumed across an upgrade, or the binary on PATH changed
+   * under a long-lived backend. It is not fatal and must not block the session:
+   * most versions change nothing we depend on. It's logged at warn and surfaced
+   * on `SessionInfo` so the drift is visible when a picker or the transcript
+   * parse starts misbehaving. The hard floor below is a separate, static check.
    */
   private handleCliVersion = (version: string): void => {
     if (this.cliVersion === version) return;
     this.cliVersion = version;
-    const status = classifyCliVersion(version);
+    const status = classifyCliVersion(version, this.cliReferenceVersion);
     if (isBelowMinimumVersion(version) && this.warnedCliVersion !== version) {
       this.warnedCliVersion = version;
       // Escalated above a plain mismatch: below the floor the AskUserQuestion
@@ -378,10 +383,10 @@ export class Session extends EventEmitter<SessionEvents> {
       });
     } else if (status !== "match" && this.warnedCliVersion !== version) {
       this.warnedCliVersion = version;
-      log.warn("Claude Code version differs from the verified target", {
+      log.warn("Claude Code version differs from the installed build", {
         token: this.spawnToken,
         observed: version,
-        target: CLAUDE_CODE_TARGET_VERSION,
+        reference: this.cliReferenceVersion,
         status,
       });
     } else if (status === "match") {
@@ -1231,7 +1236,9 @@ export class Session extends EventEmitter<SessionEvents> {
       createdAt: this.createdAt,
       statusSnapshot: this.statusSnapshot ?? undefined,
       cliVersion: this.cliVersion ?? undefined,
-      cliVersionStatus: this.cliVersion ? classifyCliVersion(this.cliVersion) : undefined,
+      cliVersionStatus: this.cliVersion
+        ? classifyCliVersion(this.cliVersion, this.cliReferenceVersion)
+        : undefined,
     };
   }
 

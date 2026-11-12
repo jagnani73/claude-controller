@@ -1,5 +1,13 @@
 /**
- * Single source of truth for the Claude Code CLI build this controller targets.
+ * The Claude Code CLI build the relays were last verified against. This is the
+ * **fallback** drift reference, not the live one.
+ *
+ * The live reference is the version of the binary the backend will spawn,
+ * resolved once at startup by running `<claudeBin> --version` (see
+ * `cli-version.service.ts` in the backend) and handed to each session. This
+ * constant is used only when that probe fails (binary missing, timeout,
+ * unparseable output), and by `scripts/verify/`, which reads it from the built
+ * package and is deliberately not dynamic.
  *
  * We are a PTY relay driving a CLI we neither ship nor pin, and the fragile
  * parts — the AskUserQuestion and ExitPlanMode keystroke scripts, the JSONL
@@ -8,9 +16,7 @@
  * is silent, not loud: a picker gains an option and a digit keystroke selects
  * the wrong one; a JSONL field is renamed and the watcher just goes quiet.
  *
- * So the version observed at runtime is compared against this target and any
- * mismatch is logged once per session and surfaced on `SessionInfo`. Bump this
- * only after re-verifying the relays against the newer build.
+ * Bump this only after re-verifying the relays against the newer build.
  */
 export const CLAUDE_CODE_TARGET_VERSION = "2.1.251";
 
@@ -53,7 +59,7 @@ export const CLAUDE_CODE_REFERENCE_SNAPSHOT_VERSION = "2.1.87";
  */
 export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.235";
 
-/** How an observed CLI version relates to {@link CLAUDE_CODE_TARGET_VERSION}. */
+/** How a session's CLI version relates to the drift reference (see {@link classifyCliVersion}). */
 export type CliVersionStatus = "match" | "older" | "newer";
 
 /** Split a dotted version into numeric segments; unparseable segments read as 0. */
@@ -76,7 +82,14 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** Classify an observed CLI version against the target we're verified for. */
+/**
+ * Classify a session's CLI version against a reference version.
+ *
+ * The backend passes the installed binary's version as `target`, so a non-match
+ * means the session is running a different build than the one installed now
+ * (e.g. it was resumed across an upgrade). Without an argument it compares
+ * against the static fallback, {@link CLAUDE_CODE_TARGET_VERSION}.
+ */
 export function classifyCliVersion(
   observed: string,
   target: string = CLAUDE_CODE_TARGET_VERSION,

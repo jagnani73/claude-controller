@@ -12,7 +12,14 @@ export class SessionManager {
   private byId = new Map<string, Session>();
   private hooksBaseUrl = "";
 
-  constructor(private serverConfig: ServerConfig) {}
+  /**
+   * `cliReferenceVersion` is the installed Claude Code version resolved at
+   * startup; sessions classify their reported version against it.
+   */
+  constructor(
+    private serverConfig: ServerConfig,
+    private cliReferenceVersion?: string,
+  ) {}
 
   /** Called once the hooks HTTP listener is bound. */
   setHooksBaseUrl(url: string): void {
@@ -58,6 +65,7 @@ export class SessionManager {
     const session = new Session(config, {
       serverConfig: this.serverConfig,
       hooksBaseUrl: this.hooksBaseUrl,
+      cliReferenceVersion: this.cliReferenceVersion,
     });
     this.byToken.set(session.spawnToken, session);
 

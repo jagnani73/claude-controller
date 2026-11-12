@@ -65,6 +65,12 @@ export interface PtyManagerEvents {
 export interface SessionDeps {
   serverConfig: ServerConfig;
   hooksBaseUrl: string;
+  /**
+   * Version of the installed Claude Code binary, resolved once at startup. A
+   * session's reported version is classified against it. Omitted → the static
+   * `CLAUDE_CODE_TARGET_VERSION` fallback.
+   */
+  cliReferenceVersion?: string;
 }
 
 export interface SessionEvents {
