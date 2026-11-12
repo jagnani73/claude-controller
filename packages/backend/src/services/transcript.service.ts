@@ -9,6 +9,10 @@ import type {
   UserEntry,
 } from "../types/transcript.types.js";
 import { unwrapPastedContent } from "../utils/pasted-content.js";
+
+/** The user entry Claude Code writes when a turn is interrupted (seen on 2.1.322). */
+const INTERRUPT_MARKER_RE = /^\[Request interrupted by user( for tool use)?\]$/;
+
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
 
@@ -416,12 +420,7 @@ export class TranscriptWatcher {
       }
       // Real chat content — anything pending didn't get a stdout, flush plain.
       this.flushPendingSlashCommand();
-      this.emitEvent({
-        kind: "user_prompt",
-        sessionId,
-        timestamp,
-        text: unwrapPastedContent(content),
-      });
+      this.emitUserText(content, sessionId, timestamp);
       return;
     }
 
@@ -440,13 +439,37 @@ export class TranscriptWatcher {
         // Synthetic --resume bridge prompt arrives as an array-form text block
         // when Claude Code uses the structured user-content shape.
         if (block.text === SYNTHETIC_RESUME_USER_TEXT) continue;
-        this.emitEvent({
-          kind: "user_prompt",
-          sessionId,
-          timestamp,
-          text: unwrapPastedContent(block.text),
-        });
+        this.emitUserText(block.text, sessionId, timestamp);
       }
     }
+  }
+
+  /**
+   * A user turn's text, except the marker the CLI writes when a turn is Esc'd
+   * (`[Request interrupted by user]`, `... for tool use]`). That is not a
+   * prompt: counted as one, it became the "current turn" in
+   * `Session.hasInFlightTurn`, so after an interrupt the session believed a
+   * turn was still running, and it rendered as a bubble the user never sent.
+   * It is the interrupt itself, so it becomes an `interrupt` event, unless the
+   * phone already pushed one for this turn (it lands ~100ms after a WS
+   * interrupt), which also makes an Esc pressed in the CLI itself visible.
+   */
+  private emitUserText(text: string, sessionId: string, timestamp: string): void {
+    if (INTERRUPT_MARKER_RE.test(text.trim())) {
+      if (!this.interruptSinceLastPrompt()) {
+        this.emitEvent({ kind: "interrupt", sessionId, timestamp });
+      }
+      return;
+    }
+    this.emitEvent({ kind: "user_prompt", sessionId, timestamp, text: unwrapPastedContent(text) });
+  }
+
+  private interruptSinceLastPrompt(): boolean {
+    const events = this.bus.getEventLog();
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].kind === "interrupt") return true;
+      if (events[i].kind === "user_prompt") return false;
+    }
+    return false;
   }
 }
