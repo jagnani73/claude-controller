@@ -1,13 +1,23 @@
 import type { ClaudeModel, ServerMessage, ToolResult } from "common/types";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { ApprovalCard } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
 import { Markdown } from "@/components/messages/Markdown";
 import { PlanCard } from "@/components/messages/PlanCard";
 import { QuestionCard } from "@/components/messages/QuestionCard";
+import { TeammateMessage } from "@/components/messages/TeammateMessage";
 import { ThinkingIndicator } from "@/components/messages/ThinkingIndicator";
 import { ToolCallCard } from "@/components/messages/ToolCallCard";
+import { parseTeammateText } from "@/components/messages/teammate-message";
 import { UserMessage } from "@/components/messages/UserMessage";
 import { useWsMessage } from "@/hooks/use-ws";
 import { wsService } from "@/services/ws.service";
@@ -971,8 +981,25 @@ export function MessageStream({
             }
             const item = entry.item;
             switch (item.kind) {
-              case "user":
-                return <UserMessage key={item.id} text={item.text} timestamp={item.timestamp} />;
+              case "user": {
+                // In an agent's transcript, a "user" turn is usually another agent (or
+                // the lead) messaging it, wrapped in a <teammate-message> envelope.
+                const teammate = parseTeammateText(item.text);
+                if (!teammate) {
+                  return <UserMessage key={item.id} text={item.text} timestamp={item.timestamp} />;
+                }
+                return (
+                  <Fragment key={item.id}>
+                    {teammate.messages.map((m, i) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: envelopes in one turn have no id; order is fixed
+                      <TeammateMessage key={i} message={m} timestamp={item.timestamp} />
+                    ))}
+                    {teammate.rest && (
+                      <UserMessage text={teammate.rest} timestamp={item.timestamp} />
+                    )}
+                  </Fragment>
+                );
+              }
               case "assistant":
                 return (
                   <AssistantMessage key={item.id} text={item.text} timestamp={item.timestamp} />

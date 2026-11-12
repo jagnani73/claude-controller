@@ -9,6 +9,7 @@ import { SessionTopBar } from "@/components/layout/SessionTopBar";
 import { SidebarToggle } from "@/components/layout/SidebarToggle";
 import { StatusLine } from "@/components/layout/StatusLine";
 import { MessageStream } from "@/components/messages/MessageStream";
+import { parseTeammateText } from "@/components/messages/teammate-message";
 import { SessionSettingsPopover } from "@/components/sessions/SessionSettingsPopover";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -151,6 +152,10 @@ export function SessionView() {
 
   useWsMessage("user_prompt", (msg) => {
     if (msg.sessionId !== sessionId) return;
+    // With agent teams on, a teammate's message reaches the lead as a user turn.
+    // It is not something this viewer sent, so it must not acknowledge a queued
+    // send or become the text Up-arrow recalls.
+    if (parseTeammateText(msg.text)) return;
     // Fresh turn re-arms Esc — the previous interrupt (if any) is over.
     interruptArmedRef.current = true;
     if (!msg.text.startsWith("/")) setRecallText(msg.text);
