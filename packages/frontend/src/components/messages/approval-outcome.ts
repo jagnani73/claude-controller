@@ -66,6 +66,29 @@ export function classifyApprovalResult(result: ToolLike["result"]): ApprovalOutc
  */
 export function approvalOutcomes(items: readonly ItemLike[]): Map<string, ApprovalOutcome> {
   const out = new Map<string, ApprovalOutcome>();
+  for (const [id, tool] of pairApprovals(items)) {
+    const outcome = classifyApprovalResult(tool.result);
+    if (outcome) out.set(id, outcome);
+  }
+  return out;
+}
+
+/**
+ * Approval card ids whose paired tool call (see `approvalOutcomes`) has a
+ * result: Claude Code is past the permission, so a response kept for re-sending
+ * has its answer and can be settled.
+ */
+export function resolvedApprovalIds(items: readonly ItemLike[]): string[] {
+  const out: string[] = [];
+  for (const [id, tool] of pairApprovals(items)) {
+    if (tool.result) out.push(id);
+  }
+  return out;
+}
+
+/** Approval card id → its paired tool call; see `approvalOutcomes` for the rule. */
+function pairApprovals(items: readonly ItemLike[]): Map<string, ToolLike> {
+  const out = new Map<string, ToolLike>();
   const tools: { index: number; key: string; item: ToolLike }[] = [];
   items.forEach((it, index) => {
     if (it.kind === "tool") {
@@ -91,8 +114,7 @@ export function approvalOutcomes(items: readonly ItemLike[]): Map<string, Approv
     }
     if (!match) return;
     paired.add(match.index);
-    const outcome = classifyApprovalResult(match.item.result);
-    if (outcome) out.set(approval.id, outcome);
+    out.set(approval.id, match.item);
   });
   return out;
 }

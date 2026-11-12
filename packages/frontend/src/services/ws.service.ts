@@ -38,7 +38,12 @@ interface UnackedResponse {
   storedAt: number;
   /** Generation of the socket it was last written to; null if never written. */
   sentGen: number | null;
+  /** Written again on a later socket after a first write (a re-send). */
+  resent: boolean;
 }
+
+/** How often kept card responses are checked against the TTL. */
+const RESPONSE_PRUNE_INTERVAL_MS = 60_000;
 
 class WsService {
   private ws: WebSocket | null = null;
@@ -56,6 +61,8 @@ class WsService {
   private outboundQueue: { msg: ClientMessage; onWritten?: OnWritten }[] = [];
   /** Card responses (approval / question / plan) awaiting their outcome, by tool-use id. */
   private unackedResponses = new Map<string, UnackedResponse>();
+  /** Ages kept responses out while any exist, even with no reconnect to prune them. */
+  private responsePruneTimer: ReturnType<typeof setInterval> | null = null;
   /** Bumped on every successful open; identifies which socket a write went to. */
   private generation = 0;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -250,11 +257,17 @@ class WsService {
    * question or plan call at most once (`Session.claimAnswer`).
    */
   sendResponse(key: string, msg: ClientMessage): void {
-    const entry: UnackedResponse = { msg, storedAt: Date.now(), sentGen: null };
+    const entry: UnackedResponse = { msg, storedAt: Date.now(), sentGen: null, resent: false };
     this.unackedResponses.set(key, entry);
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
       entry.sentGen = this.generation;
+    }
+    if (!this.responsePruneTimer) {
+      this.responsePruneTimer = setInterval(
+        () => this.pruneResponses(),
+        RESPONSE_PRUNE_INTERVAL_MS,
+      );
     }
   }
 
@@ -263,20 +276,63 @@ class WsService {
     this.unackedResponses.delete(key);
   }
 
+  /**
+   * Stop re-sending every question / plan answer for `sessionId`: its PTY is
+   * gone, so the call it answered can never be answered (a resumed CLI starts
+   * with no picker open). Approval responses are settled by their cards' expiry.
+   */
+  settleSessionAnswers(sessionId: string): void {
+    for (const [key, entry] of this.unackedResponses) {
+      const { msg } = entry;
+      if (
+        (msg.type === "question_response" || msg.type === "plan_response") &&
+        msg.sessionId === sessionId
+      ) {
+        this.unackedResponses.delete(key);
+      }
+    }
+  }
+
+  /** Drop kept responses past the TTL; stop the timer once none are left. */
+  private pruneResponses(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.unackedResponses) {
+      if (now - entry.storedAt > RESPONSE_RESEND_TTL_MS) this.unackedResponses.delete(key);
+    }
+    if (this.unackedResponses.size === 0 && this.responsePruneTimer) {
+      clearInterval(this.responsePruneTimer);
+      this.responsePruneTimer = null;
+    }
+  }
+
   /** Write every kept response not already written to the socket that just opened. */
   private resendResponses(): void {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const now = Date.now();
-    for (const [key, entry] of this.unackedResponses) {
-      if (now - entry.storedAt > RESPONSE_RESEND_TTL_MS) {
-        this.unackedResponses.delete(key);
-        continue;
-      }
+    this.pruneResponses();
+    for (const entry of this.unackedResponses.values()) {
       if (entry.sentGen === this.generation) continue;
+      if (entry.sentGen !== null) entry.resent = true;
       ws.send(JSON.stringify(entry.msg));
       entry.sentGen = this.generation;
     }
+  }
+
+  /**
+   * An `approval_expired` error answering a *re-send* says nothing about the
+   * decision: the first write most likely arrived and was resolved, and the
+   * backend just no longer remembers it (`dev:backend` restarts on every save,
+   * emptying its answered-approval memory). Showing it would flip a delivered
+   * decision to "Not delivered" and toast. Swallow it and stop re-sending. If
+   * the first write really was lost, the call's own result (a hook failure or
+   * timeout) still reaches the card through the transcript.
+   */
+  private isStaleApprovalExpiry(msg: ServerMessage): boolean {
+    if (msg.type !== "error" || msg.code !== "approval_expired") return false;
+    const entry = this.unackedResponses.get(msg.toolUseId);
+    if (!entry?.resent) return false;
+    this.unackedResponses.delete(msg.toolUseId);
+    return true;
   }
 
   private flushOutbound(): void {
@@ -382,6 +438,7 @@ class WsService {
   }
 
   private emit(msg: ServerMessage): void {
+    if (this.isStaleApprovalExpiry(msg)) return;
     if (WsService.STICKY_TYPES.has(msg.type)) {
       this.stickyMessages.set(msg.type, msg);
     }

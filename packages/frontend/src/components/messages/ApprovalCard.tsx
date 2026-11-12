@@ -64,8 +64,9 @@ export function ApprovalCard({
 
   // The answer is re-sent after a reconnect until something about its fate
   // arrives (see wsService.sendResponse); an outcome or an expiry is that. A
-  // plain success sends nothing back, so that entry simply ages out (re-sending
-  // it is harmless: the backend ignores an approval it already resolved).
+  // plain success sends nothing back: MessageStream settles it once the paired
+  // tool call has a result, and wsService swallows an `approval_expired` that
+  // answers a re-send (the backend forgot the answer, e.g. it restarted).
   useEffect(() => {
     if (outcome || expired) wsService.settleResponse(toolUseId);
   }, [outcome, expired, toolUseId]);

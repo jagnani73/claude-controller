@@ -367,6 +367,12 @@ export interface AgentMessage {
  *  - `subscribe_failed`: opening (or resuming) the session for a `subscribe` failed.
  *  - `input_failed`: an `input` reached a live session but could not be delivered
  *    (respawn failed, or the CLI never registered the submit).
+ *  - `session_startup_error`: the session runs but its startup failed in a way the
+ *    chat should explain (today: its transcript could not be read). Re-sent on
+ *    every subscribe while it holds; shown in place, not as a toast.
+ *
+ * `input_failed` and an input's `session_stopped` go to every subscriber of the
+ * session, not only the socket that sent the input, so handle them idempotently.
  */
 export type ErrorCode =
   | "session_not_found"
@@ -374,7 +380,8 @@ export type ErrorCode =
   | "session_stopped"
   | "approval_expired"
   | "subscribe_failed"
-  | "input_failed";
+  | "input_failed"
+  | "session_startup_error";
 
 /**
  * An `error` message. Discriminated on `code`: a coded error always names what

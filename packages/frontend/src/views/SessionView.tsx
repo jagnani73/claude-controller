@@ -161,9 +161,17 @@ export function SessionView() {
   resumingRef.current = resuming;
   const [subscribeError, setSubscribeError] = useState<string | null>(null);
   /**
+   * The session runs but failed part of its startup (`session_startup_error`,
+   * e.g. its transcript could not be read). The backend re-sends it on every
+   * subscribe while it holds, so it is cleared before each (re-)subscribe and
+   * shown in place rather than toasted per reconnect.
+   */
+  const [startupError, setStartupError] = useState<string | null>(null);
+  /**
    * The backend could not deliver the last prompt (`input_failed`). Its item is
-   * back at the head of the queue and nothing is dispatched until the user taps
-   * Retry: resending on its own could loop on a failure that persists.
+   * back at the head of the queue and nothing is dispatched automatically:
+   * resending on its own could loop on a failure that persists. Retry, a new
+   * send or Send now is the user's consent to try again.
    */
   const [inputError, setInputErrorState] = useState<string | null>(null);
   const inputErrorRef = useRef<string | null>(null);
@@ -254,6 +262,9 @@ export function SessionView() {
 
   /** A (re-)subscribe is about to replay the tail of this session's log. */
   const beginReplay = useCallback((reconnect: boolean) => {
+    // Every subscribe is preceded by this; the backend re-sends a startup error
+    // that still holds right after attaching.
+    setStartupError(null);
     replayRef.current = {
       watermark: storedQueue(sessionIdRef.current).lastSeenAt,
       sawActivity: false,
@@ -398,6 +409,11 @@ export function SessionView() {
     interruptArmedRef.current = true;
     setResuming(false);
     setStoppedHint(true);
+    // A held Retry is superseded: the item is back at the head either way, and
+    // Resume (whose banner counts the queued messages) is the consent to send
+    // it. Keeping the gate would hold the queue after Resume behind a banner
+    // that was hidden while stopped.
+    setInputError(null);
   });
 
   useWsMessage("session_metadata", (msg) => {
@@ -497,16 +513,26 @@ export function SessionView() {
         return;
       case "session_stopped":
         // The send reached no CLI. Put it back at the head of the queue, where it
-        // waits for Resume instead of hanging as "sending".
+        // waits for Resume instead of hanging as "sending". Idempotent: the
+        // backend sends this to every subscriber, so a repeat finds nothing in
+        // flight. Resume is the consent to send, so a held Retry is dropped.
         writeQueue(queueRef.current.map((it) => (it.status === "in-flight" ? toPending(it) : it)));
+        setInputError(null);
         setResuming(false);
         setStoppedHint(true);
         return;
       case "input_failed":
         // The CLI is running but the prompt did not land. Back to the head of the
-        // queue, held until the user taps Retry.
+        // queue, held until the user retries. Sent to every subscriber of the
+        // session (the phone may have reconnected while delivery was retried),
+        // so it only acts on an item actually in flight: a repeat, or one that
+        // arrives after the item was already settled, changes nothing.
+        if (!queueRef.current.some((it) => it.status === "in-flight")) return;
         setInputError(msg.message);
         writeQueue(queueRef.current.map((it) => (it.status === "in-flight" ? toPending(it) : it)));
+        return;
+      case "session_startup_error":
+        setStartupError(msg.message);
         return;
       case "approval_expired":
       case "permission_mode_unverified":
@@ -548,9 +574,11 @@ export function SessionView() {
         sessionId,
         status: "pending",
       };
+      // A new send is consent to retry a held one: it goes out first, in order.
+      setInputError(null);
       writeQueue(dispatchHeadIfIdle([...queueRef.current, item]));
     },
-    [sessionId, submitInput, dispatchHeadIfIdle, writeQueue],
+    [sessionId, submitInput, dispatchHeadIfIdle, writeQueue, setInputError],
   );
 
   const inFlightItem = queue.find((it) => it.status === "in-flight");
@@ -636,6 +664,9 @@ export function SessionView() {
    */
   const handleSendNow = useCallback(
     (id: string) => {
+      // Like a new send, Send now is consent to retry: otherwise the Retry gate
+      // would swallow it silently.
+      setInputError(null);
       const promoted = promoteToHead(queueRef.current, id);
       if (!hasActiveSend(promoted)) {
         // Nothing running from this view's point of view: just send it.
@@ -647,7 +678,7 @@ export function SessionView() {
       // this once it is acked.
       fireSendNowInterrupt();
     },
-    [writeQueue, dispatchHeadIfIdle, fireSendNowInterrupt],
+    [writeQueue, dispatchHeadIfIdle, fireSendNowInterrupt, setInputError],
   );
 
   /**
@@ -805,6 +836,11 @@ export function SessionView() {
             <Button size="sm" onClick={handleResume} disabled={resuming}>
               {resuming ? "Resuming…" : subscribeError ? "Retry" : "Resume"}
             </Button>
+          </div>
+        )}
+        {startupError && (
+          <div className="border-t border-border/60 bg-muted/30 px-4 py-2 text-sm text-muted-foreground">
+            {startupError}
           </div>
         )}
         {inputError && !stopped && (

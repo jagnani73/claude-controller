@@ -168,11 +168,19 @@ export class Session extends EventEmitter<SessionEvents> {
   /** Live tool calls with no result yet: a long-running tool emits nothing. */
   private readonly openToolCalls = new Set<string>();
   /**
+   * Synthesized `pr:` ids of PermissionRequests (tool approvals, AskUserQuestion)
+   * this PTY raised and has not abandoned. A question card can still carry its
+   * `pr:` id when answered, so `claimAnswer` accepts one of these as proof the
+   * call is open in this process. Cleared with `openToolCalls`.
+   */
+  private readonly openApprovalIds = new Set<string>();
+  /**
    * AskUserQuestion / ExitPlanMode calls a response is being (or was) delivered
    * for. The client re-sends an unacknowledged response after a reconnect, and
    * typing the same keystrokes twice would answer the *next* prompt, so a
-   * second response for the same call is ignored. Cleared for a call whose
-   * delivery failed, so a later retry can still go out.
+   * second response for the same call is ignored. A failed delivery is final
+   * too: `failQuestion` resolves the card with a synthetic error result, and the
+   * CLI's picker may be half-driven, so the user interrupts or retypes instead.
    */
   private readonly answeredCalls = new Set<string>();
   private readonly deps: SessionDeps;
@@ -267,6 +275,7 @@ export class Session extends EventEmitter<SessionEvents> {
       // reaper, gating Esc on a turn nobody runs, and forcing a redirect respawn
       // on the first message into a CLI whose textarea is already clean.
       this.openToolCalls.clear();
+      this.openApprovalIds.clear();
       this.planPicker = null;
       this._bus?.endReplayedTurn();
       // A resume's transcript has just been replayed, so the spawn calls that
@@ -575,6 +584,8 @@ export class Session extends EventEmitter<SessionEvents> {
       this.touch();
       if (event.kind === "tool_call") this.openToolCalls.add(event.toolUseId);
       else if (event.kind === "tool_result") this.openToolCalls.delete(event.toolUseId);
+      else if (event.kind === "approval_request") this.openApprovalIds.add(event.toolUseId);
+      else if (event.kind === "approval_expired") this.openApprovalIds.delete(event.toolUseId);
       if (event.kind === "model_switch") {
         this.handleModelSwitch(event.requestedModel, event.toModel);
         return;
@@ -611,6 +622,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.setStatus("stopped");
     this.transcript?.stop();
     this.openToolCalls.clear();
+    this.openApprovalIds.clear();
     // The agents ran inside the PTY that just exited. Keep what we know of them
     // (a stopped session's tree is still worth reading) but stop tailing.
     this._agents?.settleRunning();
@@ -828,6 +840,12 @@ export class Session extends EventEmitter<SessionEvents> {
    * Claim the right to answer an AskUserQuestion / ExitPlanMode call. False when
    * a response for it already went out (a re-send after a reconnect, or a double
    * tap): the second one must not type into the PTY. See `answeredCalls`.
+   *
+   * Also false, with a synthetic error result so the card resolves, when the
+   * call was never seen open in THIS process. After a PTY death and resume the
+   * old call is an orphaned `tool_use` with no result and this Session's
+   * `answeredCalls` is empty, so a re-sent answer would otherwise type its
+   * script plus Enter into the fresh CLI's main prompt.
    */
   claimAnswer(toolUseId: string): boolean {
     if (this.answeredCalls.has(toolUseId) || this._bus?.hasToolResult(toolUseId)) {
@@ -838,6 +856,17 @@ export class Session extends EventEmitter<SessionEvents> {
       return false;
     }
     this.answeredCalls.add(toolUseId);
+    if (!this.openToolCalls.has(toolUseId) && !this.openApprovalIds.has(toolUseId)) {
+      log.info("Refusing a response for a call not open in this process", {
+        token: this.spawnToken,
+        toolUseId,
+      });
+      this.failQuestion(
+        toolUseId,
+        "This prompt is no longer open in Claude Code; nothing was sent.",
+      );
+      return false;
+    }
     return true;
   }
 
@@ -910,10 +939,13 @@ export class Session extends EventEmitter<SessionEvents> {
    * result fuses onto the card, flipping it to an error state and restoring the
    * input bar so the user can interrupt/retype. Frontend-only — the CLI's
    * question may still be open; this just unblocks the UI.
+   *
+   * Final for this call: the synthetic result (and `answeredCalls`) make
+   * `claimAnswer` refuse any later response for it, because the picker may have
+   * been partly driven and a second script would land on an unknown screen.
    */
   failQuestion(toolUseId: string, message: string): void {
-    // Delivery failed, so a retry for this call is legitimate again.
-    this.answeredCalls.delete(toolUseId);
+    this.answeredCalls.add(toolUseId);
     if (!this._bus) return;
     this._bus.push({
       kind: "tool_result",
@@ -1000,22 +1032,32 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     const openedAt = isMine() ? this.planPicker?.openedAt : null;
     if (openedAt == null) {
-      // Unknown call, resolved meanwhile (e.g. at the terminal) or never opened.
-      // Only the last needs surfacing; a resolved call already has its result.
-      if (isMine() || !this.planPicker) {
-        log.error("Plan picker never opened — nothing was sent", {
+      // Never opened, resolved meanwhile (e.g. at the terminal), or not the call
+      // the tracked picker belongs to (or none is tracked, as after `ready`).
+      // A resolved call already has its result; anything else must be failed,
+      // since `claimAnswer` recorded the call and will ignore every re-send.
+      if (!bus.hasToolResult(toolUseId)) {
+        log.error("Plan picker not open for this call — nothing was sent", {
           token: this.spawnToken,
           toolUseId,
+          trackedCall: this.planPicker?.toolUseId ?? null,
         });
-        if (isMine()) {
-          this.failPlan(toolUseId, "The CLI never opened its plan prompt; nothing was sent.");
-        }
+        this.failPlan(toolUseId, "The CLI's plan prompt was not open; nothing was sent.");
       }
       return;
     }
     const settle = openedAt + PLAN_PICKER_SETTLE_MS - Date.now();
     if (settle > 0) await delay(settle);
-    if (!isMine()) return; // answered at the terminal during the settle
+    if (!isMine()) {
+      // Normally answered at the terminal during the settle (it has a result).
+      if (!bus.hasToolResult(toolUseId)) {
+        this.failPlan(
+          toolUseId,
+          "The CLI's plan prompt closed before the answer; nothing was sent.",
+        );
+      }
+      return;
+    }
     const matches = (e: SessionBusEvent): boolean =>
       e.kind === "tool_result" && e.toolUseId === toolUseId;
     // Listen before writing: the result can land before the write returns.
@@ -1247,6 +1289,7 @@ export class Session extends EventEmitter<SessionEvents> {
       // and none of its tool calls will ever report a result.
       this._agents?.settleRunning();
       this.openToolCalls.clear();
+      this.openApprovalIds.clear();
 
       const dumpScriptPath = statusLineDumpScriptPath();
       const spawnedAt = Date.now();
@@ -1381,7 +1424,9 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     const steps = cycleDistance(from, target, { autoAvailable });
     if (steps === null) {
-      log.warn("Permission mode target unreachable from current", {
+      // A modelled mode the cycle cannot reach is a bug in the cycle model, and
+      // the user's pick silently did nothing: error, not the invisible warn.
+      log.error("Permission mode target unreachable from current", {
         token: this.spawnToken,
         from,
         target,

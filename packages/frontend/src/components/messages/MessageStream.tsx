@@ -12,7 +12,7 @@ import {
 } from "react";
 import { ApprovalCard, type ApprovalExpiry } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
-import { approvalOutcomes } from "@/components/messages/approval-outcome";
+import { approvalOutcomes, resolvedApprovalIds } from "@/components/messages/approval-outcome";
 import { Markdown } from "@/components/messages/Markdown";
 import { PlanCard } from "@/components/messages/PlanCard";
 import { QuestionCard } from "@/components/messages/QuestionCard";
@@ -681,6 +681,14 @@ export function MessageStream({
   // own (an edit the CLI rejected, a failed/timed-out hook): read it off the
   // matching tool call's result.
   const outcomes = useMemo(() => approvalOutcomes(items), [items]);
+  // A plain allow/deny gets no reply of its own, so its kept response would be
+  // re-sent on every reconnect until its TTL. Its paired call having a result
+  // (live or in a replay) means Claude Code is past the permission: settle it.
+  // (The call merely appearing proves nothing: the transcript can record the
+  // tool_use before the permission is decided.)
+  useEffect(() => {
+    for (const id of resolvedApprovalIds(items)) wsService.settleResponse(id);
+  }, [items]);
 
   // An AskUserQuestion is pending while its tool item has no result yet.
   const hasPendingQuestion = items.some(
@@ -881,6 +889,9 @@ export function MessageStream({
   useWsMessage("session_stopped", (msg) => {
     if (msg.sessionId !== sessionId) return;
     dispatch({ type: "expire_open_approvals", reason: "The session stopped." });
+    // Question / plan answers have no expiry of their own; the calls they answer
+    // died with the PTY, so stop re-sending them (a resumed CLI would refuse).
+    wsService.settleSessionAnswers(msg.sessionId);
   });
 
   useWsMessage("history_available", (msg) => {

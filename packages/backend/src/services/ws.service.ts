@@ -437,8 +437,43 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
   if (info) send(ws, { type: "session_metadata", session: info });
 
   // The session runs but its history could not be read; say so rather than
-  // leave an empty chat unexplained.
-  if (session.startupError) send(ws, { type: "error", message: session.startupError });
+  // leave an empty chat unexplained. Coded and addressed so the chat shows it in
+  // place (a banner that a repeat on the next subscribe just re-sets) instead of
+  // a toast per reconnect. Not sent once the condition is gone: a Resume builds
+  // a new Session, which starts with no error.
+  if (session.startupError) {
+    send(ws, {
+      type: "error",
+      sessionId: session.id,
+      code: "session_startup_error",
+      message: session.startupError,
+    });
+  }
+}
+
+/**
+ * Send an error about a session's input to the socket that sent it and to every
+ * client subscribed (or subscribing) to that session. Delivery can take seconds
+ * (respawn, submit retries); a phone that reconnected meanwhile holds the item
+ * as in flight on its new socket and would otherwise never hear the outcome.
+ * The client's handling is idempotent, so a duplicate is harmless.
+ */
+function sendSessionInputError(
+  origin: WebSocket,
+  msg: {
+    type: "error";
+    sessionId: string;
+    code: "input_failed" | "session_stopped";
+    message: string;
+  },
+): void {
+  const targets = new Set<WebSocket>([origin]);
+  for (const [ws, state] of clients) {
+    if (state.subscribedSessionId === msg.sessionId || state.pendingSubscribeId === msg.sessionId) {
+      targets.add(ws);
+    }
+  }
+  for (const ws of targets) send(ws, msg);
 }
 
 function broadcast(msg: ServerMessage): void {
@@ -593,8 +628,9 @@ function handleMessage(
         log.error("Input dispatch failed", { sessionId: msg.sessionId, error: message });
         // The phone's queue holds this item as "sending" until told otherwise.
         // A session that died meanwhile is reported as stopped (Resume), any
-        // other failure as input_failed (Retry).
-        send(ws, {
+        // other failure as input_failed (Retry). Every subscriber hears it, not
+        // just this socket: see `sendSessionInputError`.
+        sendSessionInputError(ws, {
           type: "error",
           sessionId: msg.sessionId,
           code: session.alive ? "input_failed" : "session_stopped",
@@ -760,7 +796,7 @@ function handleMessage(
         // A non-cancel answer that resolved to no keystrokes (e.g. labels that
         // matched no option) would otherwise leave the card locked forever.
         // Surface it so the card unlocks and the input bar returns.
-        log.warn("Empty keystroke script — nothing to send", {
+        log.error("Empty keystroke script — nothing to send", {
           sessionId: msg.sessionId,
           toolUseId: msg.toolUseId,
         });

@@ -25,6 +25,7 @@ const LAYOUT_KEY = "cc-shell-layout-v2";
 const SHOWN_IN_PLACE: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   "session_not_found",
   "input_failed",
+  "session_startup_error",
 ]);
 
 function readLayout(): Layout | undefined {

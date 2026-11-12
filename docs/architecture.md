@@ -440,19 +440,39 @@ sequenceDiagram
   respawn throws or the submit is never confirmed (`submitWithConfirmation`
   returns false and logs at error), the client gets `error` code `input_failed`;
   `SessionView` puts the item back at the queue head behind a Retry banner and
-  dispatches nothing until Retry (a late echo of the same text acks it instead).
+  dispatches nothing until the user consents: Retry, a new send or Send now (a
+  late echo of the same text acks it instead). This error, and an input's
+  `session_stopped`, go to every client subscribed to the session, not only the
+  socket that sent the input: delivery takes seconds, and a phone that
+  reconnected meanwhile would otherwise hold the item in flight forever. The
+  client acts only while an item is in flight, so a repeat is harmless. A
+  session stop clears a held Retry: the item is re-queued and Resume sends it.
+- **Startup errors are shown in the chat.** A session whose transcript could not
+  be read gets `error` code `session_startup_error` (with `sessionId`) on every
+  subscribe while that holds; `SessionView` shows it as a banner, cleared before
+  each (re-)subscribe, instead of `AppShell` toasting it each time. A Resume
+  builds a new `Session`, which starts without it.
 - **Resends are tied to sockets.** Every `input` write records the generation of
   the socket it went out on. After a reconnect with nothing new in the replay,
   only an in-flight item written to an older socket is resent; one buffered
   offline was flushed on the new socket before the re-subscribe and is merely
   waiting for its echo. Card responses (approval / question / plan) are kept by
   `wsService.sendResponse` and written again on each new socket until the card
-  sees its outcome (a `tool_result`, an expiry, an edit outcome; otherwise they
-  age out after 10 minutes). Repeats are safe: `hooks.service` remembers the
-  approvals it resolved and ignores a repeat (rather than answering
-  `approval_expired`, which would mark a delivered answer "Not delivered"), and
-  `Session.claimAnswer` lets a question or plan call be answered once, so a
-  repeated digit never lands in the prompt box.
+  sees its outcome (a `tool_result`, an expiry, an edit outcome, or for an
+  approval a result on its paired tool call; question and plan answers are
+  dropped when the session stops; anything else ages out after 10 minutes, on a
+  timer). Repeats are safe: `hooks.service` remembers the approvals it resolved
+  and ignores a repeat (rather than answering `approval_expired`, which would
+  mark a delivered answer "Not delivered"). That memory dies with a backend
+  restart, so the client also swallows an `approval_expired` that answers a
+  re-send rather than the first write. `Session.claimAnswer` lets a question or
+  plan call be answered once, and only if this process saw the call open (a live
+  `tool_call` or `pr:` approval): after a PTY death and resume the old call is
+  an orphaned `tool_use`, and a re-sent answer would type into the fresh prompt,
+  so it is refused with a synthetic error result. A failed delivery is final for
+  that call (its synthetic error result blocks a retry), and `answerPlan` fails
+  the card whenever it wrote nothing and the call has no result, so the card
+  never stays "submitted" with nothing coming.
 - **A resume's replayed turn is ended.** The initial drain is silent, but the bus's
   turn tracking still sees it; a transcript that ends on an unanswered prompt
   would read as a turn in flight forever (blocking the idle reaper, gating Esc,
