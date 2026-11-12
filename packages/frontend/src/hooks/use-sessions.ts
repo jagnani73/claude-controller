@@ -1,11 +1,12 @@
-import type {
-  ClaudeModel,
-  EffortLevel,
-  PermissionMode,
-  ProjectSessionSummary,
-  RespawnSettings,
-  SessionConfig,
-  SessionInfo,
+import {
+  type ClaudeModel,
+  type EffortLevel,
+  isClaudeModel,
+  type PermissionMode,
+  type ProjectSessionSummary,
+  type RespawnSettings,
+  type SessionConfig,
+  type SessionInfo,
 } from "common/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clampEffort, clampPermissionMode } from "@/components/sessions/model-config";
@@ -21,14 +22,17 @@ import { useWsMessage } from "./use-ws";
  * so the change is per-session and applied via respawn on next message.
  */
 const EFFORT_SLASH_RE = /^\/effort\s+(auto|low|medium|high|xhigh|max)\s*$/i;
-const MODEL_SLASH_RE = /^\/model\s+(opus|opus\[1m\]|opusplan|sonnet|sonnet\[1m\]|haiku)\s*$/i;
+// Any single argument; `isClaudeModel` then decides by shape (aliases and full
+// ids alike), so a model family released later is intercepted too.
+const MODEL_SLASH_RE = /^\/model\s+(\S+)\s*$/i;
 
 function parseSettingsSlash(text: string): SettingsPatch | null {
   const trimmed = text.trim();
   const effort = trimmed.match(EFFORT_SLASH_RE);
   if (effort) return { effort: effort[1].toLowerCase() as EffortLevel };
   const model = trimmed.match(MODEL_SLASH_RE);
-  if (model) return { model: model[1].toLowerCase() as ClaudeModel };
+  const value = model?.[1].toLowerCase();
+  if (value && isClaudeModel(value)) return { model: value };
   return null;
 }
 

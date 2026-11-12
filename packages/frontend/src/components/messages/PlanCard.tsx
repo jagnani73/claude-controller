@@ -1,4 +1,4 @@
-import { cycleCanIncludeAuto } from "common/permission-cycle";
+import { autoCycleSupport } from "common/permission-cycle";
 import type { ClaudeModel, PlanDecision, ToolResult } from "common/types";
 import { ClipboardCheck } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -40,7 +40,14 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
 
   const isLocked = submitted !== null || !!result;
   // What picker position 1 means for this model (best-effort, see plan.input.ts).
-  const primaryLabel = model && cycleCanIncludeAuto(model) ? "auto mode" : "auto-accept edits";
+  // An unverified model could be either, so the label says so.
+  const autoSupport = model ? autoCycleSupport(model) : false;
+  const primaryLabel =
+    autoSupport === null
+      ? "auto mode / auto-accept"
+      : autoSupport
+        ? "auto mode"
+        : "auto-accept edits";
 
   const respond = (decision: PlanDecision): void => {
     if (isLocked || !connected) return;

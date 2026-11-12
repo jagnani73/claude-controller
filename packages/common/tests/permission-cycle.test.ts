@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { cycleCanIncludeAuto, cycleDistance, nextPermissionMode } from "../src/permission-cycle";
-import type { ClaudeModel, PermissionMode } from "../src/types/index";
+import type { KnownClaudeModel, PermissionMode } from "../src/types/index";
 import { CLAUDE_MODELS } from "../src/types/index";
 
 /**
@@ -9,7 +9,7 @@ import { CLAUDE_MODELS } from "../src/types/index";
  * transcribed probe output, not a restatement of the implementation — that is
  * the only way this file can fail when the predicate is wrong.
  */
-const OBSERVED_CYCLES: Record<ClaudeModel, PermissionMode[]> = {
+const OBSERVED_CYCLES: Record<KnownClaudeModel, PermissionMode[]> = {
   opus: ["acceptEdits", "plan", "auto", "default"],
   "opus[1m]": ["acceptEdits", "plan", "auto", "default"],
   opusplan: ["acceptEdits", "plan", "auto", "default"],

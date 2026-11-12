@@ -6,6 +6,7 @@ import { startServer } from "./server.js";
 import { resolveCliReference } from "./services/cli-version.service.js";
 import { HooksService } from "./services/hooks.service.js";
 import { LoggerService } from "./services/logger.service.js";
+import { modelCatalog } from "./services/model-catalog.service.js";
 import { reapOrphans } from "./services/orphan-reaper.service.js";
 import { SessionManager } from "./services/session-manager.service.js";
 
@@ -30,6 +31,10 @@ if (reaped > 0) log.warn("Reaped orphaned PTYs from a previous run", { count: re
 // reported version. Resolved once, here, because the spawned `claude` can't
 // change underneath a running backend without a restart anyway.
 const cliReference = await resolveCliReference(config.claudeBin);
+
+// The user's default model is an alias seen working, so stale-alias
+// reconciliation may use it (see model-catalog.service.ts).
+modelCatalog.loadUserSettings();
 
 const sessionManager = new SessionManager(config, cliReference.version);
 

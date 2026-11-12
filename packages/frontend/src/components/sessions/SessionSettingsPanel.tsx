@@ -1,8 +1,13 @@
 import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 import { useModelOptions } from "@/hooks/use-model-options";
-import { clampEffort, clampPermissionMode, effortOptionsFor } from "./model-config";
+import {
+  clampEffort,
+  clampPermissionMode,
+  effortOptionsFor,
+  supportsLiveModeSwitch,
+} from "./model-config";
 import { OptionPills } from "./OptionPills";
-import { permissionOptionsFor } from "./permission-config";
+import { permissionOptionsFor, UNVERIFIED_MODE_NOTE } from "./permission-config";
 
 export interface SessionSettings {
   model: ClaudeModel;
@@ -13,6 +18,12 @@ export interface SessionSettings {
 interface SessionSettingsPanelProps {
   value: SessionSettings;
   onChange: (next: SessionSettings) => void;
+  /**
+   * Editing a running session, whose mode changes walk the Shift+Tab cycle (vs.
+   * the create form, where the mode is a spawn flag). Gates mode switching for
+   * a model whose cycle is unverified.
+   */
+  live?: boolean;
 }
 
 /**
@@ -25,8 +36,9 @@ interface SessionSettingsPanelProps {
  * back to default in a single onChange call so the consumer sees one atomic
  * tuple update instead of a sequence.
  */
-export function SessionSettingsPanel({ value, onChange }: SessionSettingsPanelProps) {
-  const modelOptions = useModelOptions();
+export function SessionSettingsPanel({ value, onChange, live = false }: SessionSettingsPanelProps) {
+  const modelOptions = useModelOptions(value.model);
+  const modeLocked = live && !supportsLiveModeSwitch(value.model);
   const handleModel = (model: ClaudeModel) => {
     onChange({
       model,
@@ -55,8 +67,9 @@ export function SessionSettingsPanel({ value, onChange }: SessionSettingsPanelPr
       <OptionPills
         label="Permission mode"
         value={value.permissionMode}
-        options={permissionOptionsFor(value.model)}
+        options={permissionOptionsFor(value.model, { live })}
         onChange={handlePermissionMode}
+        note={modeLocked ? UNVERIFIED_MODE_NOTE : undefined}
       />
     </div>
   );

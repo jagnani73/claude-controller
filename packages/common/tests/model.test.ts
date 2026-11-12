@@ -35,7 +35,7 @@ describe("inferAliasFromRuntime", () => {
   it("returns null rather than guessing when the family is unreadable", () => {
     expect(inferAliasFromRuntime(undefined, undefined)).toBeNull();
     expect(inferAliasFromRuntime("", "")).toBeNull();
-    expect(inferAliasFromRuntime("Some Future Model", "claude-something-9")).toBeNull();
+    expect(inferAliasFromRuntime("Some Future Model", undefined)).toBeNull();
   });
 });
 
@@ -120,7 +120,7 @@ describe("reconcileModelAlias", () => {
     // Never guess: no signal means no correction.
     expect(reconcileModelAlias("opus", "default", {})).toBeNull();
     expect(reconcileModelAlias("opus", "default", { modelId: "" })).toBeNull();
-    expect(reconcileModelAlias("opus", "default", { modelId: "claude-future-9" })).toBeNull();
+    expect(reconcileModelAlias("opus", "default", { modelId: "claude-future" })).toBeNull();
   });
 
   it("is a no-op when the inferred alias already equals the stored one", () => {

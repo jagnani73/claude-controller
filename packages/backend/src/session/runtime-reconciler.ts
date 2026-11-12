@@ -67,16 +67,24 @@ export class RuntimeReconciler {
    * preserved and only a true family mismatch is corrected. `opusplan` and
    * `haiku` are preserved too, since their dual-model resolutions are valid
    * rather than mismatched.
+   *
+   * `knownAliases` are the aliases seen working (default: the documented seed
+   * list). A mismatch whose running family has none of them is corrected to the
+   * full observed model id rather than an invented alias.
    */
   reconcileModel(intent: {
     model: ClaudeModel;
     permissionMode: PermissionMode;
     suppressed: boolean;
+    knownAliases?: Iterable<ClaudeModel>;
   }): ClaudeModel | null {
     if (intent.suppressed || this.modelId === null) return null;
-    const corrected = reconcileModelAlias(intent.model, intent.permissionMode, {
-      modelId: this.modelId,
-    });
+    const corrected = reconcileModelAlias(
+      intent.model,
+      intent.permissionMode,
+      { modelId: this.modelId },
+      intent.knownAliases,
+    );
     return corrected && corrected !== intent.model ? corrected : null;
   }
 

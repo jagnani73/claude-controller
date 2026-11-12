@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ClaudeModel, EffortLevel } from "../src/types/index";
+import type { EffortLevel, KnownClaudeModel } from "../src/types/index";
 import { CLAUDE_MODELS, EFFORT_LEVELS, isClaudeModel, isEffortLevel } from "../src/types/index";
 
 describe("isEffortLevel", () => {
@@ -41,11 +41,11 @@ describe("isClaudeModel", () => {
     for (const model of CLAUDE_MODELS) expect(isClaudeModel(model)).toBe(true);
   });
 
-  it("has an entry for every ClaudeModel in the union", () => {
+  it("has an entry for every KnownClaudeModel in the union", () => {
     // As above: the loop is tautological, this is not. A union member missing
     // from the array makes handleModelSwitch reject a valid alias and fall back
     // to family matching, losing the [1m] distinction with no error.
-    const exhaustive: Record<ClaudeModel, true> = {
+    const exhaustive: Record<KnownClaudeModel, true> = {
       opus: true,
       "opus[1m]": true,
       opusplan: true,
@@ -61,14 +61,13 @@ describe("isClaudeModel", () => {
     expect(isClaudeModel("sonnet[1m]")).toBe(true);
   });
 
-  it("rejects resolved model ids", () => {
-    // PostModelSwitch carries both; only `requested_model` is an alias.
-    expect(isClaudeModel("claude-opus-5")).toBe(false);
-    expect(isClaudeModel("claude-sonnet-5")).toBe(false);
+  it("accepts resolved model ids, which `--model` takes as a fallback", () => {
+    expect(isClaudeModel("claude-opus-5")).toBe(true);
+    expect(isClaudeModel("claude-sonnet-5")).toBe(true);
   });
 
-  it("rejects unknown or malformed aliases", () => {
-    expect(isClaudeModel("fable")).toBe(false);
+  it("accepts unlisted aliases by shape and rejects malformed ones", () => {
+    expect(isClaudeModel("fable")).toBe(true);
     expect(isClaudeModel("OPUS")).toBe(false);
     expect(isClaudeModel("")).toBe(false);
   });

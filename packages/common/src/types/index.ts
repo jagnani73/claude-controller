@@ -47,14 +47,30 @@ export type SessionStatus =
   | "error";
 
 /**
- * Model aliases passed to `--model` and `/model`. Values mirror Claude Code's
- * `MODEL_ALIASES` list (see `claude-code-source/src/utils/model/aliases.ts`).
- * `[1m]` variants opt into the 1M-token context window.
+ * The documented model aliases: the seed list for the picker, and the only ones
+ * whose capabilities (effort tiers, the Shift+Tab cycle) have been verified.
+ * Values mirror Claude Code's `MODEL_ALIASES` list (see
+ * `claude-code-source/src/utils/model/aliases.ts`). `[1m]` variants opt into the
+ * 1M-token context window.
  */
-export type ClaudeModel = "opus" | "opus[1m]" | "opusplan" | "sonnet" | "sonnet[1m]" | "haiku";
+export type KnownClaudeModel = "opus" | "opus[1m]" | "opusplan" | "sonnet" | "sonnet[1m]" | "haiku";
 
-/** Runtime-checkable list of {@link ClaudeModel} for validating untrusted input. */
-export const CLAUDE_MODELS: readonly ClaudeModel[] = [
+/**
+ * Any other value of valid shape — an alias learned at runtime (`fable`) or a
+ * full model id (`claude-fable-5-2`), both of which `--model` accepts. Branded so
+ * an untrusted string has to pass {@link isClaudeModel} before it becomes one.
+ */
+export type LearnedClaudeModel = string & { readonly __brand: "ClaudeModel" };
+
+/**
+ * A value for `--model` / `/model`. Open on purpose: Claude Code adds model
+ * families over time, and a closed set turns each one into a stale alias that the
+ * next respawn passes back as `--model`, silently switching the session.
+ */
+export type ClaudeModel = KnownClaudeModel | LearnedClaudeModel;
+
+/** The {@link KnownClaudeModel} seed list, in picker order. */
+export const CLAUDE_MODELS: readonly KnownClaudeModel[] = [
   "opus",
   "opus[1m]",
   "opusplan",
@@ -63,15 +79,36 @@ export const CLAUDE_MODELS: readonly ClaudeModel[] = [
   "haiku",
 ];
 
+/** True for one of the documented, capability-verified aliases. */
+export function isKnownClaudeModel(value: string): value is KnownClaudeModel {
+  return (CLAUDE_MODELS as readonly string[]).includes(value);
+}
+
+// Lowercase alphanumeric words joined by `-` or `.`, with an optional `[1m]`.
+// Covers aliases (`fable`, `opus[1m]`) and full ids (`claude-fable-5-2`,
+// `claude-haiku-4-5-20251001`); rejects whitespace, case and shell syntax.
+const MODEL_SHAPE = /^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:\[1m\])?$/;
+
 /**
- * Narrow an arbitrary string to a {@link ClaudeModel}.
- *
- * Claude Code accepts aliases we don't model (and raw model ids, and
- * gateway-specific spellings), so anything unrecognized must be ignored rather
- * than coerced into the union.
+ * Narrow an arbitrary string to a {@link ClaudeModel} by **shape**, not by
+ * membership: anything that looks like a CLI alias or a model id is accepted, so
+ * a family released after this code was written is not dropped. Junk (empty,
+ * uppercase, whitespace, punctuation, overlong) is rejected.
  */
 export function isClaudeModel(value: string): value is ClaudeModel {
-  return (CLAUDE_MODELS as readonly string[]).includes(value);
+  return value.length <= 64 && MODEL_SHAPE.test(value);
+}
+
+/**
+ * What the backend has learned about models at runtime (in memory only).
+ * `aliases` are values observed working — a `PostModelSwitch` `requested_model`,
+ * a controller pick, or the user's `settings.json` `model` — beyond the
+ * {@link CLAUDE_MODELS} seed. `modelIds` holds the newest transcript model id
+ * seen per family, for picker hints.
+ */
+export interface ModelCatalog {
+  aliases: ClaudeModel[];
+  modelIds: string[];
 }
 
 /**
@@ -350,6 +387,8 @@ export type ServerMessage =
       message: string;
     }
   | { type: "permission_mode"; sessionId: string; mode: PermissionMode }
+  /** Sent on connect and whenever the backend learns a model alias or family. */
+  | { type: "model_catalog"; catalog: ModelCatalog }
   | { type: "session_taken_over"; sessionId: string }
   | {
       type: "history_available";
@@ -391,7 +430,7 @@ export type ServerMessage =
       message: string;
       sessionId?: string;
       /** Optional machine-readable code so callers can branch on intent. */
-      code?: "session_not_found";
+      code?: "session_not_found" | "permission_mode_unverified";
     }
   | { type: "dir_list"; path: string; entries: DirEntry[] }
   | {

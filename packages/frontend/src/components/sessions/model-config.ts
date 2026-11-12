@@ -1,6 +1,13 @@
-import { displayNameMatchesIntent, formatModelName, type ParsedModelId } from "common/model";
-import { cycleCanIncludeAuto } from "common/permission-cycle";
+import {
+  displayNameMatchesIntent,
+  formatModelName,
+  modelFamily,
+  type ParsedModelId,
+  parseModelId,
+} from "common/model";
+import { autoCycleSupport } from "common/permission-cycle";
 import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
+import { isKnownClaudeModel } from "common/types";
 
 /**
  * Canonical model aliases — mirrors Claude Code's MODEL_ALIASES list, minus
@@ -19,31 +26,44 @@ export const MODEL_OPTIONS: { value: ClaudeModel; label: string; hint?: string }
   { value: "haiku", label: "Haiku" },
 ];
 
-/** The model family an alias resolves to, or null for the dual-model `opusplan`. */
-function aliasFamily(model: ClaudeModel): string | null {
-  switch (model) {
-    case "opus":
-    case "opus[1m]":
-      return "opus";
-    case "sonnet":
-    case "sonnet[1m]":
-      return "sonnet";
-    case "haiku":
-      return "haiku";
-    case "opusplan":
-      return null;
-  }
+/**
+ * Picker label for any model: the seed label, a full id's own name ("Fable
+ * 5.2"), or a learned alias capitalised ("Fable", "Fable · 1M"). A label, not
+ * a claim about what is running.
+ */
+export function modelLabel(model: ClaudeModel): string {
+  const seed = MODEL_OPTIONS.find((o) => o.value === model);
+  if (seed) return seed.label;
+  const id = formatModelName(model);
+  if (id) return id;
+  const bare = model.replace(/\[1m\]$/, "");
+  const word = bare.charAt(0).toUpperCase() + bare.slice(1);
+  return bare === model ? word : `${word} · 1M`;
 }
 
 /**
- * {@link MODEL_OPTIONS} with a version hint ("<Family> <version>") on each alias
- * whose family has been observed running, taken from `latest` (see
- * `latestModelByFamily`). Families never observed get no hint — a version is
- * never invented. `opusplan` spans two families, so it gets none.
+ * {@link MODEL_OPTIONS} plus each of `extra` (learned aliases, the session's
+ * current value) not already listed, with a version hint ("<Family> <version>")
+ * on each alias whose family has been observed running, taken from `latest`
+ * (see `latestModelByFamily`). Families never observed get no hint — a version
+ * is never invented. `opusplan` spans two families, and a full model id already
+ * names its version, so neither gets one.
  */
-export function modelOptionsWithHints(latest: ReadonlyMap<string, ParsedModelId>) {
-  return MODEL_OPTIONS.map((opt) => {
-    const family = aliasFamily(opt.value);
+export function modelOptionsWithHints(
+  latest: ReadonlyMap<string, ParsedModelId>,
+  extra: Iterable<ClaudeModel> = [],
+) {
+  const options: { value: ClaudeModel; label: string; hint?: string }[] = [...MODEL_OPTIONS];
+  for (const model of extra) {
+    if (options.some((o) => o.value === model)) continue;
+    options.push({
+      value: model,
+      label: modelLabel(model),
+      hint: model.endsWith("[1m]") ? "1M context" : undefined,
+    });
+  }
+  return options.map((opt) => {
+    const family = parseModelId(opt.value) ? null : modelFamily(opt.value);
     const observed = family ? latest.get(family)?.name : undefined;
     if (!observed) return opt;
     return { ...opt, hint: opt.hint ? `${observed} · ${opt.hint}` : observed };
@@ -60,9 +80,14 @@ export function supportsEffort(model: ClaudeModel): boolean {
   return model !== "haiku";
 }
 
-/** `xhigh` is only offered on the plain opus aliases. */
+/**
+ * `xhigh` is only offered on the plain opus aliases — among the verified ones.
+ * A model outside the seed list has unknown tiers, so every level is offered and
+ * the transcript's effort reconciliation corrects the badge if the CLI resolves
+ * a lower one.
+ */
 export function supportsXHighEffort(model: ClaudeModel): boolean {
-  return isPlainOpus(model);
+  return isPlainOpus(model) || !isKnownClaudeModel(model);
 }
 
 /** `max` is supported on opus/sonnet families (incl. opusplan); haiku rejects it. */
@@ -71,13 +96,23 @@ export function supportsMaxEffort(model: ClaudeModel): boolean {
 }
 
 /**
- * Auto permission mode gate. Delegates to the shared `cycleCanIncludeAuto` so
+ * Auto permission mode gate. Delegates to the shared `autoCycleSupport` so
  * the frontend (enable/disable the option + clamp on model switch) and the
  * backend (PTY Shift+Tab keystroke math) share one source of truth. Currently
- * every model but haiku — see that function for how it was established.
+ * every verified model but haiku — see `cycleCanIncludeAuto` for how it was
+ * established. An unverified model is not offered auto.
  */
 export function supportsAutoMode(model: ClaudeModel): boolean {
-  return cycleCanIncludeAuto(model);
+  return autoCycleSupport(model) === true;
+}
+
+/**
+ * Whether the running session's mode can be changed from here. Live changes
+ * walk the Shift+Tab cycle, which is only predictable for a verified model; the
+ * backend refuses the rest. (Spawn-time `--permission-mode` needs no prediction.)
+ */
+export function supportsLiveModeSwitch(model: ClaudeModel): boolean {
+  return autoCycleSupport(model) !== null;
 }
 
 export function effortOptionsFor(
@@ -178,7 +213,7 @@ export function displayedModelLabel(
   pending = false,
 ): string | null {
   const name = runtimeModelName(model, permissionMode, runtime);
-  const aliasLabel = MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model;
+  const aliasLabel = modelLabel(model);
   if (!name) return pending ? aliasLabel : null;
 
   if (model === "opusplan") return `${aliasLabel} · ${name}`;

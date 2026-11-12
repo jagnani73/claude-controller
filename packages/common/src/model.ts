@@ -1,4 +1,5 @@
 import type { ClaudeModel, PermissionMode } from "./types/index.js";
+import { CLAUDE_MODELS, isClaudeModel } from "./types/index.js";
 import { compareVersions } from "./version.js";
 
 /**
@@ -92,10 +93,54 @@ export function latestModelByFamily(
 }
 
 /**
+ * The one family an alias or model id names, read structurally: a full id's
+ * parsed family (`claude-fable-5-2` → `fable`), or a bare alias word with any
+ * `[1m]` dropped (`opus[1m]` → `opus`, `fable` → `fable`). Null for `opusplan`,
+ * which spans two families, and for anything that names no family.
+ *
+ * A bare word is taken at face value, so an alias that is not a family name
+ * (`default`, `best`) yields a "family" no runtime id will ever match. That is
+ * deliberate: reconciliation then replaces it with the family actually running.
+ */
+export function modelFamily(model: string): string | null {
+  const parsed = parseModelId(model);
+  if (parsed) return parsed.family;
+  const bare = model
+    .trim()
+    .toLowerCase()
+    .replace(/\[1m\]$/, "");
+  if (bare === "opusplan") return null;
+  return /^[a-z]+$/.test(bare) ? bare : null;
+}
+
+interface ObservedFamily {
+  family: string;
+  version: string;
+}
+
+// "<Family> <version>" at the start of Claude Code's display name, e.g.
+// "Fable 5.2 (1M context)". A version is required: a bare word proves nothing.
+const DISPLAY_NAME = /^\s*([a-z]+)\s+(\d+(?:\.\d+)*)\b/i;
+
+/** Families the runtime reports, the transcript id first, then the display name. */
+function observedFamilies(displayName?: string, modelId?: string): ObservedFamily[] {
+  const out: ObservedFamily[] = [];
+  const parsed = parseModelId(modelId);
+  if (parsed) out.push({ family: parsed.family, version: parsed.version });
+  const dn = DISPLAY_NAME.exec(displayName ?? "");
+  if (dn) out.push({ family: dn[1].toLowerCase(), version: dn[2] });
+  return out;
+}
+
+/**
  * Whether the runtime model (Claude Code's `model.display_name`, e.g.
  * "<Family> <version> (1M context)", and/or the transcript model id, e.g.
  * "claude-<family>-<version>") is a valid resolution of the user-selected `model`
- * alias for the given permission mode.
+ * for the given permission mode.
+ *
+ * Compares **families** derived structurally (`modelFamily`, `parseModelId`), so
+ * a family nobody listed reconciles exactly like opus/sonnet/haiku. A full model
+ * id as `model` pins a version too, so it matches only that version.
  *
  * Encodes the dual-model aliases:
  *  - `opusplan` resolves to Opus in plan mode, Sonnet otherwise.
@@ -115,39 +160,53 @@ export function displayNameMatchesIntent(
   displayName?: string,
   modelId?: string,
 ): boolean {
-  const dn = (displayName ?? "").toLowerCase();
-  const id = (modelId ?? "").toLowerCase();
-  const has = (re: RegExp): boolean => re.test(dn) || re.test(id);
-  // "plan" only ever appears in the display name, never the model id.
-  const isPlanName = /\bplan\b/.test(dn);
-  switch (model) {
-    case "opus":
-    case "opus[1m]":
-      return has(/opus/) && !isPlanName;
-    case "sonnet":
-    case "sonnet[1m]":
-      return has(/sonnet/);
-    case "opusplan":
-      return permissionMode === "plan" ? has(/opus/) : has(/sonnet/);
-    case "haiku":
-      return permissionMode === "plan" ? has(/sonnet/) : has(/haiku/);
+  const observed = observedFamilies(displayName, modelId);
+  const runs = (family: string): boolean => observed.some((o) => o.family === family);
+  if (model === "opusplan") return permissionMode === "plan" ? runs("opus") : runs("sonnet");
+  if (model === "haiku") return permissionMode === "plan" ? runs("sonnet") : runs("haiku");
+  const pinned = parseModelId(model);
+  if (pinned) {
+    return observed.some((o) => o.family === pinned.family && o.version === pinned.version);
   }
+  const family = modelFamily(model);
+  if (!family) return false;
+  // "plan" only ever appears in the display name, never the model id: Claude
+  // Code's name for opusplan-in-plan, which a plain opus alias never produces.
+  if (family === "opus" && /\bplan\b/.test((displayName ?? "").toLowerCase())) return false;
+  return runs(family);
 }
 
 /**
- * Best-effort map from the observed runtime back to a `ClaudeModel` alias.
- * Family comes from the display name or model id; the 1M variant comes ONLY
- * from the display name's "(1M context)" marker (the model id can't express
- * it). Returns null when the family can't be determined — never guess.
+ * Best-effort map from the observed runtime back to a value for `--model`.
+ *
+ * Family comes from the model id, else the display name. The answer is an alias
+ * from `knownAliases` (aliases observed working, defaulting to the documented
+ * seed list) when one names that family; otherwise the **full observed model
+ * id**, which `--model` accepts. An alias is never invented: a family with no
+ * known alias gets its id, never `<family>`.
+ *
+ * The 1M variant comes ONLY from the display name's "(1M context)" marker (the
+ * model id can't express it), and only when `<family>[1m]` is itself a known
+ * alias — so there is no `haiku[1m]`, nor one for a family where it was never
+ * seen. Returns null when the family can't be determined — never guess.
  */
-export function inferAliasFromRuntime(displayName?: string, modelId?: string): ClaudeModel | null {
-  const dn = (displayName ?? "").toLowerCase();
-  const id = (modelId ?? "").toLowerCase();
-  const has = (re: RegExp): boolean => re.test(dn) || re.test(id);
-  const is1m = /\(1m context\)/i.test(displayName ?? "");
-  if (has(/opus/)) return is1m ? "opus[1m]" : "opus";
-  if (has(/sonnet/)) return is1m ? "sonnet[1m]" : "sonnet";
-  if (has(/haiku/)) return "haiku"; // no haiku[1m] alias exists
+export function inferAliasFromRuntime(
+  displayName?: string,
+  modelId?: string,
+  knownAliases: Iterable<ClaudeModel> = CLAUDE_MODELS,
+): ClaudeModel | null {
+  const observed = observedFamilies(displayName, modelId);
+  if (observed.length === 0) return null;
+  const { family } = observed[0];
+  const known = [...knownAliases];
+  if (/\(1m context\)/i.test(displayName ?? "")) {
+    const oneM = known.find((a) => a === `${family}[1m]`);
+    if (oneM) return oneM;
+  }
+  const plain = known.find((a) => a === family);
+  if (plain) return plain;
+  const id = modelId?.trim().toLowerCase();
+  if (id && parseModelId(id)?.family === family && isClaudeModel(id)) return id;
   return null;
 }
 
@@ -157,8 +216,10 @@ export function inferAliasFromRuntime(displayName?: string, modelId?: string): C
  *
  * - Preserves `opusplan`/`haiku`: `displayNameMatchesIntent` treats their valid
  *   sub-model resolutions as a match, so they're never rewritten.
- * - Fixes family mismatches (the "shows Sonnet while running Opus" bug),
- *   including from a model-id-only signal (transcript) before the statusline.
+ * - Fixes family mismatches (the "shows Sonnet while running Opus" bug) for any
+ *   family, including from a model-id-only signal (transcript) before the
+ *   statusline. The correction is a known alias for the running family, or the
+ *   full observed id when no alias for it is known (see `inferAliasFromRuntime`).
  * - Fixes 1M-ness only when the display name is present (the reliable 1M
  *   signal); a model-id-only read never flips a same-family alias.
  */
@@ -166,8 +227,9 @@ export function reconcileModelAlias(
   alias: ClaudeModel,
   permissionMode: PermissionMode,
   runtime: { displayName?: string; modelId?: string },
+  knownAliases: Iterable<ClaudeModel> = CLAUDE_MODELS,
 ): ClaudeModel | null {
-  const inferred = inferAliasFromRuntime(runtime.displayName, runtime.modelId);
+  const inferred = inferAliasFromRuntime(runtime.displayName, runtime.modelId, knownAliases);
   if (!inferred || inferred === alias) return null;
   if (displayNameMatchesIntent(alias, permissionMode, runtime.displayName, runtime.modelId)) {
     // Family matches the alias's expected runtime. Dual-model aliases keep

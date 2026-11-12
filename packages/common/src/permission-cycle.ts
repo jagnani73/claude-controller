@@ -1,4 +1,5 @@
-import type { ClaudeModel, PermissionMode } from "./types/index.js";
+import type { ClaudeModel, KnownClaudeModel, PermissionMode } from "./types/index.js";
+import { isKnownClaudeModel } from "./types/index.js";
 
 /**
  * Claude Code's Shift+Tab cycle is dynamic. The base path is
@@ -15,7 +16,7 @@ import type { ClaudeModel, PermissionMode } from "./types/index.js";
  * Whether auto mode participates in the cycle for a given model alias.
  *
  * Every answer here is **observed**, not derived: `pnpm verify:permission-cycle`
- * walks the real cycle for each `ClaudeModel` by pressing Shift+Tab in a live
+ * walks the real cycle for each `KnownClaudeModel` by pressing Shift+Tab in a live
  * TUI and reading the mode the CLI renders. Haiku is the only alias whose cycle
  * omits auto; `opusplan` includes it, because it resolves to Opus in plan mode
  * and Sonnet outside it and both of those are auto-capable, so the alias never
@@ -31,12 +32,16 @@ import type { ClaudeModel, PermissionMode } from "./types/index.js";
  * a feature flag and remote config, so the cycle could in principle differ by
  * account or rollout. The probe can only observe the machine it runs on.
  *
- * Exhaustive `switch` (no `default`) on purpose: adding a `ClaudeModel`
+ * Exhaustive `switch` (no `default`) on purpose: adding a `KnownClaudeModel`
  * alias becomes a compile error here rather than silently falling through to
  * `false`. This is a hand-maintained mirror of a moving upstream gate, and
  * that silent fall-through is exactly the bug we want the compiler to catch.
+ *
+ * Every other model (an alias learned at runtime, a full model id) is
+ * **unverified**: see {@link autoCycleSupport}, which callers holding an
+ * arbitrary `ClaudeModel` must use instead.
  */
-export function cycleCanIncludeAuto(model: ClaudeModel): boolean {
+export function cycleCanIncludeAuto(model: KnownClaudeModel): boolean {
   switch (model) {
     case "opus":
     case "opus[1m]":
@@ -47,6 +52,26 @@ export function cycleCanIncludeAuto(model: ClaudeModel): boolean {
     case "haiku":
       return false;
   }
+}
+
+/**
+ * Tri-state auto-cycle capability for any model: `true`/`false` for a verified
+ * alias (from {@link cycleCanIncludeAuto}), `null` when it is **unknown**.
+ *
+ * Unknown means do not predict. A guessed answer is a guessed keystroke count,
+ * and a wrong count makes the next prompt run under a mode the user did not
+ * pick, so callers refuse Shift+Tab mode changes for an unknown model rather than
+ * walk the cycle (spawn-time `--permission-mode` is unaffected: it needs no
+ * prediction). Full model ids are unknown even for a verified family, since an
+ * older version of it may gate auto differently.
+ *
+ * Adding a model: add its alias to `KnownClaudeModel` and `CLAUDE_MODELS` (the
+ * probe walks that list), run `pnpm verify:permission-cycle`, and record the
+ * answer it observed in the switch in `cycleCanIncludeAuto`. Only then is the
+ * model verified; until the probe agrees, it must not be listed.
+ */
+export function autoCycleSupport(model: ClaudeModel): boolean | null {
+  return isKnownClaudeModel(model) ? cycleCanIncludeAuto(model) : null;
 }
 
 /** The next mode Claude Code transitions to on a single Shift+Tab. */

@@ -41,6 +41,7 @@ export function SessionSettingsPopover({ session, onChange }: SessionSettingsPop
               permissionMode: session.permissionMode,
             }}
             onChange={onChange}
+            live
           />
         </div>
       </PopoverContent>

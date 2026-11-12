@@ -98,6 +98,7 @@ things the controller would otherwise only guess at:
   entry. The statusline payload carries one too, but only flows when the user has
   a statusline command configured, so it isn't dependable.
 - **Model** — the resolved id, reconciled against the stored alias by family.
+  See *Model aliases* below for how an unlisted family is handled.
 - **Effort** — the *resolved* level, recorded on every assistant entry since
   2.1.212. Before this was read back, effort was write-only and the badge drifted
   after any out-of-band `/effort`.
@@ -128,6 +129,44 @@ correction. See *Permission-mode cycle* below for what depends on that.
 
 ---
 
+## Model aliases
+
+Claude Code adds model families over time (2.1.321 added Fable, `claude-fable-5-2`,
+with a `fable` alias), and there is no model list the controller may query: the
+models API needs an API key, and reading the TUI's `/model` picker would be PTY
+parsing. So nothing about models is a closed list.
+
+- **Open type.** `ClaudeModel` is `KnownClaudeModel` (the six documented aliases,
+  the picker's seed list and the only capability-verified ones) or a branded
+  `LearnedClaudeModel`. `isClaudeModel` checks **shape**, not membership:
+  lowercase alphanumeric words joined by `-`/`.` with an optional `[1m]`, so
+  `fable` and `claude-fable-5-2` pass and junk does not. Wire values (`set_pending_model`,
+  respawn settings, `/model <x>` in the composer) go through it before reaching `--model`.
+- **Families from structure.** `displayNameMatchesIntent` / `inferAliasFromRuntime`
+  / `reconcileModelAlias` (`common/model.ts`) compare families derived by
+  `parseModelId` / `modelFamily`, so any family reconciles the way opus/sonnet/haiku
+  do. The real alias special cases are kept: `opusplan` (Opus in plan, Sonnet
+  otherwise), haiku-in-plan, and a same-family alias incl. its `[1m]` variant is
+  preserved on an id-only signal. A full id as the stored value pins its version.
+- **Never pass an alias that wasn't seen working.** A family mismatch is corrected
+  to an alias for the running family only if one is *known*: the seed list plus
+  aliases learned by `ModelCatalogService` (`model-catalog.service.ts`, in memory)
+  from a `PostModelSwitch` `requested_model`, a controller pick, or the `model` in
+  `~/.claude/settings.json` at startup. Otherwise it is corrected to the **full
+  observed id**, which `--model` accepts; `<family>` and `<family>[1m]` are never
+  invented. So a resumed session stored as `sonnet` whose transcript shows
+  `claude-fable-5-2` becomes `claude-fable-5-2` (or `fable`, once seen), and the
+  next respawn keeps Fable instead of silently switching back.
+- **Exposed to the client** as `model_catalog` (`{aliases, modelIds}`), sent on
+  connect and on every change, sticky in the frontend `wsService`. The picker shows
+  the seed aliases, every learned alias and the session's own value, hinted with
+  the newest observed model of each family.
+- **Unknown capabilities are gated conservatively.** Effort: a model outside the
+  seed list is offered every level, and transcript effort reconciliation corrects
+  the badge if the CLI resolves a lower one. Permission mode: see below.
+
+---
+
 ## Permission-mode cycle
 
 The mode cannot be set directly: Claude Code only exposes it as a Shift+Tab
@@ -146,7 +185,7 @@ under it.
 
 `cycleCanIncludeAuto` answers that per alias, and every answer in it is
 **observed**, not derived. `pnpm verify:permission-cycle` walks the real cycle for
-each `ClaudeModel` by pressing Shift+Tab in a live TUI and reading the mode the
+each `KnownClaudeModel` by pressing Shift+Tab in a live TUI and reading the mode the
 CLI names in its own footer. It submits no prompt, so unlike the other probes it
 costs nothing.
 
@@ -158,6 +197,17 @@ would drop the stop. This is also a worked example of the snapshot being wrong:
 would exclude the Opus 5 / Sonnet 5 actually in use, and the live cycle includes
 auto for both. The predicate previously excluded `opusplan` on the strength of
 that reading, and the probe is what disproved it.
+
+Any other model (a learned alias, a full id — even of a verified family) is
+**unknown**: `autoCycleSupport` returns `null` and nothing is predicted.
+`Session.setPermissionMode` declines (`"unverified"`, logged at warn), `ws.service`
+answers `error` with code `permission_mode_unverified`, and the session re-emits its
+metadata so an optimistic client reverts. The settings popover disables the mode
+pills with "Mode switching isn't verified for this model yet."; at create time only
+`auto` is gated, since the mode is then a spawn flag that needs no prediction. A
+plan approval on such a model notes no optimistic mode. To verify a new model, add
+its alias to `KnownClaudeModel` / `CLAUDE_MODELS` (the probe walks that list), run
+the probe, and record the observed answer in `cycleCanIncludeAuto`.
 
 ---
 

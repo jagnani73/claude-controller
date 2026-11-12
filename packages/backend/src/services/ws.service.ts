@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, normalize, relative, resolve, sep } from "node:path";
-import { cycleCanIncludeAuto } from "common/permission-cycle";
+import { autoCycleSupport } from "common/permission-cycle";
 import type {
   AgentMessage,
   AgentNode,
@@ -12,7 +12,7 @@ import type {
   ServerMessage,
   SessionInfo,
 } from "common/types";
-import { agentStreamId, isPermissionMode, parseAgentStreamId } from "common/types";
+import { agentStreamId, isClaudeModel, isPermissionMode, parseAgentStreamId } from "common/types";
 import ignore, { type Ignore } from "ignore";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
@@ -21,6 +21,7 @@ import { findSessionByTranscript } from "../utils/find-session.js";
 import { listProjectSessions } from "../utils/project-sessions.js";
 import type { HooksService } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
+import { modelCatalog } from "./model-catalog.service.js";
 import { buildPlanKeystrokes } from "./plan.input.js";
 import { buildKeystrokes } from "./question.input.js";
 import type { SessionBus, SessionBusEvent } from "./session-bus.service.js";
@@ -431,6 +432,11 @@ export function broadcastSessionCreated(session: SessionInfo): void {
   broadcast({ type: "session_created", session });
 }
 
+// Every client keeps the picker's learned aliases and family hints current.
+modelCatalog.on("changed", () => {
+  broadcast({ type: "model_catalog", catalog: modelCatalog.snapshot() });
+});
+
 function handleMessage(
   ws: WebSocket,
   msg: ClientMessage,
@@ -635,13 +641,18 @@ function handleMessage(
       // `cycleCanIncludeAuto` decides which of the two this is, so it has to be
       // right about the *running* model — see its docblock. The JSONL
       // permission-mode entry eventually agrees, but only at the next
-      // session-metadata block, so it is not a prompt correction.
+      // session-metadata block, so it is not a prompt correction. For a model
+      // whose cycle is unverified we do not guess: no optimistic mode is noted
+      // and the JSONL entry is left to report it.
+      const autoSupport = autoCycleSupport(session.model);
       const resultingMode: PermissionMode | undefined = msg.cancel
         ? undefined
         : msg.decision === "approve-primary"
-          ? cycleCanIncludeAuto(session.model)
-            ? "auto"
-            : "acceptEdits"
+          ? autoSupport === null
+            ? undefined
+            : autoSupport
+              ? "auto"
+              : "acceptEdits"
           : "default";
       // Drive the ink plan picker with the keystroke script and confirm via the
       // tool_result for this toolUseId. Cancel (Esc) is terminal — no confirm.
@@ -659,6 +670,16 @@ function handleMessage(
     case "set_pending_model": {
       const session = sessionManager.get(msg.sessionId);
       if (!session) return;
+      // The type is open, so the wire value is checked by shape before it can
+      // reach `--model` (or be learned as an alias).
+      if (typeof msg.model !== "string" || !isClaudeModel(msg.model)) {
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          message: `Not a model alias or id: ${String(msg.model)}`,
+        });
+        return;
+      }
       session.setPendingModel(msg.model, msg.effort);
       return;
     }
@@ -803,7 +824,14 @@ function handleMessage(
 
     case "set_permission_mode": {
       const session = sessionManager.get(msg.sessionId);
-      session?.setPermissionMode(msg.mode);
+      if (session?.setPermissionMode(msg.mode) === "unverified") {
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          code: "permission_mode_unverified",
+          message: "Mode switching isn't verified for this model yet.",
+        });
+      }
       return;
     }
 
@@ -885,6 +913,7 @@ export function handleConnection(
     sessions: sessionManager.list(),
     workDir: config.workDir,
   });
+  send(ws, { type: "model_catalog", catalog: modelCatalog.snapshot() });
 
   ws.on("message", (raw) => {
     try {

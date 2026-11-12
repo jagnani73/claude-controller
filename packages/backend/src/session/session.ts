@@ -5,7 +5,7 @@ import { createWriteStream, type FSWatcher, mkdirSync, readFileSync, watch } fro
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { cycleCanIncludeAuto, cycleDistance } from "common/permission-cycle";
+import { autoCycleSupport, cycleDistance } from "common/permission-cycle";
 import type {
   ClaudeModel,
   EffortLevel,
@@ -26,6 +26,7 @@ import {
 } from "common/version";
 import { AgentRegistry } from "../services/agent-registry.service.js";
 import { LoggerService } from "../services/logger.service.js";
+import { modelCatalog } from "../services/model-catalog.service.js";
 import { forgetSpawn, rememberSpawn } from "../services/orphan-reaper.service.js";
 import { PtyService } from "../services/pty.service.js";
 import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.js";
@@ -160,6 +161,9 @@ export class Session extends EventEmitter<SessionEvents> {
     this.config = config;
     this.deps = deps;
     this.currentModel = config.model;
+    // A fresh create is a controller pick. A resume's model is only a remembered
+    // fallback (possibly a corrected full id), so it teaches nothing.
+    if (!config.resumeSessionId) modelCatalog.learnAlias(config.model, "pick");
     // Fall back to user's global default when config omits effort.
     this.currentEffort = config.effort ?? readGlobalDefaultEffort();
     this.currentPermissionMode = config.permissionMode;
@@ -274,6 +278,7 @@ export class Session extends EventEmitter<SessionEvents> {
 
   private handleModelChange = (model: string): void => {
     if (!this.reconciler.observeModel(model)) return;
+    modelCatalog.observeModelId(model);
     log.info("Model changed", { token: this.spawnToken, model });
     // Reconcile the stored alias against the real model observed in the
     // transcript — fixes a family mismatch from an out-of-band `/model` change
@@ -304,10 +309,14 @@ export class Session extends EventEmitter<SessionEvents> {
     // alias would stay stale for the life of the session. Recording it keeps the
     // transcript fallback replayable once suppression lifts.
     this.reconciler.observeModel(toModel);
+    modelCatalog.observeModelId(toModel);
+    // The alias the user typed is one seen working, so reconciliation may use it
+    // from now on, in every session.
+    modelCatalog.learnAlias(requestedModel, "PostModelSwitch");
     if (this.respawning || this.pendingModel !== null) return;
     if (!requestedModel || !isClaudeModel(requestedModel)) {
-      // No alias, or one we don't model — fall back to family reconciliation
-      // against the resolved id we just recorded.
+      // No alias, or one not shaped like an alias or id — fall back to family
+      // reconciliation against the resolved id we just recorded.
       if (this.reconcileModelFromRuntime()) this.emit("metadataChanged");
       return;
     }
@@ -407,6 +416,7 @@ export class Session extends EventEmitter<SessionEvents> {
       model: this.currentModel,
       permissionMode: this.currentPermissionMode,
       suppressed: this.respawning || this.pendingModel !== null,
+      knownAliases: modelCatalog.knownAliases(),
     });
     if (!corrected) return false;
     log.info("Reconciled model alias from transcript", {
@@ -950,11 +960,16 @@ export class Session extends EventEmitter<SessionEvents> {
    * Permission mode preservation: passed explicitly via `--permission-mode`
    * so the resumed PTY starts in the same mode the user last selected.
    */
-  async respawn(settings: RespawnSettings): Promise<void> {
+  async respawn(requested: RespawnSettings): Promise<void> {
     if (!this._id) {
       log.warn("Respawn requested before id resolved", { token: this.spawnToken });
       return;
     }
+    // The model type is open, so a wire value must pass the shape check before
+    // it can reach `--model`; anything else keeps the running model.
+    const settings: RespawnSettings = isClaudeModel(requested.model)
+      ? requested
+      : { ...requested, model: this.currentModel };
     // The incoming settings ARE the now-applied intent — drop any pending
     // overlay. Emit even on a no-op respawn so the pending badge clears.
     const hadPending = this.pendingModel !== null || this.pendingEffort !== null;
@@ -1092,11 +1107,26 @@ export class Session extends EventEmitter<SessionEvents> {
    * and the transcript only catches up at the next block. That is what
    * `cycleCanIncludeAuto` guards, and why `pnpm verify:permission-cycle`
    * exists to check it against the live CLI.
+   *
+   * For a model whose cycle was never verified (`autoCycleSupport` is null) the
+   * count would be a guess, so this declines and returns `"unverified"` rather
+   * than risk it; the caller tells the client. `metadataChanged` is emitted so
+   * a client that applied the change optimistically reverts to the real mode.
    */
-  setPermissionMode(target: PermissionMode): void {
+  setPermissionMode(target: PermissionMode): "applied" | "unchanged" | "unverified" {
     const from = this.currentPermissionMode;
-    if (from === target) return;
-    const autoAvailable = cycleCanIncludeAuto(this.currentModel);
+    if (from === target) return "unchanged";
+    const autoAvailable = autoCycleSupport(this.currentModel);
+    if (autoAvailable === null) {
+      log.warn("Declined permission mode change: cycle not verified for this model", {
+        token: this.spawnToken,
+        from,
+        target,
+        model: this.currentModel,
+      });
+      this.emit("metadataChanged");
+      return "unverified";
+    }
     const steps = cycleDistance(from, target, { autoAvailable });
     if (steps === 0) {
       log.warn("Permission mode target unreachable from current", {
@@ -1105,7 +1135,7 @@ export class Session extends EventEmitter<SessionEvents> {
         target,
         model: this.currentModel,
       });
-      return;
+      return "unchanged";
     }
     log.debug("Set permission mode", { token: this.spawnToken, from, target, steps });
     this.currentPermissionMode = target;
@@ -1113,6 +1143,7 @@ export class Session extends EventEmitter<SessionEvents> {
     for (let i = 0; i < steps; i++) {
       setTimeout(() => this.pty.write("\x1b[Z"), i * PERMISSION_CYCLE_STEP_MS);
     }
+    return "applied";
   }
 
   /**
@@ -1128,6 +1159,7 @@ export class Session extends EventEmitter<SessionEvents> {
       { model: this.pendingModel, effort: this.pendingEffort },
       { model, effort },
     );
+    modelCatalog.learnAlias(model, "pick");
     if (!changed) return;
     this.pendingModel = next.model;
     this.pendingEffort = next.effort;

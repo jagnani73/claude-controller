@@ -30,7 +30,10 @@ class WsService {
    * type so a newly-mounted subscriber gets the current state immediately.
    */
   private stickyMessages = new Map<string, ServerMessage>();
-  private static readonly STICKY_TYPES: ReadonlySet<string> = new Set(["connected"]);
+  private static readonly STICKY_TYPES: ReadonlySet<string> = new Set([
+    "connected",
+    "model_catalog",
+  ]);
 
   state: ConnectionState = "disconnected";
 

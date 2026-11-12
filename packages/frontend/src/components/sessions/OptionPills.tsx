@@ -13,6 +13,8 @@ interface OptionPillsProps<T extends string> {
   value: T;
   options: Option<T>[];
   onChange: (value: T) => void;
+  /** Short explanation under the pills, e.g. why they are disabled. */
+  note?: string;
 }
 
 export function OptionPills<T extends string>({
@@ -20,6 +22,7 @@ export function OptionPills<T extends string>({
   value,
   options,
   onChange,
+  note,
 }: OptionPillsProps<T>) {
   return (
     <div className="flex flex-col gap-2">
@@ -37,6 +40,7 @@ export function OptionPills<T extends string>({
           </Pill>
         ))}
       </div>
+      {note && <p className="text-muted-foreground text-xs">{note}</p>}
     </div>
   );
 }
