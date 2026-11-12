@@ -1,10 +1,14 @@
-import { displayNameMatchesIntent } from "common/model";
+import { displayNameMatchesIntent, formatModelName, type ParsedModelId } from "common/model";
 import { cycleCanIncludeAuto } from "common/permission-cycle";
 import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 
 /**
  * Canonical model aliases — mirrors Claude Code's MODEL_ALIASES list, minus
  * `best` (loads opus by default — no UI distinction worth surfacing).
+ *
+ * The labels are alias names (the user's pick), not claims about which model
+ * version an alias resolves to — that moves with each release. Use
+ * {@link modelOptionsWithHints} to add the version once one has been observed.
  */
 export const MODEL_OPTIONS: { value: ClaudeModel; label: string; hint?: string }[] = [
   { value: "opus", label: "Opus" },
@@ -14,6 +18,37 @@ export const MODEL_OPTIONS: { value: ClaudeModel; label: string; hint?: string }
   { value: "sonnet[1m]", label: "Sonnet · 1M", hint: "1M context" },
   { value: "haiku", label: "Haiku" },
 ];
+
+/** The model family an alias resolves to, or null for the dual-model `opusplan`. */
+function aliasFamily(model: ClaudeModel): string | null {
+  switch (model) {
+    case "opus":
+    case "opus[1m]":
+      return "opus";
+    case "sonnet":
+    case "sonnet[1m]":
+      return "sonnet";
+    case "haiku":
+      return "haiku";
+    case "opusplan":
+      return null;
+  }
+}
+
+/**
+ * {@link MODEL_OPTIONS} with a version hint ("<Family> <version>") on each alias
+ * whose family has been observed running, taken from `latest` (see
+ * `latestModelByFamily`). Families never observed get no hint — a version is
+ * never invented. `opusplan` spans two families, so it gets none.
+ */
+export function modelOptionsWithHints(latest: ReadonlyMap<string, ParsedModelId>) {
+  return MODEL_OPTIONS.map((opt) => {
+    const family = aliasFamily(opt.value);
+    const observed = family ? latest.get(family)?.name : undefined;
+    if (!observed) return opt;
+    return { ...opt, hint: opt.hint ? `${observed} · ${opt.hint}` : observed };
+  });
+}
 
 /** Bare opus aliases (excludes opusplan, which has dual-model semantics). */
 export function isPlainOpus(model: ClaudeModel): boolean {
@@ -25,7 +60,7 @@ export function supportsEffort(model: ClaudeModel): boolean {
   return model !== "haiku";
 }
 
-/** `xhigh` is new in Opus 4.7 — only the plain opus aliases. */
+/** `xhigh` is only offered on the plain opus aliases. */
 export function supportsXHighEffort(model: ClaudeModel): boolean {
   return isPlainOpus(model);
 }
@@ -91,36 +126,62 @@ export function clampPermissionMode(model: ClaudeModel, mode: PermissionMode): P
   return mode;
 }
 
+/** What the running session has told us about its model. Both parts are optional. */
+export interface ObservedRuntime {
+  /** Model id observed in the transcript (`SessionInfo.currentModelId`). */
+  modelId?: string;
+  /** Claude Code's `model.display_name`; only present with a statusline command. */
+  displayName?: string;
+}
+
 /**
- * The label to render for the user-set alias, with the active sub-model in
- * parens when the alias resolves to different runtime models depending on
- * permission mode (opusplan, haiku-in-plan).
+ * Name of the model actually running, or null when it isn't known.
  *
- * `displayName` (Claude Code's `model.display_name`, e.g. "Opus 4.7", "Sonnet
- * 4.6 (1M context)") is the runtime model's name. It only gets used when it
- * matches the *expected* runtime for `(model, permissionMode)` — otherwise
- * we're in the gap between a popover change and the next respawn, where the
- * runtime is still the previous PTY's model and would mislead the user.
+ * Preferred source is the transcript model id, formatted structurally by
+ * `formatModelName` (the id has no 1M marker, so "(1M)" comes from the alias).
+ * Otherwise Claude Code's statusline `display_name`. Either is used only when it
+ * matches the *expected* runtime for `(model, permissionMode)` — otherwise we're
+ * in the gap between a settings change and the next respawn / turn, where the
+ * runtime is still the previous model and would mislead the user.
+ */
+function runtimeModelName(
+  model: ClaudeModel,
+  permissionMode: PermissionMode,
+  runtime: ObservedRuntime,
+): string | null {
+  const { modelId, displayName } = runtime;
+  if (modelId && displayNameMatchesIntent(model, permissionMode, undefined, modelId)) {
+    const name = formatModelName(modelId);
+    if (name) return model.endsWith("[1m]") ? `${name} (1M)` : name;
+  }
+  if (displayName && displayNameMatchesIntent(model, permissionMode, displayName)) {
+    return displayName;
+  }
+  return null;
+}
+
+/**
+ * The label to render for the model badge, or null to render nothing.
+ *
+ * Shows the name of the model actually running (see `runtimeModelName`), with
+ * the active sub-model after the alias when it resolves to different runtime
+ * models depending on permission mode (opusplan, haiku-in-plan).
+ *
+ * When that name isn't known the badge is hidden: a version is never guessed.
+ * The one exception is a `pending` pick, which shows the alias label — that is
+ * the user's choice ("will switch to X"), not a claim about what is running.
  */
 export function displayedModelLabel(
   model: ClaudeModel,
   permissionMode: PermissionMode,
-  displayName?: string,
-): string {
-  const fallback = MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model;
-  const dn =
-    displayName && displayNameMatchesIntent(model, permissionMode, displayName)
-      ? displayName
-      : undefined;
+  runtime: ObservedRuntime,
+  pending = false,
+): string | null {
+  const name = runtimeModelName(model, permissionMode, runtime);
+  const aliasLabel = MODEL_OPTIONS.find((o) => o.value === model)?.label ?? model;
+  if (!name) return pending ? aliasLabel : null;
 
-  if (model === "opusplan") {
-    // In plan mode opusplan resolves to opus; otherwise to sonnet.
-    return permissionMode === "plan"
-      ? `Opus Plan · ${dn ?? "Opus"}`
-      : `Opus Plan · ${dn ?? "Sonnet"}`;
-  }
-  if (model === "haiku" && permissionMode === "plan") {
-    return `Haiku · ${dn ?? "Sonnet"}`;
-  }
-  return dn ?? fallback;
+  if (model === "opusplan") return `${aliasLabel} · ${name}`;
+  if (model === "haiku" && permissionMode === "plan") return `${aliasLabel} · ${name}`;
+  return name;
 }

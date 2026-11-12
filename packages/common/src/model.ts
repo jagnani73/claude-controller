@@ -1,10 +1,101 @@
 import type { ClaudeModel, PermissionMode } from "./types/index.js";
+import { compareVersions } from "./version.js";
+
+/**
+ * A model id read structurally, with no table of known models.
+ *
+ * `family` and `version` are whatever the id says, so a model released after
+ * this code was written parses the same way as one released before it.
+ */
+export interface ParsedModelId {
+  /** Lowercase family token from the id, e.g. "opus". */
+  family: string;
+  /** Dotted version from the id, e.g. "4.7" (from `4-7`) or "5". */
+  version: string;
+  /** Human-readable name: capitalised family, a space, then the version. */
+  name: string;
+}
+
+// Current shape: `claude-<family>-<major>[-<minor>]`.
+const FAMILY_FIRST_ID = /^claude-([a-z]+)-(\d{1,2}(?:-\d{1,2})*)$/;
+// Legacy shape: `claude-<major>[-<minor>]-<family>`.
+const VERSION_FIRST_ID = /^claude-(\d{1,2}(?:-\d{1,2})*)-([a-z]+)$/;
+
+/**
+ * Parse an Anthropic model id into family + version, or null when it does not
+ * have a recognisable structure. Never guesses.
+ *
+ * Tolerated: surrounding whitespace, letter case, a trailing 8-digit date stamp
+ * (`-20251001`), and a trailing `[1m]`-style suffix (ignored; the transcript id
+ * does not carry the 1M marker, so it is only ever an alias-side concern).
+ * Anything else (no version, a non-numeric version, a prefix such as a cloud
+ * provider's) yields null.
+ *
+ * ```
+ * claude-sonnet-5-5           -> Sonnet 5.5
+ * claude-opus-4-7             -> Opus 4.7
+ * claude-haiku-4-5-20251001   -> Haiku 4.5
+ * claude-opus-5               -> Opus 5
+ * claude-3-5-sonnet-20241022  -> Sonnet 3.5
+ * ```
+ */
+export function parseModelId(modelId: string | null | undefined): ParsedModelId | null {
+  if (!modelId) return null;
+  const id = modelId
+    .trim()
+    .toLowerCase()
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/-\d{8}$/, "");
+  let family: string;
+  let rawVersion: string;
+  const current = FAMILY_FIRST_ID.exec(id);
+  if (current) {
+    family = current[1];
+    rawVersion = current[2];
+  } else {
+    const legacy = VERSION_FIRST_ID.exec(id);
+    if (!legacy) return null;
+    family = legacy[2];
+    rawVersion = legacy[1];
+  }
+  const version = rawVersion
+    .split("-")
+    .map((part) => String(Number(part)))
+    .join(".");
+  return { family, version, name: `${family[0].toUpperCase()}${family.slice(1)} ${version}` };
+}
+
+/** Human name for a model id ("Opus 4.7"), or null when it cannot be parsed. */
+export function formatModelName(modelId: string | null | undefined): string | null {
+  return parseModelId(modelId)?.name ?? null;
+}
+
+/**
+ * For each family seen in `modelIds`, the highest version observed. Ids that do
+ * not parse are skipped, so a family appears only if one of its models was
+ * actually observed. Used to hint what an alias currently resolves to without
+ * hard-coding any model.
+ */
+export function latestModelByFamily(
+  modelIds: Iterable<string | null | undefined>,
+): Map<string, ParsedModelId> {
+  const latest = new Map<string, ParsedModelId>();
+  for (const modelId of modelIds) {
+    const parsed = parseModelId(modelId);
+    if (!parsed) continue;
+    const best = latest.get(parsed.family);
+    if (!best || compareVersions(parsed.version, best.version) > 0) {
+      latest.set(parsed.family, parsed);
+    }
+  }
+  return latest;
+}
 
 /**
  * Whether the runtime model (Claude Code's `model.display_name`, e.g.
- * "Opus 4.7 (1M context)", and/or the transcript model id, e.g.
- * "claude-opus-4-7") is a valid resolution of the user-selected `model` alias
- * for the given permission mode.
+ * "<Family> <version> (1M context)", and/or the transcript model id, e.g.
+ * "claude-<family>-<version>") is a valid resolution of the user-selected `model`
+ * alias for the given permission mode.
  *
  * Encodes the dual-model aliases:
  *  - `opusplan` resolves to Opus in plan mode, Sonnet otherwise.

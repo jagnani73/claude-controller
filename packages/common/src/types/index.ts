@@ -107,7 +107,7 @@ export interface RateLimitWindow {
 
 /** Latest snapshot of Claude Code's status payload — surfaced to the top bar. */
 export interface SessionStatusSnapshot {
-  /** Friendly model label, e.g. "Opus 4.7 (1M context)". */
+  /** Friendly model label from Claude Code, e.g. "<Family> <version> (1M context)". */
   modelDisplayName?: string;
   contextUsedPercentage?: number;
   totalInputTokens?: number;
@@ -125,7 +125,10 @@ export interface SessionInfo {
   cwd: string;
   /** Alias passed to `--model` at create time. */
   model: ClaudeModel;
-  /** Latest Anthropic model id observed in the transcript (e.g. "claude-opus-4-7"). */
+  /**
+   * Latest Anthropic model id observed in the transcript (`claude-<family>-<version>`).
+   * Format it for display with `formatModelName` (`common/model`).
+   */
   currentModelId?: string;
   permissionMode: PermissionMode;
   effort?: EffortLevel;

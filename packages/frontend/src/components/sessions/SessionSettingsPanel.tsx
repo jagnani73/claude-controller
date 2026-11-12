@@ -1,5 +1,6 @@
 import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
-import { clampEffort, clampPermissionMode, effortOptionsFor, MODEL_OPTIONS } from "./model-config";
+import { useModelOptions } from "@/hooks/use-model-options";
+import { clampEffort, clampPermissionMode, effortOptionsFor } from "./model-config";
 import { OptionPills } from "./OptionPills";
 import { permissionOptionsFor } from "./permission-config";
 
@@ -25,6 +26,7 @@ interface SessionSettingsPanelProps {
  * tuple update instead of a sequence.
  */
 export function SessionSettingsPanel({ value, onChange }: SessionSettingsPanelProps) {
+  const modelOptions = useModelOptions();
   const handleModel = (model: ClaudeModel) => {
     onChange({
       model,
@@ -41,7 +43,7 @@ export function SessionSettingsPanel({ value, onChange }: SessionSettingsPanelPr
       <OptionPills
         label="Model"
         value={value.model}
-        options={MODEL_OPTIONS}
+        options={modelOptions}
         onChange={handleModel}
       />
       <OptionPills

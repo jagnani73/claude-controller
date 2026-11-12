@@ -91,6 +91,7 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
     effort,
     permissionMode,
     modelPending,
+    currentModelId,
     statusSnapshot: status,
   } = session;
   // Until Claude Code's first dump arrives, every session-detail badge is
@@ -100,7 +101,13 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
   const ctxPct = status?.contextUsedPercentage;
   const inTokens = status?.totalInputTokens;
   const outTokens = status?.totalOutputTokens;
-  const modelLabel = displayedModelLabel(model, permissionMode, status?.modelDisplayName);
+  // null (model not observed yet) hides the badge rather than guessing a name.
+  const modelLabel = displayedModelLabel(
+    model,
+    permissionMode,
+    { modelId: currentModelId, displayName: status?.modelDisplayName },
+    !!modelPending,
+  );
   // `auto` is a meaningful state ("use the model default"), not absence — render it explicitly.
   const effortLabel = effort ?? "auto";
 
@@ -164,12 +171,14 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
           <div className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-2">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Badge
-                  variant="secondary"
-                  className={cn("font-mono text-xs tracking-wider", modelPending && "opacity-60")}
-                >
-                  {modelLabel}
-                </Badge>
+                {modelLabel && (
+                  <Badge
+                    variant="secondary"
+                    className={cn("font-mono text-xs tracking-wider", modelPending && "opacity-60")}
+                  >
+                    {modelLabel}
+                  </Badge>
+                )}
                 {modelPending && (
                   <span
                     className="rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-warning"
