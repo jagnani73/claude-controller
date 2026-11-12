@@ -67,8 +67,8 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
     }
 
     const args = ["--permission-mode", options.permissionMode];
-    if (options.resumeSessionId) {
-      args.push("--resume", options.resumeSessionId);
+    if (options.identity.kind === "resume") {
+      args.push("--resume", options.identity.id);
       // Omit --model on resume to preserve the session's last model — passing
       // it would force-switch and lose flavors like Opus[1m]/opusplan. Set
       // forceModel when the user has explicitly picked a different model.
@@ -77,7 +77,7 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
       args.push("--model", options.model);
       // A fresh session's id is chosen by us, not discovered: several sessions
       // started in one folder at once are otherwise indistinguishable.
-      if (options.newSessionId) args.push("--session-id", options.newSessionId);
+      args.push("--session-id", options.identity.id);
     }
     if (options.settingsJson) {
       // Pass via file path, not inline — cmd.exe strips the quotes off inline JSON.

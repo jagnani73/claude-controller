@@ -17,7 +17,7 @@ import { isKnownClaudeModel } from "./types/index.js";
  *
  * Every answer here is **observed**, not derived: `pnpm verify:permission-cycle`
  * walks the real cycle for each `KnownClaudeModel` by pressing Shift+Tab in a live
- * TUI and reading the mode the CLI renders. On the target build every alias
+ * TUI and reading the mode the CLI renders. Observed on 2.1.322: every alias
  * includes auto. `haiku` used to be the exception (it omitted auto through
  * 2.1.251) and gained the stop by 2.1.322; `opusplan` includes it because it
  * resolves to Opus in plan mode and Sonnet outside it, both auto-capable. A
@@ -93,21 +93,22 @@ export function nextPermissionMode(
 }
 
 /**
- * How many Shift+Tabs to fire to walk from `from` to `to`. Cycle wraps,
- * so the result is always non-negative. `from === to` returns 0.
+ * How many Shift+Tabs to fire to walk from `from` to `to`. Cycle wraps, so a
+ * reachable target is always a non-negative count; `from === to` returns 0.
+ * `null` means unreachable under the current gate (e.g. `auto` on a session
+ * where it isn't part of the cycle) — distinct from 0 so a caller cannot
+ * mistake "no keystrokes needed" for "no keystroke count exists".
  */
 export function cycleDistance(
   from: PermissionMode,
   to: PermissionMode,
   opts: { autoAvailable: boolean },
-): number {
+): number | null {
   if (from === to) return 0;
   let cur = from;
   for (let steps = 1; steps <= 4; steps++) {
     cur = nextPermissionMode(cur, opts);
     if (cur === to) return steps;
   }
-  // Target unreachable from `from` under the current gate (e.g. asking
-  // for `auto` on a session where it isn't part of the cycle).
-  return 0;
+  return null;
 }

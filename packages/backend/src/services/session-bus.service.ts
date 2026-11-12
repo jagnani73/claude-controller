@@ -140,8 +140,24 @@ const log = LoggerService.scoped("session-bus");
 export const MAX_RETAINED_EVENTS = 5_000;
 /** Approximate size cap, in UTF-16 code units of the serialized events. */
 export const MAX_RETAINED_BYTES = 16 * 1024 * 1024;
-/** Floor for the byte cap: covers the subscribe replay (20) and every lookback. */
+/**
+ * Floor for every trim, whichever limit triggered it: covers the subscribe
+ * replay (20) and every lookback.
+ */
 const MIN_RETAINED_EVENTS = 50;
+/**
+ * Cap on the tool-use ids remembered outside the log (dedupe, `hasToolCall`,
+ * `hasToolResult`). Far above any live window; the oldest ids go first.
+ */
+const MAX_REMEMBERED_TOOL_IDS = 20_000;
+
+/** Add `id` to an insertion-ordered set, dropping the oldest past the cap. */
+function rememberBounded(set: Set<string>, id: string): void {
+  set.add(id);
+  if (set.size <= MAX_REMEMBERED_TOOL_IDS) return;
+  const oldest = set.values().next().value;
+  if (oldest !== undefined) set.delete(oldest);
+}
 const TRIM_TO_FRACTION = 0.9;
 
 function approximateSize(event: SessionBusEvent): number {
@@ -168,6 +184,7 @@ export class SessionBus extends EventEmitter<BusEvents> {
   private kindsSincePrompt = new Set<SessionBusEvent["kind"]>();
   private sawUserPrompt = false;
   private seenToolUseIds = new Set<string>();
+  private seenToolResultIds = new Set<string>();
 
   constructor(readonly sessionId: string) {
     super();
@@ -192,7 +209,9 @@ export class SessionBus extends EventEmitter<BusEvents> {
   private append(event: SessionBusEvent): boolean {
     if (event.kind === "tool_call") {
       if (this.seenToolUseIds.has(event.toolUseId)) return false;
-      this.seenToolUseIds.add(event.toolUseId);
+      rememberBounded(this.seenToolUseIds, event.toolUseId);
+    } else if (event.kind === "tool_result") {
+      rememberBounded(this.seenToolResultIds, event.toolUseId);
     }
     // Drop the concat echo Claude Code writes after an Esc + redirect.
     // After interrupt + new input, the JSONL gets a single `user_prompt` whose
@@ -344,13 +363,29 @@ export class SessionBus extends EventEmitter<BusEvents> {
     return this.seenToolUseIds.has(toolUseId);
   }
 
+  /** Whether a `tool_result` with this id was appended (bounded, survives trimming). */
+  hasToolResult(toolUseId: string): boolean {
+    return this.seenToolResultIds.has(toolUseId);
+  }
+
   /**
    * The current turn as far as the log can tell: whether any `user_prompt` has
    * been appended, and the kinds appended since the newest one (since the
-   * start when there is none). Unaffected by trimming.
+   * start when there is none). Unaffected by trimming. `kinds` is a snapshot,
+   * not the live set, so a caller holding it cannot see (or cause) later changes.
    */
   sinceLastUserPrompt(): { hasPrompt: boolean; kinds: ReadonlySet<SessionBusEvent["kind"]> } {
-    return { hasPrompt: this.sawUserPrompt, kinds: this.kindsSincePrompt };
+    return { hasPrompt: this.sawUserPrompt, kinds: new Set(this.kindsSincePrompt) };
+  }
+
+  /**
+   * Forget the turn the initial transcript drain ended on. That turn belonged to
+   * the process that wrote the transcript, which a resume replaced: it can never
+   * finish, so it must not read as in flight. The log itself is untouched.
+   */
+  endReplayedTurn(): void {
+    this.sawUserPrompt = false;
+    this.kindsSincePrompt.clear();
   }
 
   /** Clear all state, remove all listeners. */
@@ -361,6 +396,7 @@ export class SessionBus extends EventEmitter<BusEvents> {
     this.kindsSincePrompt.clear();
     this.sawUserPrompt = false;
     this.seenToolUseIds.clear();
+    this.seenToolResultIds.clear();
     this.removeAllListeners();
   }
 }

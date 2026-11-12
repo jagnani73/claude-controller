@@ -5,17 +5,21 @@ export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-export interface ApprovalOutcome {
-  response: HookResponse;
-  /** True when the response carries an edited tool input (`updatedInput`). */
-  edited: boolean;
-  /**
-   * Set when an `updatedInput` was supplied but unusable, naming what arrived
-   * ("null", "string", ...). The edit is dropped and the original call approved;
-   * the caller logs it.
-   */
-  rejected?: string;
-}
+/**
+ * The hook response for an approval, and what happened to any edited input.
+ * Named apart from the frontend's `ApprovalOutcome` (what a card displays).
+ *  - `plain`: an allow or deny with no edit.
+ *  - `edited`: an allow carrying `updatedInput`.
+ *  - `rejected`: an `updatedInput` was supplied but unusable; `rejected` names
+ *    what arrived ("null", "string", ...). The edit is dropped and the original
+ *    call approved; the caller logs it.
+ * `edited` mirrors `kind === "edited"` for callers that only need the flag; the
+ * union makes "edited and rejected at once" unrepresentable.
+ */
+export type ApprovalDecision =
+  | { kind: "plain"; response: HookResponse; edited: false; rejected?: undefined }
+  | { kind: "edited"; response: HookResponse; edited: true; rejected?: undefined }
+  | { kind: "rejected"; response: HookResponse; edited: false; rejected: string };
 
 /** Sent to Claude as the deny `message` when the user gave no reason. */
 export const DEFAULT_DENY_MESSAGE = "The user denied this tool call from Claude Controller.";
@@ -24,9 +28,9 @@ export const DEFAULT_DENY_MESSAGE = "The user denied this tool call from Claude 
  * Build the hook response for an approval decision.
  *
  * **Every decision uses the schema form**
- * `{hookEventName: "PermissionRequest", decision: {behavior, ...}}`. That is the
- * only PermissionRequest shape the hooks reference documents, and the only one
- * 2.1.322 honours: the PreToolUse-style flat `{permissionDecision}` form was
+ * `{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior, ...}}}`.
+ * That is the only PermissionRequest shape the hooks reference documents, and the
+ * only one observed to be honoured on 2.1.322: the PreToolUse-style flat `{permissionDecision}` form was
  * ignored outright for a plain allow AND a plain deny (checked live: the CLI
  * opened its own "Do you want to create …?" terminal picker, which the phone
  * cannot see, and the session hung with no error anywhere). The same thing had
@@ -50,9 +54,10 @@ export function buildApprovalResponse(
   decision: "allow" | "deny",
   reason?: string,
   updatedInput?: unknown,
-): ApprovalOutcome {
+): ApprovalDecision {
   if (decision === "deny") {
     return {
+      kind: "plain",
       response: {
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
@@ -69,7 +74,7 @@ export function buildApprovalResponse(
     },
   };
   if (updatedInput === undefined) {
-    return { response: plainAllow, edited: false };
+    return { kind: "plain", response: plainAllow, edited: false };
   }
   // Validate rather than trusting the client. Upstream types this as
   // `z.record(z.string(), z.unknown())`, so null, an array or a scalar fails
@@ -79,12 +84,14 @@ export function buildApprovalResponse(
   // `!== undefined` would happily forward `null`.
   if (!isPlainObject(updatedInput)) {
     return {
+      kind: "rejected",
       response: plainAllow,
       edited: false,
       rejected: updatedInput === null ? "null" : typeof updatedInput,
     };
   }
   return {
+    kind: "edited",
     response: {
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",

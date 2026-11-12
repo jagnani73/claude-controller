@@ -435,6 +435,10 @@ function subscribeToSession(ws: WebSocket, session: Session): void {
 
   const info = session.getInfo();
   if (info) send(ws, { type: "session_metadata", session: info });
+
+  // The session runs but its history could not be read; say so rather than
+  // leave an empty chat unexplained.
+  if (session.startupError) send(ws, { type: "error", message: session.startupError });
 }
 
 function broadcast(msg: ServerMessage): void {
@@ -585,9 +589,18 @@ function handleMessage(
         if (msg.settings) await session.respawn(msg.settings);
         await session.sendInput(msg.text);
       })().catch((err) => {
-        log.error("Input dispatch failed", {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error("Input dispatch failed", { sessionId: msg.sessionId, error: message });
+        // The phone's queue holds this item as "sending" until told otherwise.
+        // A session that died meanwhile is reported as stopped (Resume), any
+        // other failure as input_failed (Retry).
+        send(ws, {
+          type: "error",
           sessionId: msg.sessionId,
-          error: (err as Error).message,
+          code: session.alive ? "input_failed" : "session_stopped",
+          message: session.alive
+            ? `Your message may not have reached Claude Code: ${message}`
+            : "This session stopped before your message was delivered. Resume it to send.",
         });
       });
       return;
@@ -687,14 +700,23 @@ function handleMessage(
     }
 
     case "approval_response": {
-      const ok = hooksService.resolveApproval(
+      const result = hooksService.resolveApproval(
         msg.sessionId,
         msg.toolUseId,
         msg.decision,
         msg.reason,
         msg.updatedInput,
       );
-      if (!ok) {
+      if (result === "duplicate") {
+        // The phone re-sends an answer it never saw acknowledged after a
+        // reconnect; this one already arrived. Nothing to tell it.
+        log.info("Ignoring a repeat approval response", {
+          sessionId: msg.sessionId,
+          toolUseId: msg.toolUseId,
+        });
+        return;
+      }
+      if (result === "missing") {
         // Answered elsewhere, abandoned by Claude Code, or lost with a backend
         // restart. Tell the card, which otherwise shows a decision that went
         // nowhere.
@@ -727,6 +749,8 @@ function handleMessage(
         });
         return;
       }
+      // A re-send after a reconnect (or a double tap) must not type twice.
+      if (!session.claimAnswer(msg.toolUseId)) return;
       const { chunks } = buildKeystrokes({
         questions: msg.questions ?? [],
         answers: msg.answers ?? [],
@@ -766,6 +790,9 @@ function handleMessage(
         send(ws, { type: "error", sessionId: msg.sessionId, message: "Session not found" });
         return;
       }
+      // A re-send after a reconnect (or a double tap) must not type twice: a
+      // second digit would land in the main prompt box once the picker closed.
+      if (!session.claimAnswer(msg.toolUseId)) return;
       // A planless call may be showing the two-option "Exit plan mode?" picker,
       // where `2` means No; see plan.input.ts. Unknown counts as planless.
       const planless = !session.planPickerHasPlan(msg.toolUseId);
@@ -852,7 +879,17 @@ function handleMessage(
         () => {
           const info = session.getInfo();
           if (info) broadcastSessionCreated(info);
-          if (isCurrent()) subscribeToSession(ws, session);
+          if (!isCurrent()) return;
+          if (!session.alive) {
+            send(ws, {
+              type: "error",
+              sessionId: session.id,
+              code: "subscribe_failed",
+              message: "The session stopped while it was starting.",
+            });
+            return;
+          }
+          subscribeToSession(ws, session);
         },
         (err) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -891,6 +928,12 @@ function handleMessage(
         }
         const { session, started } = opened;
         await session.ready;
+        // The PTY can die while it boots (a bad resume, a crash). Its eviction
+        // already told every client `session_stopped`; attaching now would leave
+        // the viewer on a corpse with "Resuming…" and nothing behind it.
+        if (!session.alive) {
+          throw new Error("the session stopped while it was starting");
+        }
         if (started) {
           // Every client's list learns about it, whoever is still watching.
           const info = session.getInfo();

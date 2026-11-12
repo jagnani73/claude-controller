@@ -1,10 +1,13 @@
 import type { HookEventName } from "../types/hook.types.js";
 
 /**
- * We only register `PermissionRequest` — a sync (blocking) HTTP hook that
- * lets the phone approve or deny tool calls. `SessionStart` is not HTTP-capable
- * in Claude Code (command-only); we don't need it, because the controller
- * chooses each fresh session's id and passes it as `--session-id`.
+ * The hooks we register are listed in `HOOK_SYNC` below. Every one is a sync
+ * HTTP hook, but only `PermissionRequest` actually holds the action until the
+ * phone answers (approvals and AskUserQuestion), and it fails closed. The rest
+ * are signals: the handler answers `{}` at once and the CLI carries on.
+ * `SessionStart` is not HTTP-capable in Claude Code (command-only); we don't
+ * need it, because the controller chooses each fresh session's id and passes it
+ * as `--session-id`.
  *
  * Assistant text, tool calls, tool results, and user prompts all come from
  * the transcript JSONL tail.
@@ -70,8 +73,9 @@ const HOOK_SYNC: readonly { event: HookEventName; matcher?: string; handler?: Ha
 
 /**
  * Build the `--settings '{...}'` JSON payload for a spawned Claude Code session.
- * Session id is embedded in the hook URL path so the HTTP listener can route
- * by session without consulting any map.
+ * The session's spawn token (not its session id) is embedded in the hook URL
+ * path, so the HTTP listener routes each POST to the right session by that
+ * token (`SessionManager.getHookTarget`).
  */
 interface SettingsOptions {
   statusLine?: {
@@ -82,7 +86,7 @@ interface SettingsOptions {
 
 export function buildHooksConfig(
   baseUrl: string,
-  sessionId: string,
+  spawnToken: string,
   opts: SettingsOptions = {},
 ): string {
   const hooks: Record<string, unknown[]> = {};
@@ -97,7 +101,7 @@ export function buildHooksConfig(
       hooks: [
         {
           type: "http",
-          url: `${baseUrl}/hooks/${sessionId}/${event}`,
+          url: `${baseUrl}/hooks/${spawnToken}/${event}`,
           async: false,
           ...handler,
         },

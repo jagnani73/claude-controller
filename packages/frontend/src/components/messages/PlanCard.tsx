@@ -2,7 +2,7 @@ import { autoCycleSupport } from "common/permission-cycle";
 import type { ClaudeModel, PlanDecision, ToolResult } from "common/types";
 import { planTextOf } from "common/types";
 import { ClipboardCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useWsState } from "@/hooks/use-ws";
 import { cn } from "@/lib/utils";
@@ -45,6 +45,12 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
   const connected = useWsState() === "connected";
 
   const isLocked = submitted !== null || !!result;
+
+  // A response is re-sent after a reconnect until its tool_result arrives (see
+  // wsService.sendResponse); the backend answers a plan call at most once.
+  useEffect(() => {
+    if (result) wsService.settleResponse(toolUseId);
+  }, [result, toolUseId]);
   // What picker position 1 means for this model (best-effort, see plan.input.ts).
   // An unverified model could be either, so the label says so.
   const autoSupport = model ? autoCycleSupport(model) : false;
@@ -58,7 +64,7 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
   const respond = (decision: PlanDecision): void => {
     if (isLocked || !connected) return;
     setSubmitted(decision);
-    wsService.send({ type: "plan_response", sessionId, toolUseId, decision });
+    wsService.sendResponse(toolUseId, { type: "plan_response", sessionId, toolUseId, decision });
   };
 
   const keepPlanning = (): void => {
@@ -66,7 +72,7 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
     setSubmitted("cancel");
     // `decision` is ignored when `cancel` is set (backend sends Esc), but the
     // message shape requires it.
-    wsService.send({
+    wsService.sendResponse(toolUseId, {
       type: "plan_response",
       sessionId,
       toolUseId,

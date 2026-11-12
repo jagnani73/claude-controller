@@ -1,6 +1,6 @@
 import type { ToolResult } from "common/types";
 import { HelpCircle, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useWsState } from "@/hooks/use-ws";
@@ -111,7 +111,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
   const submit = (): void => {
     if (submitted || !allAnswered || !connected) return;
     setSubmitted(true);
-    wsService.send({
+    wsService.sendResponse(toolUseId, {
       type: "question_response",
       sessionId,
       toolUseId,
@@ -136,10 +136,21 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
   const cancel = (): void => {
     if (submitted || !connected) return;
     setSubmitted(true);
-    wsService.send({ type: "question_response", sessionId, toolUseId, cancel: true });
+    wsService.sendResponse(toolUseId, {
+      type: "question_response",
+      sessionId,
+      toolUseId,
+      cancel: true,
+    });
   };
 
   const isLocked = submitted || !!result;
+
+  // A response is re-sent after a reconnect until its tool_result arrives (see
+  // wsService.sendResponse); the backend answers a question at most once.
+  useEffect(() => {
+    if (result) wsService.settleResponse(toolUseId);
+  }, [result, toolUseId]);
 
   if (questions.length === 0) {
     return (

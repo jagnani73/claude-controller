@@ -13,6 +13,8 @@ import { unwrapPastedContent } from "../utils/pasted-content.js";
 
 /** How often to look for a project directory the CLI has not created yet. */
 const DIR_POLL_MS = 500;
+/** How long the directory may be missing before that is reported as an error. */
+const DIR_WAIT_ERROR_MS = 30_000;
 
 /** The user entry Claude Code writes when a turn is interrupted (seen on 2.1.322). */
 const INTERRUPT_MARKER_RE = /^\[Request interrupted by user( for tool use)?\]$/;
@@ -88,6 +90,9 @@ export class TranscriptWatcher {
   private readInFlight: Promise<void> | null = null;
   private pendingRead = false;
   private initialScan = true;
+  /** When `watchForFile` first found the project directory missing; null once found. */
+  private dirWaitStartedAt: number | null = null;
+  private dirWaitReported = false;
   private lastAssistantModel: string | null = null;
   private lastAssistantEffort: string | null = null;
   private lastCliVersion: string | null = null;
@@ -157,11 +162,32 @@ export class TranscriptWatcher {
     // creates it, and fs.watch on a missing directory throws: the session would
     // then stream nothing for its whole life. Wait for the directory instead.
     if (!existsSync(dir)) {
+      // Keep polling, but not silently: a directory that never appears means the
+      // session streams nothing at all (a wrong encoded path, a CLI that never
+      // started), and the log is the only place that would show it.
+      const now = Date.now();
+      if (this.dirWaitStartedAt === null) {
+        this.dirWaitStartedAt = now;
+        log.info("Waiting for the transcript's project directory", { dir });
+      } else if (!this.dirWaitReported && now - this.dirWaitStartedAt >= DIR_WAIT_ERROR_MS) {
+        this.dirWaitReported = true;
+        log.error("Transcript project directory still missing; still waiting", {
+          dir,
+          waitedMs: now - this.dirWaitStartedAt,
+        });
+      }
       this.dirPoll = setTimeout(() => {
         this.dirPoll = null;
         if (!this.stopped) this.watchForFile();
       }, DIR_POLL_MS);
       return;
+    }
+    if (this.dirWaitStartedAt !== null) {
+      log.info("Transcript project directory appeared", {
+        dir,
+        waitedMs: Date.now() - this.dirWaitStartedAt,
+      });
+      this.dirWaitStartedAt = null;
     }
     // The file may have appeared while we waited for its directory.
     if (existsSync(this.path)) {

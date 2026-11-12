@@ -1,5 +1,5 @@
 import { ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ApprovalOutcome } from "@/components/messages/approval-outcome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,11 +62,19 @@ export function ApprovalCard({
   // an expiry on an unanswered card locks it.
   const showExpired = !outcome && expired && (expired.late || !decision);
 
+  // The answer is re-sent after a reconnect until something about its fate
+  // arrives (see wsService.sendResponse); an outcome or an expiry is that. A
+  // plain success sends nothing back, so that entry simply ages out (re-sending
+  // it is harmless: the backend ignores an approval it already resolved).
+  useEffect(() => {
+    if (outcome || expired) wsService.settleResponse(toolUseId);
+  }, [outcome, expired, toolUseId]);
+
   const approve = (updatedInput?: unknown) => {
     if (decision) return;
     setDecision("allow");
     setWasEdited(updatedInput !== undefined);
-    wsService.send({
+    wsService.sendResponse(toolUseId, {
       type: "approval_response",
       sessionId,
       toolUseId,
@@ -78,7 +86,7 @@ export function ApprovalCard({
   const confirmDeny = () => {
     if (decision) return;
     setDecision("deny");
-    wsService.send({
+    wsService.sendResponse(toolUseId, {
       type: "approval_response",
       sessionId,
       toolUseId,

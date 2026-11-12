@@ -34,6 +34,11 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
   private idleTimer: NodeJS.Timeout | null = null;
   /** Last sweep that found a client watching each session (see reapIdle). */
   private readonly lastWatchedAt = new WeakMap<Session, number>();
+  /**
+   * Sessions already reported as idle past the timeout but held open by a
+   * blocker, with the blocker reported; logged again only when it changes.
+   */
+  private readonly reportedBlocker = new WeakMap<Session, string>();
 
   /**
    * `cliReferenceVersion` is the installed Claude Code version resolved at
@@ -94,12 +99,9 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
       cliReferenceVersion: this.cliReferenceVersion,
     });
     this.byToken.set(session.spawnToken, session);
-
-    const register = (id: string) => {
-      this.byId.set(id, session);
-    };
-    if (session.resolved) register(session.id);
-    else session.once("idResolved", register);
+    // The id is set in the Session constructor (a resume names it, a fresh
+    // spawn chooses it), so the session is addressable by id at once.
+    this.byId.set(session.id, session);
 
     session.on("exit", () => {
       log.info("Session exited", { token: session.spawnToken });
@@ -220,11 +222,29 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
         this.lastWatchedAt.set(session, now);
         continue;
       }
-      if (session.idleBlocker() !== null) continue;
-      if (probes.hasPendingApproval(id)) continue;
-      if (!session.resumable) continue;
       const idleSince = Math.max(session.lastActivityAt, this.lastWatchedAt.get(session) ?? 0);
-      if (now - idleSince < timeoutMs) continue;
+      if (now - idleSince < timeoutMs) {
+        this.reportedBlocker.delete(session);
+        continue;
+      }
+      const blocker =
+        session.idleBlocker() ??
+        (probes.hasPendingApproval(id) ? "pending_approval" : null) ??
+        (session.resumable ? null : "no_transcript");
+      if (blocker !== null) {
+        // Idle past the timeout yet kept running: say why, once per blocker, so
+        // a session that never stops is explainable from the log.
+        if (this.reportedBlocker.get(session) !== blocker) {
+          this.reportedBlocker.set(session, blocker);
+          log.info("Idle session kept running", {
+            id,
+            token: session.spawnToken,
+            blocker,
+            idleForMs: now - idleSince,
+          });
+        }
+        continue;
+      }
       log.info("Stopping idle session", {
         id,
         token: session.spawnToken,

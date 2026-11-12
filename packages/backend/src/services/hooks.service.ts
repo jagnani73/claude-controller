@@ -46,6 +46,15 @@ export class HooksService {
   private pendingApprovals = new Map<string, (response: HookResponse) => void>();
   /** Suffix that makes every synthesized approval id unique (see synthesizeToolUseId). */
   private approvalSeq = 0;
+  /**
+   * Approvals this process already answered, oldest first (bounded). The phone
+   * re-sends an approval it never saw acknowledged after a reconnect, and the
+   * first send may have arrived; that repeat is recognized here and ignored
+   * instead of being told "expired" (which would mark a delivered answer as
+   * "Not delivered" on the card).
+   */
+  private answeredApprovals = new Set<string>();
+  private static readonly ANSWERED_APPROVALS_LIMIT = 2_000;
 
   constructor(private readonly targetLookup: TargetLookup) {}
 
@@ -116,7 +125,9 @@ export class HooksService {
   }
 
   /**
-   * Resolve a pending approval from the phone. Returns false if not pending.
+   * Resolve a pending approval from the phone: `resolved`, `duplicate` (this
+   * process already answered it; a re-send, nothing to do) or `missing` (never
+   * held here, or abandoned by Claude Code).
    *
    * `updatedInput` approves a *corrected* call: Claude Code substitutes it for
    * the tool's input wholesale. Only meaningful with `allow`, and deliberately
@@ -128,22 +139,28 @@ export class HooksService {
     decision: "allow" | "deny",
     reason?: string,
     updatedInput?: unknown,
-  ): boolean {
+  ): "resolved" | "duplicate" | "missing" {
     const key = approvalKey(sessionId, toolUseId);
     const resolver = this.pendingApprovals.get(key);
-    if (!resolver) return false;
+    if (!resolver) return this.answeredApprovals.has(key) ? "duplicate" : "missing";
     this.pendingApprovals.delete(key);
+    this.answeredApprovals.add(key);
+    if (this.answeredApprovals.size > HooksService.ANSWERED_APPROVALS_LIMIT) {
+      const oldest = this.answeredApprovals.values().next().value;
+      if (oldest !== undefined) this.answeredApprovals.delete(oldest);
+    }
     const outcome = buildApprovalResponse(decision, reason, updatedInput);
-    if (outcome.rejected) {
+    if (outcome.kind === "rejected") {
       log.error("Ignoring non-object updatedInput; approving the original call", {
         sessionId,
         toolUseId,
         received: outcome.rejected,
       });
     }
-    if (outcome.edited) log.info("Approving with edited input", { sessionId, toolUseId });
+    if (outcome.kind === "edited")
+      log.info("Approving with edited input", { sessionId, toolUseId });
     resolver(outcome.response);
-    return true;
+    return "resolved";
   }
 
   private async handleRequest(
@@ -160,7 +177,8 @@ export class HooksService {
       res.writeHead(404).end();
       return;
     }
-    const [, sessionId, eventName] = match;
+    // The path carries the session's spawn token (see buildHooksConfig), not its id.
+    const [, spawnToken, eventName] = match;
 
     const body = await readBody(req);
     let payload: HookPayload;
@@ -171,9 +189,9 @@ export class HooksService {
       return;
     }
 
-    log.debug("hook received", { sessionId, event: eventName });
+    log.debug("hook received", { spawnToken, event: eventName });
 
-    const response = await this.route(sessionId, eventName as HookEventName, payload, res);
+    const response = await this.route(spawnToken, eventName as HookEventName, payload, res);
     // An abandoned approval resolves after its connection is gone; nothing to write.
     if (res.destroyed) return;
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -181,17 +199,17 @@ export class HooksService {
   }
 
   private async route(
-    sessionId: string,
+    spawnToken: string,
     event: HookEventName,
     payload: HookPayload,
     res: import("node:http").ServerResponse,
   ): Promise<HookResponse> {
-    const target = this.targetLookup(sessionId);
+    const target = this.targetLookup(spawnToken);
     if (!target) {
       // error, not warn: warn is outside the default log level, and for a
       // PermissionRequest this means the CLI falls back to a terminal picker the
       // phone cannot see.
-      log.error("no bus for session", { sessionId, event });
+      log.error("no bus for session", { spawnToken, event });
       return {};
     }
     const { bus, agents } = target;
@@ -260,9 +278,10 @@ export class HooksService {
     }
     if (payload.tool_name === "ExitPlanMode") {
       const input = payload.tool_input;
-      // Surface the input shape — we need real evidence on whether the plan text
-      // is inline (`input.plan`) here or only referenced by a file path, so the
-      // card-rendering edge can be confirmed rather than guessed.
+      // Kept because the input shape varies: usually the plan is inline
+      // (`input.plan`), but a planless `{}` was seen even with a plan file on
+      // disk, and that decides between the full and the two-option picker card
+      // (see plan.input.ts). The log is the evidence when a card looks wrong.
       log.info("PreToolUse ExitPlanMode", {
         sessionId: bus.sessionId,
         toolUseId: payload.tool_use_id,

@@ -85,11 +85,11 @@ describe("cycleDistance", () => {
     expect(cycleDistance("plan", "plan", { autoAvailable: true })).toBe(0);
   });
 
-  it("returns 0 rather than a wrong count when the target is off-cycle", () => {
-    // `setPermissionMode` treats 0 as unreachable and refuses. Writing *some*
+  it("returns null rather than a wrong count when the target is off-cycle", () => {
+    // `setPermissionMode` treats null as unreachable and refuses. Writing *some*
     // number of Shift+Tabs instead would silently land on another mode.
     for (const from of ["default", "acceptEdits", "plan"] as const) {
-      expect(cycleDistance(from, "auto", { autoAvailable: false }), from).toBe(0);
+      expect(cycleDistance(from, "auto", { autoAvailable: false }), from).toBeNull();
     }
   });
 

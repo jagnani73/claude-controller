@@ -126,9 +126,9 @@ export type HookEventName = HookPayload["hook_event_name"];
  * Subset of the hook response contract we actually return.
  *
  * PermissionRequest decisions use only the schema form
- * `{ hookEventName, decision: { behavior, ... } }` (see `buildApprovalResponse`).
- * The PreToolUse-style flat `{ permissionDecision }` form worked for a plain
- * allow/deny on 2.1.251 but is ignored on 2.1.322 — the CLI opened its own
+ * `{ hookSpecificOutput: { hookEventName, decision: { behavior, ... } } }` (see
+ * `buildApprovalResponse`). The PreToolUse-style flat `{ permissionDecision }`
+ * form worked for a plain allow/deny on 2.1.251 but was ignored on 2.1.322 — the CLI opened its own
  * terminal picker the phone cannot see, for allow and deny alike (checked live)
  * — so it is no longer part of this type.
  */
@@ -137,14 +137,15 @@ export type HookResponse =
   | {
       /**
        * Schema form — the only PermissionRequest shape the hooks reference
-       * documents, and the only one 2.1.322 honours. A response it does not
-       * honour falls through to the CLI's own terminal picker, which the phone
-       * cannot see — the session then hangs with no error anywhere.
+       * documents, and the only one observed to be honoured on 2.1.322. A
+       * response the CLI does not honour falls through to its own terminal
+       * picker, which the phone cannot see — the session then hangs with no
+       * error anywhere.
        */
       hookSpecificOutput: {
         hookEventName: "PermissionRequest";
         decision:
           | { behavior: "allow"; updatedInput?: unknown }
-          | { behavior: "deny"; message?: string };
+          | { behavior: "deny"; message: string };
       };
     };

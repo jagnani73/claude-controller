@@ -47,7 +47,7 @@ import {
   statusLinePayloadPath,
 } from "../services/statusline.service.js";
 import { TranscriptWatcher } from "../services/transcript.service.js";
-import type { SessionDeps, SessionEvents } from "../types/index.js";
+import type { SessionDeps, SessionEvents, SpawnIdentity } from "../types/index.js";
 import { resolveTranscriptPath } from "../utils/claude-paths.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
 import { nextPendingPick, RuntimeReconciler } from "./runtime-reconciler.js";
@@ -94,9 +94,15 @@ export class Session extends EventEmitter<SessionEvents> {
   readonly spawnToken: string;
   readonly config: SessionConfig;
   readonly createdAt: number;
-  /** Resolves once Claude Code's session id is known AND (for resumes) the
-   * initial transcript drain completed. */
+  /** Resolves once the initial transcript drain completed (a resume's history
+   * is on the bus). The id itself is known from the constructor on. */
   readonly ready: Promise<void>;
+  /**
+   * Why the initial transcript drain failed, if it did. `ready` still resolves
+   * (the session runs, it just shows no history), so every subscriber is told
+   * this instead of seeing an empty chat with no explanation.
+   */
+  startupError: string | null = null;
   private _id: string | null = null;
   private _bus: SessionBus | null = null;
   private _agents: AgentRegistry | null = null;
@@ -161,6 +167,14 @@ export class Session extends EventEmitter<SessionEvents> {
   private _lastActivityAt: number;
   /** Live tool calls with no result yet: a long-running tool emits nothing. */
   private readonly openToolCalls = new Set<string>();
+  /**
+   * AskUserQuestion / ExitPlanMode calls a response is being (or was) delivered
+   * for. The client re-sends an unacknowledged response after a reconnect, and
+   * typing the same keystrokes twice would answer the *next* prompt, so a
+   * second response for the same call is ignored. Cleared for a call whose
+   * delivery failed, so a later retry can still go out.
+   */
+  private readonly answeredCalls = new Set<string>();
   private readonly deps: SessionDeps;
 
   get id(): string {
@@ -240,9 +254,21 @@ export class Session extends EventEmitter<SessionEvents> {
       this.handleEffortChange,
     );
     const drainDone = this.transcript.start().catch((err) => {
-      log.warn("Initial transcript drain failed", { token: this.spawnToken, error: err });
+      const message = err instanceof Error ? err.message : String(err);
+      log.error("Initial transcript drain failed", { token: this.spawnToken, error: message });
+      this.startupError = `Couldn't read this session's transcript: ${message}`;
     });
     this.ready = drainDone.then(() => {
+      // Everything drained so far describes the process that wrote it, which for
+      // a resume is dead. The drain is silent (the bus listener below never saw
+      // it), but clear the live trackers anyway, and end the replayed turn: a
+      // transcript that stops on an unanswered prompt or an interrupted turn
+      // would otherwise read as a turn in flight forever, blocking the idle
+      // reaper, gating Esc on a turn nobody runs, and forcing a redirect respawn
+      // on the first message into a CLI whose textarea is already clean.
+      this.openToolCalls.clear();
+      this.planPicker = null;
+      this._bus?.endReplayedTurn();
       // A resume's transcript has just been replayed, so the spawn calls that
       // parent each agent are now findable, and the lead's past SendMessage
       // calls can be backfilled (a subscriber may have snapshotted before this).
@@ -272,7 +298,9 @@ export class Session extends EventEmitter<SessionEvents> {
       settingsJson: buildHooksConfig(deps.hooksBaseUrl, this.spawnToken, {
         statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
       }),
-      ...(config.resumeSessionId ? this.spawnIdentity(sessionId) : { newSessionId: sessionId }),
+      identity: config.resumeSessionId
+        ? this.spawnIdentity(sessionId)
+        : { kind: "new", id: sessionId },
       effort: this.currentEffort,
     });
 
@@ -556,7 +584,7 @@ export class Session extends EventEmitter<SessionEvents> {
       const mode = event.mode;
       // Ignore modes we don't model (`dontAsk`, `bypassPermissions`; 2.1.321+
       // Space on "Auto (default)" saves Don't Ask): `cycleDistance` from an
-      // unknown mode is 0, so mirroring it would make the next phone-side mode
+      // unknown mode finds no path, so mirroring it would make the next phone-side mode
       // change silently do nothing. Keeping the last known mode at least walks
       // the cycle from a real stop.
       if (!isPermissionMode(mode)) {
@@ -570,8 +598,7 @@ export class Session extends EventEmitter<SessionEvents> {
       this.currentPermissionMode = mode;
       this.emit("metadataChanged");
     });
-    log.info("Session id resolved", { token: this.spawnToken, id });
-    this.emit("idResolved", id);
+    log.info("Session id", { token: this.spawnToken, id });
   }
 
   /**
@@ -619,7 +646,6 @@ export class Session extends EventEmitter<SessionEvents> {
    */
   idleBlocker(): string | null {
     if (!this.alive || this.disposed) return "stopped";
-    if (!this._id || !this._bus) return "unresolved";
     if (this.respawning || this.respawnRunning || this.respawnQueued) return "respawning";
     if (this.hasInFlightTurn()) return "turn";
     if (this.openToolCalls.size > 0) return "tool_running";
@@ -753,8 +779,12 @@ export class Session extends EventEmitter<SessionEvents> {
     // (\x1b[?2004h) on startup and accepts \x1b[200~…\x1b[201~ as a single
     // paste event — newlines stay intact inside the input textarea instead
     // of each one acting as Enter.
-    this.pty.write(`\x1b[200~${text}\x1b[201~`);
-    await this.submitWithConfirmation();
+    if (!this.pty.write(`\x1b[200~${text}\x1b[201~`)) {
+      throw new Error("The CLI is not running, so the message could not be written.");
+    }
+    if (!(await this.submitWithConfirmation())) {
+      throw new Error("Claude Code did not register the message after several attempts.");
+    }
   }
 
   /**
@@ -778,18 +808,37 @@ export class Session extends EventEmitter<SessionEvents> {
    * it works depends on the echo, not on guessing how long the paste takes to
    * drain.
    */
-  private async submitWithConfirmation(): Promise<void> {
+  private async submitWithConfirmation(): Promise<boolean> {
     const bus = this._bus;
     for (let attempt = 0; attempt < SUBMIT_MAX_ATTEMPTS; attempt++) {
       const landed = bus
         ? this.waitForBusEvent(bus, (e) => e.kind === "user_prompt", SUBMIT_RETRY_MS)
         : delay(SUBMIT_RETRY_MS).then(() => false);
       this.pty.write("\r");
-      if (await landed) return;
+      if (await landed) return true;
     }
-    log.warn("Input submit not confirmed by transcript after retries", {
+    log.error("Input submit not confirmed by transcript after retries", {
       token: this.spawnToken,
+      attempts: SUBMIT_MAX_ATTEMPTS,
     });
+    return false;
+  }
+
+  /**
+   * Claim the right to answer an AskUserQuestion / ExitPlanMode call. False when
+   * a response for it already went out (a re-send after a reconnect, or a double
+   * tap): the second one must not type into the PTY. See `answeredCalls`.
+   */
+  claimAnswer(toolUseId: string): boolean {
+    if (this.answeredCalls.has(toolUseId) || this._bus?.hasToolResult(toolUseId)) {
+      log.info("Ignoring a repeat response for an answered call", {
+        token: this.spawnToken,
+        toolUseId,
+      });
+      return false;
+    }
+    this.answeredCalls.add(toolUseId);
+    return true;
   }
 
   /**
@@ -846,7 +895,7 @@ export class Session extends EventEmitter<SessionEvents> {
       });
       this.pty.write("\r");
     }
-    log.warn("Question answer not confirmed by transcript after retries", {
+    log.error("Question answer not confirmed by transcript after retries", {
       token: this.spawnToken,
       toolUseId,
     });
@@ -863,6 +912,8 @@ export class Session extends EventEmitter<SessionEvents> {
    * question may still be open; this just unblocks the UI.
    */
   failQuestion(toolUseId: string, message: string): void {
+    // Delivery failed, so a retry for this call is legitimate again.
+    this.answeredCalls.delete(toolUseId);
     if (!this._bus) return;
     this._bus.push({
       kind: "tool_result",
@@ -952,7 +1003,7 @@ export class Session extends EventEmitter<SessionEvents> {
       // Unknown call, resolved meanwhile (e.g. at the terminal) or never opened.
       // Only the last needs surfacing; a resolved call already has its result.
       if (isMine() || !this.planPicker) {
-        log.warn("Plan picker never opened — nothing was sent", {
+        log.error("Plan picker never opened — nothing was sent", {
           token: this.spawnToken,
           toolUseId,
         });
@@ -979,7 +1030,7 @@ export class Session extends EventEmitter<SessionEvents> {
       if (resultingMode) this.notePermissionMode(resultingMode);
       return;
     }
-    log.warn("Plan response not confirmed by transcript", {
+    log.error("Plan response not confirmed by transcript", {
       token: this.spawnToken,
       toolUseId,
     });
@@ -1177,7 +1228,9 @@ export class Session extends EventEmitter<SessionEvents> {
           delay(RESPAWN_EXIT_TIMEOUT_MS).then(() => true),
         ]);
         if (timedOut) {
-          log.warn("Killed PTY did not report its exit — respawning anyway", {
+          // info, not warn: harmless by design (PtyService ignores a replaced
+          // process's late exit), but worth seeing in the default log.
+          log.info("Killed PTY did not report its exit — respawning anyway", {
             token: this.spawnToken,
           });
         }
@@ -1208,13 +1261,13 @@ export class Session extends EventEmitter<SessionEvents> {
         settingsJson: buildHooksConfig(this.deps.hooksBaseUrl, this.spawnToken, {
           statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
         }),
-        ...identity,
+        identity,
         forceModel: true,
         effort: this.currentEffort,
       });
       // A fresh start writes no resume block to wait for, so the ready-wait would
       // only time out; give the CLI a fixed moment to boot instead.
-      if (!identity.resumeSessionId) await delay(FRESH_BOOT_GRACE_MS);
+      if (identity.kind === "new") await delay(FRESH_BOOT_GRACE_MS);
       // Claude Code takes a few seconds to boot before it reads stdin: it writes
       // a `--resume` synthetic block to the JSONL (continue-from-here marker,
       // attachments, /remote-control system message, ...) and only attaches its
@@ -1248,9 +1301,9 @@ export class Session extends EventEmitter<SessionEvents> {
    * effort pick before the first message, a reconnect or resume after a backend
    * restart). Start such a session fresh under the same id instead.
    */
-  private spawnIdentity(id: string): { resumeSessionId?: string; newSessionId?: string } {
+  private spawnIdentity(id: string): SpawnIdentity {
     const path = this.transcript?.path ?? resolveTranscriptPath(this.config.cwd, id);
-    return existsSync(path) ? { resumeSessionId: id } : { newSessionId: id };
+    return existsSync(path) ? { kind: "resume", id } : { kind: "new", id };
   }
 
   private waitForReady(spawnedAt: number): Promise<void> {
@@ -1278,7 +1331,9 @@ export class Session extends EventEmitter<SessionEvents> {
       };
       bus.on("event", onEvent);
       const timer = setTimeout(() => {
-        log.warn("Respawn ready-wait timed out — forwarding anyway", {
+        // error: input written now may be dropped by a CLI that is not reading
+        // stdin yet, and the submit confirmation is what will notice.
+        log.error("Respawn ready-wait timed out — forwarding anyway", {
           token: this.spawnToken,
         });
         finish();
@@ -1325,7 +1380,7 @@ export class Session extends EventEmitter<SessionEvents> {
       return "unverified";
     }
     const steps = cycleDistance(from, target, { autoAvailable });
-    if (steps === 0) {
+    if (steps === null) {
       log.warn("Permission mode target unreachable from current", {
         token: this.spawnToken,
         from,

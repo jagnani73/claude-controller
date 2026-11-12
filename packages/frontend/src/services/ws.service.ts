@@ -17,6 +17,28 @@ const PING_INTERVAL_MS = 20_000;
 const STALE_AFTER_MS = 45_000;
 /** On returning to the page, how long the probe may take before we reconnect. */
 const RESUME_PROBE_MS = 4_000;
+/**
+ * How long a socket may sit in CONNECTING. A connect that never settles (no
+ * open, no error, no close: a dead route, a captive portal) would otherwise
+ * leave the state "connecting" for good, and `checkLiveness` skips that state.
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+/** How long an unacknowledged card response is kept for re-sending. */
+const RESPONSE_RESEND_TTL_MS = 10 * 60_000;
+
+/**
+ * Called once a message has actually been written to an OPEN socket, with that
+ * socket's generation (see `WsService.socketGeneration`).
+ */
+export type OnWritten = (generation: number) => void;
+
+/** A card response kept until its outcome is known; see `sendResponse`. */
+interface UnackedResponse {
+  msg: ClientMessage;
+  storedAt: number;
+  /** Generation of the socket it was last written to; null if never written. */
+  sentGen: number | null;
+}
 
 class WsService {
   private ws: WebSocket | null = null;
@@ -31,7 +53,12 @@ class WsService {
    * a `subscribe` fired from a route-mount useEffect on cold start gets
    * silently dropped because the connection is still in CONNECTING state.
    */
-  private outboundQueue: ClientMessage[] = [];
+  private outboundQueue: { msg: ClientMessage; onWritten?: OnWritten }[] = [];
+  /** Card responses (approval / question / plan) awaiting their outcome, by tool-use id. */
+  private unackedResponses = new Map<string, UnackedResponse>();
+  /** Bumped on every successful open; identifies which socket a write went to. */
+  private generation = 0;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
   // Cap so a never-opening socket (backend down at boot) can't grow this
   // unboundedly as the user clicks around.
   private static readonly OUTBOUND_QUEUE_LIMIT = 200;
@@ -56,6 +83,15 @@ class WsService {
   private lifecycleBound = false;
 
   state: ConnectionState = "disconnected";
+
+  /**
+   * Generation of the current (or last) open socket. A write tagged with an
+   * older generation went out on a socket that has since been replaced, so
+   * whatever it carried may have died with that socket.
+   */
+  get socketGeneration(): number {
+    return this.generation;
+  }
 
   connect(url: string): void {
     if (this.ws || this.state === "connecting") return;
@@ -163,6 +199,7 @@ class WsService {
   disconnect(): void {
     this.disposed = true;
     this.stopHeartbeat();
+    this.clearConnectTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -174,23 +211,71 @@ class WsService {
     this.setState("disconnected");
   }
 
-  send(msg: ClientMessage): void {
+  /**
+   * Send now if the socket is OPEN, otherwise buffer until the next open.
+   * `onWritten` fires when the message is actually written (at once, or at the
+   * flush), with the generation of the socket it went out on.
+   */
+  send(msg: ClientMessage, onWritten?: OnWritten): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
+      onWritten?.(this.generation);
       return;
     }
     // Coalesce repeated subscribes to the same id — common when a route
     // mount/unmount cycle fires multiple subscribes before the WS opens.
     if (msg.type === "subscribe") {
-      const last = this.outboundQueue[this.outboundQueue.length - 1];
+      const last = this.outboundQueue[this.outboundQueue.length - 1]?.msg;
       if (last && last.type === "subscribe" && last.sessionId === msg.sessionId) {
-        this.outboundQueue[this.outboundQueue.length - 1] = msg;
+        this.outboundQueue[this.outboundQueue.length - 1] = { msg, onWritten };
         return;
       }
     }
-    this.outboundQueue.push(msg);
-    if (this.outboundQueue.length > WsService.OUTBOUND_QUEUE_LIMIT) {
-      this.outboundQueue.splice(0, this.outboundQueue.length - WsService.OUTBOUND_QUEUE_LIMIT);
+    this.outboundQueue.push({ msg, onWritten });
+    // Over the cap, drop the oldest message that is not a prompt: a dropped
+    // `input` would leave its queue item "sending" with nothing ever sent.
+    while (this.outboundQueue.length > WsService.OUTBOUND_QUEUE_LIMIT) {
+      const idx = this.outboundQueue.findIndex((entry) => entry.msg.type !== "input");
+      if (idx === -1) break;
+      this.outboundQueue.splice(idx, 1);
+    }
+  }
+
+  /**
+   * Send a card response (approval / question / plan answer) and keep it until
+   * `settleResponse(key)` says its outcome arrived. A half-open socket looks
+   * OPEN and swallows writes silently, and the card has already locked, so the
+   * response is written again on the next socket that opens. Safe to repeat:
+   * the backend ignores a repeat approval it already resolved, and answers a
+   * question or plan call at most once (`Session.claimAnswer`).
+   */
+  sendResponse(key: string, msg: ClientMessage): void {
+    const entry: UnackedResponse = { msg, storedAt: Date.now(), sentGen: null };
+    this.unackedResponses.set(key, entry);
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+      entry.sentGen = this.generation;
+    }
+  }
+
+  /** The outcome of the response stored under `key` arrived; stop re-sending it. */
+  settleResponse(key: string): void {
+    this.unackedResponses.delete(key);
+  }
+
+  /** Write every kept response not already written to the socket that just opened. */
+  private resendResponses(): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const now = Date.now();
+    for (const [key, entry] of this.unackedResponses) {
+      if (now - entry.storedAt > RESPONSE_RESEND_TTL_MS) {
+        this.unackedResponses.delete(key);
+        continue;
+      }
+      if (entry.sentGen === this.generation) continue;
+      ws.send(JSON.stringify(entry.msg));
+      entry.sentGen = this.generation;
     }
   }
 
@@ -198,9 +283,15 @@ class WsService {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const queued = this.outboundQueue;
     this.outboundQueue = [];
-    for (const msg of queued) {
+    for (const { msg, onWritten } of queued) {
       this.ws.send(JSON.stringify(msg));
+      onWritten?.(this.generation);
     }
+  }
+
+  private clearConnectTimer(): void {
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
   }
 
   on(type: ServerMessage["type"] | "*", handler: AnyHandler): () => void {
@@ -230,14 +321,37 @@ class WsService {
 
     this.setState("connecting");
     const ws = new WebSocket(this.url);
+    this.clearConnectTimer();
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      if (ws.readyState !== WebSocket.CONNECTING) return;
+      // Abandon it like a dead socket: detach first so a late event from it
+      // cannot touch the state of the attempt that replaces it.
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try {
+        ws.close();
+      } catch {
+        // Nothing to do.
+      }
+      this.setState("disconnected");
+      this.scheduleReconnect();
+    }, CONNECT_TIMEOUT_MS);
 
     ws.onopen = () => {
+      this.clearConnectTimer();
       this.ws = ws;
+      this.generation++;
       this.reconnectAttempt = 0;
       this.lastMessageAt = Date.now();
       this.startHeartbeat(ws);
       this.setState("connected");
+      // Buffered messages first (in order), then card responses the previous
+      // socket may have swallowed, then the views re-subscribe.
       this.flushOutbound();
+      this.resendResponses();
       this.opens++;
       if (this.opens > 1) {
         for (const handler of this.reconnectListeners) handler();
@@ -255,6 +369,7 @@ class WsService {
     };
 
     ws.onclose = () => {
+      this.clearConnectTimer();
       this.ws = null;
       this.stopHeartbeat();
       this.setState("disconnected");

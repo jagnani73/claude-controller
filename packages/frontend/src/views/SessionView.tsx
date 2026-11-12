@@ -1,4 +1,5 @@
 import { Link, useParams } from "@tanstack/react-router";
+import type { ErrorCode, SessionStatus } from "common/types";
 import { Loader2, SearchX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentsSheet } from "@/components/agents/AgentsSheet";
@@ -32,18 +33,37 @@ import { wsService } from "@/services/ws.service";
  */
 type QueueStatus = "pending" | "in-flight" | "bus-acked";
 
-interface InternalQueueItem {
+interface QueueItemBase {
   id: string;
   text: string;
   timestamp: string;
   sessionId: string;
-  status: QueueStatus;
-  /**
-   * "Send now" was requested for this pending item: it sits at the head of
-   * the pending queue and is dispatched as soon as the interrupt it asked for
-   * ends the active send (see `handleSendNow`). At most one item has it.
-   */
-  sendNow?: boolean;
+}
+
+/** `sendNow` exists only on a pending item: an item already sent cannot be promoted. */
+type InternalQueueItem =
+  | (QueueItemBase & {
+      status: "pending";
+      /**
+       * "Send now" was requested for this pending item: it sits at the head of
+       * the pending queue and is dispatched as soon as the interrupt it asked for
+       * ends the active send (see `handleSendNow`). At most one item has it.
+       */
+      sendNow?: boolean;
+    })
+  | (QueueItemBase & { status: Exclude<QueueStatus, "pending">; sendNow?: never });
+
+function toPending(it: InternalQueueItem): InternalQueueItem {
+  const { id, text, timestamp, sessionId } = it;
+  return { id, text, timestamp, sessionId, status: "pending" };
+}
+
+function toActive(
+  it: InternalQueueItem,
+  status: Exclude<QueueStatus, "pending">,
+): InternalQueueItem {
+  const { id, text, timestamp, sessionId } = it;
+  return { id, text, timestamp, sessionId, status };
 }
 
 /**
@@ -76,6 +96,13 @@ interface StoredQueue {
    * before this mark was already acted on.
    */
   lastSeenAt: string | null;
+  /**
+   * Item id → generation of the socket its `input` was actually written to (see
+   * `wsService.socketGeneration`). Only an item written to a socket that has
+   * since been replaced can have been lost with it; one buffered while offline
+   * goes out on the new socket and must not be sent a second time.
+   */
+  sentOn: Map<string, number>;
 }
 
 const queueStore = new Map<string, StoredQueue>();
@@ -83,7 +110,7 @@ const queueStore = new Map<string, StoredQueue>();
 function storedQueue(sessionId: string): StoredQueue {
   let stored = queueStore.get(sessionId);
   if (!stored) {
-    stored = { items: [], seenTurnIds: new Set(), lastSeenAt: null };
+    stored = { items: [], seenTurnIds: new Set(), lastSeenAt: null, sentOn: new Map() };
     queueStore.set(sessionId, stored);
   }
   return stored;
@@ -98,7 +125,7 @@ interface ReplayState {
   reconnect: boolean;
 }
 
-function isNotRunning(status: string | undefined): boolean {
+function isNotRunning(status: SessionStatus | undefined): boolean {
   return status === "stopped" || status === "error";
 }
 
@@ -114,12 +141,11 @@ function hasActiveSend(queue: readonly InternalQueueItem[]): boolean {
 function promoteToHead(queue: readonly InternalQueueItem[], id: string): InternalQueueItem[] {
   const target = queue.find((it) => it.id === id && it.status === "pending");
   if (!target) return [...queue];
-  const rest = queue
-    .filter((it) => it !== target)
-    .map((it) => (it.sendNow ? { ...it, sendNow: false } : it));
+  const rest = queue.filter((it) => it !== target).map((it) => (it.sendNow ? toPending(it) : it));
   const firstPending = rest.findIndex((it) => it.status === "pending");
   const at = firstPending === -1 ? rest.length : firstPending;
-  return [...rest.slice(0, at), { ...target, sendNow: true }, ...rest.slice(at)];
+  const promoted: InternalQueueItem = { ...toPending(target), status: "pending", sendNow: true };
+  return [...rest.slice(0, at), promoted, ...rest.slice(at)];
 }
 
 export function SessionView() {
@@ -131,7 +157,20 @@ export function SessionView() {
   /** The backend refused input because no PTY is running, or a reconnect found it stopped. */
   const [stoppedHint, setStoppedHint] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const resumingRef = useRef(resuming);
+  resumingRef.current = resuming;
   const [subscribeError, setSubscribeError] = useState<string | null>(null);
+  /**
+   * The backend could not deliver the last prompt (`input_failed`). Its item is
+   * back at the head of the queue and nothing is dispatched until the user taps
+   * Retry: resending on its own could loop on a failure that persists.
+   */
+  const [inputError, setInputErrorState] = useState<string | null>(null);
+  const inputErrorRef = useRef<string | null>(null);
+  const setInputError = useCallback((value: string | null) => {
+    inputErrorRef.current = value;
+    setInputErrorState(value);
+  }, []);
   const [statusLine, setStatusLine] = useState("");
   const [recallText, setRecallText] = useState<string | null>(null);
   const [queue, setQueue] = useState<readonly InternalQueueItem[]>(
@@ -191,7 +230,11 @@ export function SessionView() {
    */
   const writeQueue = useCallback((next: InternalQueueItem[]) => {
     queueRef.current = next;
-    storedQueue(sessionIdRef.current).items = next;
+    const stored = storedQueue(sessionIdRef.current);
+    stored.items = next;
+    for (const id of stored.sentOn.keys()) {
+      if (!next.some((it) => it.id === id && it.status !== "pending")) stored.sentOn.delete(id);
+    }
     setQueue(next);
   }, []);
 
@@ -232,19 +275,26 @@ export function SessionView() {
     if (!target) return current;
     // A stopped session would only bounce it back; it waits for Resume.
     if (stoppedRef.current) return current;
+    // The last send failed; it waits for the user's Retry.
+    if (inputErrorRef.current) return current;
     const head = current[idx];
     const next = [...current];
-    next[idx] = { ...head, status: "in-flight", sendNow: false };
-    wsService.send({
-      type: "input",
-      sessionId: head.sessionId,
-      text: head.text,
-      settings: {
-        model: target.model,
-        effort: target.effort,
-        permissionMode: target.permissionMode,
+    next[idx] = toActive(head, "in-flight");
+    const sentOn = storedQueue(head.sessionId).sentOn;
+    sentOn.delete(head.id);
+    wsService.send(
+      {
+        type: "input",
+        sessionId: head.sessionId,
+        text: head.text,
+        settings: {
+          model: target.model,
+          effort: target.effort,
+          permissionMode: target.permissionMode,
+        },
       },
-    });
+      (generation) => sentOn.set(head.id, generation),
+    );
     return next;
   }, []);
 
@@ -268,6 +318,7 @@ export function SessionView() {
     setStoppedHint(false);
     setResuming(false);
     setSubscribeError(null);
+    setInputError(null);
     setStatusLine("");
     setRecallText(null);
     // This session's own queue, as it was left (see `queueStore`).
@@ -282,7 +333,7 @@ export function SessionView() {
     return () => {
       wsService.send({ type: "unsubscribe", sessionId });
     };
-  }, [sessionId, subscribe, beginReplay]);
+  }, [sessionId, subscribe, beginReplay, setInputError]);
 
   // The backend keeps nothing per client across connections: after a sleep, a
   // network switch or a backend restart this view must subscribe again or it
@@ -292,6 +343,15 @@ export function SessionView() {
   useEffect(() => {
     return wsService.onReconnect(() => {
       if (takenOverRef.current || notFoundRef.current) return;
+      // A Resume in progress may have lost its answer (session_metadata,
+      // subscribe_failed, session_stopped) with the old socket. Ask again rather
+      // than leave "Resuming…" up forever: the subscribe attaches to the resumed
+      // session if it is running, or resumes it again, and either way settles.
+      if (resumingRef.current) {
+        beginReplay(false);
+        subscribe(sessionId);
+        return;
+      }
       if (stoppedRef.current) {
         setStoppedHint(true);
         return;
@@ -305,14 +365,39 @@ export function SessionView() {
     if (msg.sessionId !== sessionId) return;
     const replay = replayRef.current;
     replayRef.current = null;
-    // After a reconnect with nothing new in the replay, an in-flight send most
-    // likely died with the old socket: put it back and send it again.
+    // After a reconnect with nothing new in the replay, an in-flight send that was
+    // written to the *old* socket most likely died with it: put it back and send
+    // it again. One written to the current socket (buffered while offline and
+    // flushed when this socket opened, before the re-subscribe) is on its way;
+    // its echo simply has not arrived yet, and resending it would send it twice.
     if (replay?.reconnect && !replay.sawActivity) {
-      const reverted = queueRef.current.map((it) =>
-        it.status === "in-flight" ? { ...it, status: "pending" as const } : it,
-      );
-      writeQueue(dispatchHeadIfIdle(reverted));
+      const { sentOn } = storedQueue(sessionId);
+      const current = wsService.socketGeneration;
+      const lost = (it: InternalQueueItem): boolean => {
+        const gen = sentOn.get(it.id);
+        return it.status === "in-flight" && gen !== undefined && gen < current;
+      };
+      if (queueRef.current.some(lost)) {
+        const reverted = queueRef.current.map((it) => (lost(it) ? toPending(it) : it));
+        writeQueue(dispatchHeadIfIdle(reverted));
+      }
     }
+  });
+
+  // The PTY is gone (exit, eviction, idle stop, a resume that died while it
+  // booted). Whatever was sent is never answered: an in-flight item goes back to
+  // the head of the queue to wait for Resume, a bus-acked one (its prompt reached
+  // the CLI, whose turn was killed) is dropped, and Esc is re-armed so the next
+  // turn can be interrupted. Without this the queue stayed "busy" for good.
+  useWsMessage("session_stopped", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    const next = queueRef.current
+      .filter((it) => it.status !== "bus-acked")
+      .map((it) => (it.status === "in-flight" ? toPending(it) : it));
+    writeQueue(next);
+    interruptArmedRef.current = true;
+    setResuming(false);
+    setStoppedHint(true);
   });
 
   useWsMessage("session_metadata", (msg) => {
@@ -347,10 +432,20 @@ export function SessionView() {
     // Bus echoed our send — flip the in-flight item to bus-acked so we
     // stop drawing it from the queue (MessageStream's reducer now owns
     // rendering this bubble).
-    const idx = queueRef.current.findIndex((it) => it.status === "in-flight");
+    let idx = queueRef.current.findIndex((it) => it.status === "in-flight");
+    if (idx === -1 && inputErrorRef.current) {
+      // A send reported as failed (`input_failed`) can still register late: the
+      // submit was only *unconfirmed*. Its item is the pending head; ack it
+      // instead of leaving it for a Retry that would send it twice.
+      const head = queueRef.current.findIndex((it) => it.status === "pending");
+      if (head !== -1 && queueRef.current[head].text === msg.text) {
+        idx = head;
+        setInputError(null);
+      }
+    }
     if (idx === -1) return;
     const next = [...queueRef.current];
-    next[idx] = { ...next[idx], status: "bus-acked" };
+    next[idx] = toActive(next[idx], "bus-acked");
     writeQueue(next);
     // A send-now requested while this item was still in flight deferred its
     // interrupt until now: before the echo the backend has no running turn to
@@ -390,24 +485,40 @@ export function SessionView() {
   });
 
   useWsMessage("error", (msg) => {
-    if (msg.sessionId !== sessionId) return;
-    if (msg.code === "session_not_found") setNotFound(true);
-    if (msg.code === "subscribe_failed") {
-      setResuming(false);
-      setSubscribeError(msg.message);
-    }
-    if (msg.code === "session_stopped") {
-      // The send reached no CLI. Put it back at the head of the queue, where it
-      // waits for Resume instead of hanging as "sending".
-      writeQueue(
-        queueRef.current.map((it) =>
-          it.status === "in-flight" ? { ...it, status: "pending" as const } : it,
-        ),
-      );
-      setResuming(false);
-      setStoppedHint(true);
+    if (msg.sessionId !== sessionId || msg.code === undefined) return;
+    const code: ErrorCode = msg.code;
+    switch (code) {
+      case "session_not_found":
+        setNotFound(true);
+        return;
+      case "subscribe_failed":
+        setResuming(false);
+        setSubscribeError(msg.message);
+        return;
+      case "session_stopped":
+        // The send reached no CLI. Put it back at the head of the queue, where it
+        // waits for Resume instead of hanging as "sending".
+        writeQueue(queueRef.current.map((it) => (it.status === "in-flight" ? toPending(it) : it)));
+        setResuming(false);
+        setStoppedHint(true);
+        return;
+      case "input_failed":
+        // The CLI is running but the prompt did not land. Back to the head of the
+        // queue, held until the user taps Retry.
+        setInputError(msg.message);
+        writeQueue(queueRef.current.map((it) => (it.status === "in-flight" ? toPending(it) : it)));
+        return;
+      case "approval_expired":
+      case "permission_mode_unverified":
+        return;
     }
   });
+
+  /** Retry the prompt the backend reported as undelivered. */
+  const handleRetryInput = useCallback(() => {
+    setInputError(null);
+    writeQueue(dispatchHeadIfIdle(queueRef.current));
+  }, [setInputError, writeQueue, dispatchHeadIfIdle]);
 
   /** Resume a stopped session: a subscribe takes the backend's `--resume` path. */
   const handleResume = useCallback(() => {
@@ -669,7 +780,7 @@ export function SessionView() {
         <MessageStream
           sessionId={sessionId}
           // The plan picker belongs to the running process, not a pending pick.
-          model={session?.runningModel ?? session?.model}
+          model={session?.runningModel}
           inFlightPreview={
             inFlightItem ? { text: inFlightItem.text, timestamp: inFlightItem.timestamp } : null
           }
@@ -693,6 +804,14 @@ export function SessionView() {
             </span>
             <Button size="sm" onClick={handleResume} disabled={resuming}>
               {resuming ? "Resuming…" : subscribeError ? "Retry" : "Resume"}
+            </Button>
+          </div>
+        )}
+        {inputError && !stopped && (
+          <div className="flex items-center gap-3 border-t border-border/60 bg-muted/30 px-4 py-2 text-sm">
+            <span className="min-w-0 flex-1 text-muted-foreground">{inputError}</span>
+            <Button size="sm" onClick={handleRetryInput}>
+              Retry
             </Button>
           </div>
         )}

@@ -11,6 +11,7 @@ export type {
   ServerConfig,
   SessionDeps,
   SessionEvents,
+  SpawnIdentity,
 } from "./service.types.js";
 export type {
   AssistantEntry,

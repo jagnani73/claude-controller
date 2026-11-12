@@ -893,7 +893,10 @@ export function MessageStream({
     const earliest =
       earliestIndex === null ? msg.earliestIndex : Math.min(earliestIndex, msg.earliestIndex);
     setEarliestIndex(earliest);
-    setHasMore(earliest > 0);
+    // The server knows where its retained window starts (older events may have
+    // been trimmed), so trust its `hasMore` for a fresh tail. When older pages
+    // are already loaded, those set `hasMore` and a re-subscribe must not undo it.
+    if (earliestIndex === null || msg.earliestIndex <= earliestIndex) setHasMore(msg.hasMore);
   });
 
   useWsMessage("history_page", (msg) => {

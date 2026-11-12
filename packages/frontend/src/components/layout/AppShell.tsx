@@ -1,4 +1,5 @@
 import { Outlet, useRouterState } from "@tanstack/react-router";
+import type { ErrorCode } from "common/types";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { type Layout, useGroupRef, usePanelRef } from "react-resizable-panels";
 import { toast } from "sonner";
@@ -19,6 +20,12 @@ const SIDEBAR_MIN = "220px";
 const SIDEBAR_MAX = "520px";
 const MAIN_MIN = "360px";
 const LAYOUT_KEY = "cc-shell-layout-v2";
+
+/** Error codes SessionView renders in place, so they are not toasted too. */
+const SHOWN_IN_PLACE: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
+  "session_not_found",
+  "input_failed",
+]);
 
 function readLayout(): Layout | undefined {
   try {
@@ -54,10 +61,10 @@ function ShellInner({ children }: { children: ReactNode }) {
   useEffect(() => setDrawerOpen(false), [routerState.location.pathname]);
 
   // Surface server-side errors as toasts so the user isn't left guessing.
-  // 404s render a dedicated SessionView empty state, so suppress the toast
-  // for those — otherwise we'd double-up.
+  // Codes SessionView already renders in place (the not-found empty state, the
+  // Retry banner for an undelivered prompt) are not toasted as well.
   useWsMessage("error", (msg) => {
-    if (msg.code === "session_not_found") return;
+    if (msg.code !== undefined && SHOWN_IN_PLACE.has(msg.code)) return;
     toast.error(
       msg.message,
       msg.sessionId ? { description: `session ${msg.sessionId}` } : undefined,

@@ -1,4 +1,4 @@
-import type { ClaudeModel, EffortLevel, PermissionMode } from "common/types";
+import type { AgentStreamId, ClaudeModel, EffortLevel, PermissionMode } from "common/types";
 
 // ─── Config ──────────────────────────────────────────────────────────
 
@@ -42,10 +42,12 @@ export interface PtySpawnOptions {
   rows: number;
   /** Inline JSON string passed to `claude --settings`. Injects our hooks. */
   settingsJson?: string;
-  /** When set, adds `--resume <id>` to pick up an existing session's transcript. */
-  resumeSessionId?: string;
-  /** For a fresh spawn: the session id to create it with (`--session-id <uuid>`). */
-  newSessionId?: string;
+  /**
+   * Which conversation the CLI runs: `resume` adds `--resume <id>` to pick up an
+   * existing transcript; `new` starts a fresh one under that id
+   * (`--session-id <uuid>`). Required, so a spawn can never name neither or both.
+   */
+  identity: SpawnIdentity;
   /**
    * Force `--model <alias>` even on resume. Default behavior on resume is to
    * omit `--model` so Claude Code preserves the session's last model. Set this
@@ -61,6 +63,9 @@ export interface PtySpawnOptions {
    */
   effort?: EffortLevel;
 }
+
+/** How a PTY spawn identifies its conversation; see `PtySpawnOptions.identity`. */
+export type SpawnIdentity = { kind: "resume"; id: string } | { kind: "new"; id: string };
 
 export interface PtyManagerEvents {
   data: [string];
@@ -84,7 +89,6 @@ export interface SessionEvents {
   exit: [{ exitCode: number; signal?: number }];
   metadataChanged: [];
   statusLine: [string];
-  idResolved: [string];
 }
 
 // ─── WebSocket Service ───────────────────────────────────────────────
@@ -93,7 +97,7 @@ export interface ClientState {
   subscribedSessionId: string | null;
   cleanup: (() => void) | null;
   /** Open agent-transcript subscriptions, keyed by agent stream id. */
-  agentSubs: Map<string, () => void>;
+  agentSubs: Map<AgentStreamId, () => void>;
   /**
    * Bumped by every `subscribe`/`create_session` (and by an `unsubscribe` of the
    * pending one). A subscribe that finishes starting a session attaches only if

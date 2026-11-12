@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseModelId } from "common/model";
-import type { ClaudeModel, ModelCatalog } from "common/types";
+import type { ClaudeModel, LearnedClaudeModel, ModelCatalog } from "common/types";
 import { CLAUDE_MODELS, isClaudeModel, isKnownClaudeModel } from "common/types";
 import { compareVersions } from "common/version";
 import { LoggerService } from "./logger.service.js";
@@ -26,15 +26,16 @@ export type AliasSource = "PostModelSwitch" | "pick" | "settings.json";
  * feed the picker's version hints.
  */
 export class ModelCatalogService extends EventEmitter<{ changed: [] }> {
-  private readonly learned = new Set<ClaudeModel>();
+  private readonly learned = new Set<LearnedClaudeModel>();
   /** Newest observed model id per family. */
   private readonly latestIds = new Map<string, { id: string; version: string }>();
 
   /** Record an alias seen working. Ignores junk and the documented seed aliases. */
   learnAlias(value: string | undefined, source: AliasSource): void {
     if (!value || !isClaudeModel(value) || isKnownClaudeModel(value)) return;
-    if (this.learned.has(value)) return;
-    this.learned.add(value);
+    const learned: LearnedClaudeModel = value;
+    if (this.learned.has(learned)) return;
+    this.learned.add(learned);
     log.info("Learned model alias", { alias: value, source });
     this.emit("changed");
   }
@@ -68,9 +69,16 @@ export class ModelCatalogService extends EventEmitter<{ changed: [] }> {
   loadUserSettings(path = join(homedir(), ".claude", "settings.json")): void {
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as { model?: unknown };
-      if (typeof parsed.model === "string") this.learnAlias(parsed.model, "settings.json");
-    } catch {
-      // Missing or unreadable settings are normal; there is simply nothing to learn.
+      if (typeof parsed?.model === "string") this.learnAlias(parsed.model, "settings.json");
+    } catch (err) {
+      // No settings file is normal: there is simply nothing to learn. Anything
+      // else (unreadable, malformed JSON) means the user's default model is
+      // silently ignored, so it is worth seeing.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      log.error("Could not read the user's settings for a default model", {
+        path,
+        error: (err as Error).message,
+      });
     }
   }
 }

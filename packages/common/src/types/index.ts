@@ -9,13 +9,26 @@ export type { CliVersionStatus };
 /** Session permission modes matching Claude Code CLI */
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto";
 
+/**
+ * Compile-time proof that a runtime list names every member of its union: `T`
+ * resolves to `true` only when nothing in `Union` is missing from `List`, so a
+ * union member added without updating the list (which the guard would then
+ * silently reject) is a type error at the list.
+ */
+type ListsEvery<Union, List extends readonly Union[]> = [Exclude<Union, List[number]>] extends [
+  never,
+]
+  ? true
+  : { missing: Exclude<Union, List[number]> };
+
 /** Runtime-checkable list of {@link PermissionMode} for validating untrusted input. */
-export const PERMISSION_MODES: readonly PermissionMode[] = [
+export const PERMISSION_MODES = [
   "default",
   "acceptEdits",
   "plan",
   "auto",
-];
+] as const satisfies readonly PermissionMode[];
+const permissionModesComplete: ListsEvery<PermissionMode, typeof PERMISSION_MODES> = true;
 
 /**
  * Narrow an arbitrary string to a {@link PermissionMode}.
@@ -23,7 +36,8 @@ export const PERMISSION_MODES: readonly PermissionMode[] = [
  * Claude Code has modes we don't model (`dontAsk`, `bypassPermissions`), and
  * the transcript records whichever one is active, so anything unrecognized must
  * be ignored rather than coerced into the union: `cycleDistance` from an unknown
- * mode is 0, so a later phone-side mode change would silently do nothing.
+ * mode finds no path (null), so a later phone-side mode change would silently do
+ * nothing.
  */
 export function isPermissionMode(value: string): value is PermissionMode {
   return (PERMISSION_MODES as readonly string[]).includes(value);
@@ -70,14 +84,15 @@ export type LearnedClaudeModel = string & { readonly __brand: "ClaudeModel" };
 export type ClaudeModel = KnownClaudeModel | LearnedClaudeModel;
 
 /** The {@link KnownClaudeModel} seed list, in picker order. */
-export const CLAUDE_MODELS: readonly KnownClaudeModel[] = [
+export const CLAUDE_MODELS = [
   "opus",
   "opus[1m]",
   "opusplan",
   "sonnet",
   "sonnet[1m]",
   "haiku",
-];
+] as const satisfies readonly KnownClaudeModel[];
+const claudeModelsComplete: ListsEvery<KnownClaudeModel, typeof CLAUDE_MODELS> = true;
 
 /** True for one of the documented, capability-verified aliases. */
 export function isKnownClaudeModel(value: string): value is KnownClaudeModel {
@@ -107,7 +122,7 @@ export function isClaudeModel(value: string): value is ClaudeModel {
  * seen per family, for picker hints.
  */
 export interface ModelCatalog {
-  aliases: ClaudeModel[];
+  aliases: LearnedClaudeModel[];
   modelIds: string[];
 }
 
@@ -121,14 +136,17 @@ export interface ModelCatalog {
 export type EffortLevel = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Runtime-checkable list of {@link EffortLevel} for validating untrusted input. */
-export const EFFORT_LEVELS: readonly EffortLevel[] = [
+export const EFFORT_LEVELS = [
   "auto",
   "low",
   "medium",
   "high",
   "xhigh",
   "max",
-];
+] as const satisfies readonly EffortLevel[];
+const effortLevelsComplete: ListsEvery<EffortLevel, typeof EFFORT_LEVELS> = true;
+// Referenced so the compile-time checks above are not flagged as unused.
+void [permissionModesComplete, claudeModelsComplete, effortLevelsComplete];
 
 /**
  * Narrow an arbitrary string to an {@link EffortLevel}.
@@ -210,7 +228,7 @@ export interface SessionInfo {
    * Shift+Tab cycle, labelling the plan picker); `model` is what the next
    * respawn will run.
    */
-  runningModel?: ClaudeModel;
+  runningModel: ClaudeModel;
   tags: string[];
   createdAt: number;
   /** Live snapshot from Claude Code's statusline payload, when available. */
@@ -340,6 +358,45 @@ export interface AgentMessage {
 
 // ─── WebSocket message protocol ───────────────────────────────────
 
+/**
+ * Machine-readable `error` codes, so callers can branch on intent:
+ *  - `session_not_found`: no transcript exists for the id.
+ *  - `permission_mode_unverified`: the running model's Shift+Tab cycle is unverified.
+ *  - `session_stopped`: input or a slash command reached a session with no live PTY.
+ *  - `approval_expired`: an `approval_response` arrived after the approval stopped pending.
+ *  - `subscribe_failed`: opening (or resuming) the session for a `subscribe` failed.
+ *  - `input_failed`: an `input` reached a live session but could not be delivered
+ *    (respawn failed, or the CLI never registered the submit).
+ */
+export type ErrorCode =
+  | "session_not_found"
+  | "permission_mode_unverified"
+  | "session_stopped"
+  | "approval_expired"
+  | "subscribe_failed"
+  | "input_failed";
+
+/**
+ * An `error` message. Discriminated on `code`: a coded error always names what
+ * it refers to, and only an uncoded one (a free-form failure) may omit it.
+ */
+export type ErrorMessage =
+  | { type: "error"; message: string; code?: undefined; sessionId?: string }
+  | {
+      type: "error";
+      message: string;
+      code: "approval_expired";
+      sessionId: string;
+      /** The approval this refers to. */
+      toolUseId: string;
+    }
+  | {
+      type: "error";
+      message: string;
+      code: Exclude<ErrorCode, "approval_expired">;
+      sessionId: string;
+    };
+
 /** Server → Client messages */
 export type ServerMessage =
   | { type: "connected"; sessions: SessionInfo[]; workDir: string }
@@ -446,23 +503,7 @@ export type ServerMessage =
       output?: string;
       timestamp: string;
     }
-  | {
-      type: "error";
-      message: string;
-      sessionId?: string;
-      /** Optional machine-readable code so callers can branch on intent. */
-      code?:
-        | "session_not_found"
-        | "permission_mode_unverified"
-        /** Input or a slash command reached a session with no live PTY. */
-        | "session_stopped"
-        /** An `approval_response` arrived after the approval stopped pending. */
-        | "approval_expired"
-        /** Opening (or resuming) the session for a `subscribe` failed. */
-        | "subscribe_failed";
-      /** The approval an `approval_expired` error refers to. */
-      toolUseId?: string;
-    }
+  | ErrorMessage
   | { type: "dir_list"; path: string; entries: DirEntry[] }
   | {
       type: "project_sessions";

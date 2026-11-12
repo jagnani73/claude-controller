@@ -15,22 +15,29 @@ export interface SessionSettings {
   permissionMode: PermissionMode;
 }
 
-interface SessionSettingsPanelProps {
+interface SessionSettingsPanelBaseProps {
   value: SessionSettings;
   onChange: (next: SessionSettings) => void;
-  /**
-   * Editing a running session, whose mode changes walk the Shift+Tab cycle (vs.
-   * the create form, where the mode is a spawn flag). Gates mode switching for
-   * a model whose cycle is unverified.
-   */
-  live?: boolean;
-  /**
-   * The model the running PTY is on, when it differs from a pending pick in
-   * `value.model`. A live mode change walks *its* Shift+Tab cycle, so it, not the
-   * pick, decides whether mode switching is available and whether auto is a stop.
-   */
-  runningModel?: ClaudeModel;
 }
+
+type SessionSettingsPanelProps = SessionSettingsPanelBaseProps &
+  (
+    | {
+        /**
+         * Editing a running session, whose mode changes walk the Shift+Tab cycle
+         * (vs. the create form, where the mode is a spawn flag). Gates mode
+         * switching for a model whose cycle is unverified.
+         */
+        live: true;
+        /**
+         * The model the running PTY is on (it differs from `value.model` while a
+         * pick is pending). A live mode change walks *its* Shift+Tab cycle, so
+         * it, not the pick, decides whether mode switching is available.
+         */
+        runningModel: ClaudeModel;
+      }
+    | { live?: false; runningModel?: undefined }
+  );
 
 /**
  * Single source of truth for the model/effort/permission-mode triplet UI.
@@ -42,16 +49,13 @@ interface SessionSettingsPanelProps {
  * back to default in a single onChange call so the consumer sees one atomic
  * tuple update instead of a sequence.
  */
-export function SessionSettingsPanel({
-  value,
-  onChange,
-  live = false,
-  runningModel,
-}: SessionSettingsPanelProps) {
+export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
+  const { value, onChange } = props;
+  const live = props.live === true;
   const modelOptions = useModelOptions(value.model);
   // Live mode changes act on the running process; the create form's mode is a
   // spawn flag for the picked model.
-  const modeModel = live ? (runningModel ?? value.model) : value.model;
+  const modeModel = props.live ? props.runningModel : value.model;
   const modeLocked = live && !supportsLiveModeSwitch(modeModel);
   const handleModel = (model: ClaudeModel) => {
     onChange({
