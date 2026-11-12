@@ -173,7 +173,9 @@ export class HooksService {
 
     log.debug("hook received", { sessionId, event: eventName });
 
-    const response = await this.route(sessionId, eventName as HookEventName, payload);
+    const response = await this.route(sessionId, eventName as HookEventName, payload, res);
+    // An abandoned approval resolves after its connection is gone; nothing to write.
+    if (res.destroyed) return;
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(response));
   }
@@ -182,6 +184,7 @@ export class HooksService {
     sessionId: string,
     event: HookEventName,
     payload: HookPayload,
+    res: import("node:http").ServerResponse,
   ): Promise<HookResponse> {
     const target = this.targetLookup(sessionId);
     if (!target) {
@@ -195,7 +198,7 @@ export class HooksService {
 
     switch (event) {
       case "PermissionRequest":
-        return this.handlePermissionRequest(bus, agents, payload as PermissionRequestPayload);
+        return this.handlePermissionRequest(bus, agents, payload as PermissionRequestPayload, res);
       case "SubagentStart":
         agents.handleStart(payload as SubagentStartPayload);
         return {};
@@ -320,6 +323,7 @@ export class HooksService {
     bus: SessionBus,
     agents: AgentRegistry,
     payload: PermissionRequestPayload,
+    res: import("node:http").ServerResponse,
   ): Promise<HookResponse> {
     // ExitPlanMode also fires a PermissionRequest, but it's notification-only:
     // responding allow/deny does NOT resolve the plan (verified live — tapping
@@ -364,8 +368,28 @@ export class HooksService {
         : {}),
     });
 
+    const key = approvalKey(bus.sessionId, toolUseId);
     return await new Promise<HookResponse>((resolve) => {
-      this.pendingApprovals.set(approvalKey(bus.sessionId, toolUseId), resolve);
+      this.pendingApprovals.set(key, resolve);
+      // Claude Code drops the request when it stops waiting: Esc, a respawn or
+      // exit, an answer typed in the terminal, the hook timeout. Without this the
+      // entry lived forever, the card kept asking, and a late tap got no reply.
+      // `close` before the response finished is that abandonment; a normal
+      // answer finishes the response first and has already left the map.
+      res.once("close", () => {
+        if (res.writableFinished || this.pendingApprovals.get(key) !== resolve) return;
+        this.pendingApprovals.delete(key);
+        log.info("Approval abandoned by Claude Code", { sessionId: bus.sessionId, toolUseId });
+        bus.push({
+          kind: "approval_expired",
+          sessionId: bus.sessionId,
+          timestamp: new Date().toISOString(),
+          toolUseId,
+          reason: "Claude Code stopped waiting for this approval.",
+        });
+        // Settle the handler; `handleRequest` writes nothing to a closed socket.
+        resolve(buildApprovalResponse("deny", "approval abandoned").response);
+      });
     });
   }
 }

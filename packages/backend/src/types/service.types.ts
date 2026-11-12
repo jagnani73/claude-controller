@@ -94,4 +94,13 @@ export interface ClientState {
   cleanup: (() => void) | null;
   /** Open agent-transcript subscriptions, keyed by agent stream id. */
   agentSubs: Map<string, () => void>;
+  /**
+   * Bumped by every `subscribe`/`create_session` (and by an `unsubscribe` of the
+   * pending one). A subscribe that finishes starting a session attaches only if
+   * its generation is still the latest, so a slow resume cannot steal the socket
+   * from the chat the user opened after it.
+   */
+  subscribeGen: number;
+  /** Session id of the subscribe currently waiting on `ready`, if any. */
+  pendingSubscribeId: string | null;
 }

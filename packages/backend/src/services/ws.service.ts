@@ -10,6 +10,7 @@ import type {
   DirEntry,
   PermissionMode,
   ServerMessage,
+  SessionConfig,
   SessionInfo,
 } from "common/types";
 import { agentStreamId, isClaudeModel, isPermissionMode, parseAgentStreamId } from "common/types";
@@ -183,6 +184,13 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
         toolName: event.toolName,
         toolInput: event.toolInput,
         ...(event.agent ? { agent: event.agent } : {}),
+      };
+    case "approval_expired":
+      return {
+        type: "approval_expired",
+        sessionId: event.sessionId,
+        toolUseId: event.toolUseId,
+        reason: event.reason,
       };
     case "permission_mode":
       // A mode we don't model (`dontAsk`, `bypassPermissions`) is never sent:
@@ -433,6 +441,88 @@ function broadcast(msg: ServerMessage): void {
   for (const ws of clients.keys()) send(ws, msg);
 }
 
+/**
+ * The session a `subscribe` should attach to, starting one when needed.
+ *
+ * A registry hit is used only while its PTY is alive. A stopped or crashed
+ * session is a corpse: its bus was disposed (history empty) and input to it
+ * goes nowhere, so it takes the same `--resume <id>` path as a past chat that
+ * is not running, rebuilt from the corpse's own config. An absent session (never
+ * opened here, or already evicted) falls back to the client's remembered config,
+ * then to disk discovery. `SessionManager.create` still refuses to duplicate a
+ * live PTY, so a racing second subscribe reuses the first one's resume.
+ */
+async function openSessionFor(
+  sessionManager: SessionManager,
+  id: string,
+  resumeConfig: Omit<SessionConfig, "resumeSessionId"> | undefined,
+): Promise<{ session: Session; started: boolean } | null> {
+  const existing = sessionManager.get(id);
+  if (existing?.alive) return { session: existing, started: false };
+  if (existing) {
+    const info = existing.getInfo();
+    log.info("Resuming a stopped session instead of attaching to it", { id });
+    const session = sessionManager.create({
+      ...existing.config,
+      model: existing.model,
+      permissionMode: info?.permissionMode ?? existing.config.permissionMode,
+      effort: info?.effort ?? existing.config.effort,
+      resumeSessionId: id,
+    });
+    return { session, started: true };
+  }
+  if (resumeConfig) {
+    log.info("Auto-resuming session (client config)", { id, cwd: resumeConfig.cwd });
+    return {
+      session: sessionManager.create({ ...resumeConfig, resumeSessionId: id }),
+      started: true,
+    };
+  }
+  const found = await findSessionByTranscript(id);
+  if (!found) return null;
+  // Discovery is async: another subscribe may have started it meanwhile.
+  const raced = sessionManager.get(id);
+  if (raced?.alive) return { session: raced, started: false };
+  log.info("Auto-resuming session (disk discovery)", { id, cwd: found.cwd });
+  const session = sessionManager.create({
+    // Placeholder alias only — on resume the PTY omits `--model`, so the
+    // session keeps its real model from the JSONL, and the backend reconciles
+    // `currentModel` from the runtime within a turn. (The "open /session/<id>
+    // directly" path has no localStorage config.)
+    cwd: found.cwd,
+    model: "sonnet",
+    permissionMode: "default",
+    resumeSessionId: id,
+  });
+  return { session, started: true };
+}
+
+/** Start a new subscribe generation for this client; see `ClientState.subscribeGen`. */
+function beginSubscribe(ws: WebSocket, sessionId: string | null): () => boolean {
+  const state = clients.get(ws);
+  if (!state) return () => false;
+  const gen = ++state.subscribeGen;
+  state.pendingSubscribeId = sessionId;
+  return () => clients.get(ws) === state && state.subscribeGen === gen;
+}
+
+/** Reject input for a session with no live PTY, loudly: the phone's queue waits on it. */
+function rejectIfNotRunning(
+  ws: WebSocket,
+  sessionId: string,
+  session: Session | undefined,
+): session is undefined {
+  if (session?.alive) return false;
+  log.info("Input for a session that is not running", { sessionId, known: !!session });
+  send(ws, {
+    type: "error",
+    sessionId,
+    code: "session_stopped",
+    message: "This session is not running. Resume it to send messages.",
+  });
+  return true;
+}
+
 export function broadcastSessionCreated(session: SessionInfo): void {
   broadcast({ type: "session_created", session });
 }
@@ -486,14 +576,7 @@ function handleMessage(
   switch (msg.type) {
     case "input": {
       const session = sessionManager.get(msg.sessionId);
-      if (!session) {
-        send(ws, {
-          type: "error",
-          sessionId: msg.sessionId,
-          message: "Session not found",
-        });
-        return;
-      }
+      if (rejectIfNotRunning(ws, msg.sessionId, session)) return;
       log.debug("Forwarding input", {
         sessionId: msg.sessionId,
         text: msg.text.slice(0, 500),
@@ -512,7 +595,7 @@ function handleMessage(
 
     case "slash_command": {
       const session = sessionManager.get(msg.sessionId);
-      if (!session) return;
+      if (rejectIfNotRunning(ws, msg.sessionId, session)) return;
       log.debug("Slash command", {
         sessionId: msg.sessionId,
         command: msg.command,
@@ -540,6 +623,12 @@ function handleMessage(
     case "unsubscribe": {
       const state = clients.get(ws);
       if (!state) return;
+      // A subscribe still waiting on `ready` is cancelled too, or it would attach
+      // to a chat the user already left once the session finished starting.
+      if (state.pendingSubscribeId === msg.sessionId) {
+        state.subscribeGen++;
+        state.pendingSubscribeId = null;
+      }
       if (state.subscribedSessionId !== msg.sessionId) return;
       log.info("Client unsubscribing from session", { sessionId: msg.sessionId });
       state.cleanup?.();
@@ -606,13 +695,27 @@ function handleMessage(
         msg.updatedInput,
       );
       if (!ok) {
-        log.warn("No pending approval to resolve", {
+        // Answered elsewhere, abandoned by Claude Code, or lost with a backend
+        // restart. Tell the card, which otherwise shows a decision that went
+        // nowhere.
+        log.info("No pending approval to resolve", {
           sessionId: msg.sessionId,
           toolUseId: msg.toolUseId,
+        });
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          toolUseId: msg.toolUseId,
+          code: "approval_expired",
+          message: "This approval is no longer pending in Claude Code.",
         });
       }
       return;
     }
+
+    case "ping":
+      send(ws, { type: "pong" });
+      return;
 
     case "question_response": {
       const session = sessionManager.get(msg.sessionId);
@@ -741,13 +844,15 @@ function handleMessage(
         send(ws, { type: "error", message: `Couldn't create session: ${message}` });
         return;
       }
+      // The creator is subscribed to it, unless it opened another chat meanwhile.
+      const isCurrent = beginSubscribe(ws, session.resolved ? session.id : null);
       // Wait for Claude Code's session id to resolve (and initial transcript
       // drain on resume) before broadcasting — clients need the real id.
       void session.ready.then(
         () => {
           const info = session.getInfo();
           if (info) broadcastSessionCreated(info);
-          subscribeToSession(ws, session);
+          if (isCurrent()) subscribeToSession(ws, session);
         },
         (err) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -767,70 +872,50 @@ function handleMessage(
     }
 
     case "subscribe": {
-      const session = sessionManager.get(msg.sessionId);
-      if (session) {
-        void session.ready.then(() => subscribeToSession(ws, session));
-        return;
-      }
-      // Unknown session — three fallback paths, in order of fidelity:
-      //   1. Client passed `resumeConfig` from localStorage → use it.
-      //   2. Scan `~/.claude/projects/*` for a transcript with this id and
-      //      auto-resume using the recovered cwd + sane defaults. This is the
-      //      "open /session/<id> directly" path.
-      //   3. Genuinely unknown id → 404 the client.
+      // Only the latest subscribe may attach: tapping chat A (slow resume) then
+      // chat B used to let A, once ready, take the socket and silence B.
+      const isCurrent = beginSubscribe(ws, msg.sessionId);
+      const state = clients.get(ws);
       void (async () => {
-        if (msg.resumeConfig) {
-          log.info("Auto-resuming session (client config)", {
-            id: msg.sessionId,
-            cwd: msg.resumeConfig.cwd,
-          });
-          const created = sessionManager.create({
-            ...msg.resumeConfig,
-            resumeSessionId: msg.sessionId,
-          });
-          await created.ready;
-          const info = created.getInfo();
-          if (info) broadcastSessionCreated(info);
-          subscribeToSession(ws, created);
+        const opened = await openSessionFor(sessionManager, msg.sessionId, msg.resumeConfig);
+        if (!opened) {
+          if (isCurrent()) {
+            send(ws, {
+              type: "error",
+              sessionId: msg.sessionId,
+              message: "Session not found",
+              code: "session_not_found",
+            });
+          }
           return;
         }
-        const found = await findSessionByTranscript(msg.sessionId);
-        if (found) {
-          log.info("Auto-resuming session (disk discovery)", {
-            id: msg.sessionId,
-            cwd: found.cwd,
-          });
-          const created = sessionManager.create({
-            // Placeholder alias only — on resume the PTY omits `--model`, so the
-            // session keeps its real model from the JSONL, and the backend
-            // reconciles `currentModel` from the runtime within a turn. (The
-            // "open /session/<id> directly" path has no localStorage config.)
-            cwd: found.cwd,
-            model: "sonnet",
-            permissionMode: "default",
-            resumeSessionId: msg.sessionId,
-          });
-          await created.ready;
-          const info = created.getInfo();
+        const { session, started } = opened;
+        await session.ready;
+        if (started) {
+          // Every client's list learns about it, whoever is still watching.
+          const info = session.getInfo();
           if (info) broadcastSessionCreated(info);
-          subscribeToSession(ws, created);
+        }
+        if (!isCurrent()) {
+          log.info("Dropping superseded subscribe", { sessionId: msg.sessionId });
           return;
         }
-        send(ws, {
-          type: "error",
-          sessionId: msg.sessionId,
-          message: "Session not found",
-          code: "session_not_found",
+        subscribeToSession(ws, session);
+      })()
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.error("Subscribe failed", { id: msg.sessionId, error: message });
+          if (!isCurrent()) return;
+          send(ws, {
+            type: "error",
+            sessionId: msg.sessionId,
+            code: "subscribe_failed",
+            message: `Couldn't open this session: ${message}`,
+          });
+        })
+        .finally(() => {
+          if (isCurrent() && state) state.pendingSubscribeId = null;
         });
-      })().catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error("Subscribe fallback failed", { id: msg.sessionId, error: message });
-        send(ws, {
-          type: "error",
-          sessionId: msg.sessionId,
-          message: `Subscribe failed: ${message}`,
-        });
-      });
       return;
     }
 
@@ -953,7 +1038,13 @@ export function handleConnection(
   hooksService: HooksService,
   config: ServerConfig,
 ): void {
-  clients.set(ws, { subscribedSessionId: null, cleanup: null, agentSubs: new Map() });
+  clients.set(ws, {
+    subscribedSessionId: null,
+    cleanup: null,
+    agentSubs: new Map(),
+    subscribeGen: 0,
+    pendingSubscribeId: null,
+  });
 
   log.info("Client connected");
 
@@ -974,6 +1065,8 @@ export function handleConnection(
     }
   });
 
+  // Also reached through `terminate()` when the heartbeat in server.ts finds the
+  // socket dead, so a half-open client is cleaned up exactly like a closed one.
   ws.on("close", () => {
     log.info("Client disconnected");
     const state = clients.get(ws);

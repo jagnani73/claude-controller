@@ -103,6 +103,17 @@ export type SessionBusEvent =
       kind: "interrupt";
       sessionId: string;
       timestamp: string;
+    }
+  | {
+      /**
+       * A held `PermissionRequest` was abandoned by Claude Code before anyone
+       * answered it (hooks.service). Logged, so a replay locks the card too.
+       */
+      kind: "approval_expired";
+      sessionId: string;
+      timestamp: string;
+      toolUseId: string;
+      reason: string;
     };
 
 type BusEvents = {

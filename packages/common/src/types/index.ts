@@ -379,6 +379,20 @@ export type ServerMessage =
       /** Set when a subagent (not the lead) is the one asking; `label` is its name, else its type. */
       agent?: { id: string; label: string };
     }
+  | {
+      /**
+       * Claude Code stopped waiting for this approval before it was answered:
+       * its `PermissionRequest` HTTP request closed (Esc, a respawn, an answer
+       * typed in the terminal, the hook timeout). The card must lock; an answer
+       * sent now would reach nothing.
+       */
+      type: "approval_expired";
+      sessionId: string;
+      toolUseId: string;
+      reason: string;
+    }
+  /** Reply to a client `ping`; lets the PWA tell a live socket from a half-open one. */
+  | { type: "pong" }
   | { type: "agents_snapshot"; sessionId: string; agents: AgentNode[]; messages: AgentMessage[] }
   | { type: "agent_update"; sessionId: string; agent: AgentNode }
   | { type: "agent_message"; sessionId: string; message: AgentMessage }
@@ -437,7 +451,17 @@ export type ServerMessage =
       message: string;
       sessionId?: string;
       /** Optional machine-readable code so callers can branch on intent. */
-      code?: "session_not_found" | "permission_mode_unverified";
+      code?:
+        | "session_not_found"
+        | "permission_mode_unverified"
+        /** Input or a slash command reached a session with no live PTY. */
+        | "session_stopped"
+        /** An `approval_response` arrived after the approval stopped pending. */
+        | "approval_expired"
+        /** Opening (or resuming) the session for a `subscribe` failed. */
+        | "subscribe_failed";
+      /** The approval an `approval_expired` error refers to. */
+      toolUseId?: string;
     }
   | { type: "dir_list"; path: string; entries: DirEntry[] }
   | {
@@ -665,4 +689,6 @@ export type ClientMessage =
       sessionId: string;
       beforeIndex: number;
       limit: number;
-    };
+    }
+  /** Liveness probe; the server answers `pong`. See the heartbeat in ws.service (frontend). */
+  | { type: "ping" };
