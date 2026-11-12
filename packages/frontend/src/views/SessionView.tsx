@@ -57,6 +57,51 @@ function isInterruptMarker(text: string): boolean {
   return text.startsWith("[Request interrupted by user");
 }
 
+/**
+ * Per-session queue state, kept outside the component so switching chats does
+ * not throw away prompts the user queued: the queue is their only record.
+ *
+ * Items stay pending while their session is not on screen and are dispatched
+ * when the user returns to it. Dispatching in the background would need a
+ * turn-end signal for a session this client is not subscribed to, and the
+ * backend streams only the subscribed one.
+ */
+interface StoredQueue {
+  items: InternalQueueItem[];
+  /** turnIds already counted — first occurrence per id signals a turn boundary. */
+  seenTurnIds: Set<string>;
+  /**
+   * Latest timestamp of a prompt/reply/interrupt the queue logic processed. On a
+   * re-subscribe the backend replays the tail of the log, and anything at or
+   * before this mark was already acted on.
+   */
+  lastSeenAt: string | null;
+}
+
+const queueStore = new Map<string, StoredQueue>();
+
+function storedQueue(sessionId: string): StoredQueue {
+  let stored = queueStore.get(sessionId);
+  if (!stored) {
+    stored = { items: [], seenTurnIds: new Set(), lastSeenAt: null };
+    queueStore.set(sessionId, stored);
+  }
+  return stored;
+}
+
+/** A replay in progress after a re-subscribe; see `beginReplay`. */
+interface ReplayState {
+  watermark: string | null;
+  /** A replayed event newer than the watermark arrived. */
+  sawActivity: boolean;
+  /** The re-subscribe followed a reconnect, so an in-flight send may be lost. */
+  reconnect: boolean;
+}
+
+function isNotRunning(status: string | undefined): boolean {
+  return status === "stopped" || status === "error";
+}
+
 function hasActiveSend(queue: readonly InternalQueueItem[]): boolean {
   return queue.some((it) => it.status === "in-flight" || it.status === "bus-acked");
 }
@@ -83,9 +128,15 @@ export function SessionView() {
   const { browse } = useWorkspace();
   const [takenOver, setTakenOver] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  /** The backend refused input because no PTY is running, or a reconnect found it stopped. */
+  const [stoppedHint, setStoppedHint] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState("");
   const [recallText, setRecallText] = useState<string | null>(null);
-  const [queue, setQueue] = useState<readonly InternalQueueItem[]>([]);
+  const [queue, setQueue] = useState<readonly InternalQueueItem[]>(
+    () => storedQueue(sessionId).items,
+  );
   // Declared before the subscribe effect below so its per-session reset runs
   // first and the snapshot that subscribing triggers is not wiped.
   const { agents, messages: agentMessages } = useAgents(sessionId);
@@ -107,9 +158,13 @@ export function SessionView() {
    * So: mutate queueRef synchronously, decide what to send, fire the side
    * effect, then mirror to setQueue. The updater itself is pure.
    */
-  const queueRef = useRef<InternalQueueItem[]>([]);
+  const queueRef = useRef<InternalQueueItem[]>(storedQueue(sessionId).items);
   /** turnIds already counted — first-occurrence per id signals turn boundary. */
-  const seenTurnIds = useRef<Set<string>>(new Set());
+  const seenTurnIds = useRef<Set<string>>(storedQueue(sessionId).seenTurnIds);
+  /** Set while a re-subscribe's replay is arriving; cleared by `history_available`. */
+  const replayRef = useRef<ReplayState | null>(null);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   /**
    * Esc spam gate. After firing a WS interrupt we disarm until the next
    * user_prompt re-arms — without this, repeated Esc presses stack multiple
@@ -122,6 +177,13 @@ export function SessionView() {
   const session = sessions.find((s) => s.id === sessionId);
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const stopped = isNotRunning(session?.status) || (stoppedHint && !resuming);
+  const stoppedRef = useRef(stopped);
+  stoppedRef.current = stopped;
+  const takenOverRef = useRef(takenOver);
+  takenOverRef.current = takenOver;
+  const notFoundRef = useRef(notFound);
+  notFoundRef.current = notFound;
 
   /**
    * Push a new state for the queue: mirror to the ref, then re-render via
@@ -129,7 +191,31 @@ export function SessionView() {
    */
   const writeQueue = useCallback((next: InternalQueueItem[]) => {
     queueRef.current = next;
+    storedQueue(sessionIdRef.current).items = next;
     setQueue(next);
+  }, []);
+
+  /**
+   * Whether a prompt/reply/interrupt event should drive the queue. A replayed
+   * event at or before the watermark was handled before; anything newer happened
+   * while this view was away (or the socket was down) and is processed in order.
+   */
+  const takeQueueEvent = useCallback((timestamp: string): boolean => {
+    const stored = storedQueue(sessionIdRef.current);
+    const replay = replayRef.current;
+    if (replay?.watermark && timestamp <= replay.watermark) return false;
+    if (replay) replay.sawActivity = true;
+    if (!stored.lastSeenAt || timestamp > stored.lastSeenAt) stored.lastSeenAt = timestamp;
+    return true;
+  }, []);
+
+  /** A (re-)subscribe is about to replay the tail of this session's log. */
+  const beginReplay = useCallback((reconnect: boolean) => {
+    replayRef.current = {
+      watermark: storedQueue(sessionIdRef.current).lastSeenAt,
+      sawActivity: false,
+      reconnect,
+    };
   }, []);
 
   /**
@@ -144,6 +230,8 @@ export function SessionView() {
     if (idx === -1) return current;
     const target = sessionRef.current;
     if (!target) return current;
+    // A stopped session would only bounce it back; it waits for Resume.
+    if (stoppedRef.current) return current;
     const head = current[idx];
     const next = [...current];
     next[idx] = { ...head, status: "in-flight", sendNow: false };
@@ -177,17 +265,62 @@ export function SessionView() {
   useEffect(() => {
     setTakenOver(false);
     setNotFound(false);
+    setStoppedHint(false);
+    setResuming(false);
+    setSubscribeError(null);
     setStatusLine("");
     setRecallText(null);
-    writeQueue([]);
-    seenTurnIds.current = new Set();
+    // This session's own queue, as it was left (see `queueStore`).
+    const stored = storedQueue(sessionId);
+    queueRef.current = stored.items;
+    setQueue(stored.items);
+    seenTurnIds.current = stored.seenTurnIds;
     interruptArmedRef.current = true;
     setAgentsOpen(false);
+    beginReplay(false);
     subscribe(sessionId);
     return () => {
       wsService.send({ type: "unsubscribe", sessionId });
     };
-  }, [sessionId, subscribe, writeQueue]);
+  }, [sessionId, subscribe, beginReplay]);
+
+  // The backend keeps nothing per client across connections: after a sleep, a
+  // network switch or a backend restart this view must subscribe again or it
+  // receives nothing. MessageStream drops the replayed tail it already shows.
+  // A session known to be stopped is not resubscribed (that would resume it);
+  // it shows its Resume action instead.
+  useEffect(() => {
+    return wsService.onReconnect(() => {
+      if (takenOverRef.current || notFoundRef.current) return;
+      if (stoppedRef.current) {
+        setStoppedHint(true);
+        return;
+      }
+      beginReplay(true);
+      subscribe(sessionId);
+    });
+  }, [sessionId, subscribe, beginReplay]);
+
+  useWsMessage("history_available", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    const replay = replayRef.current;
+    replayRef.current = null;
+    // After a reconnect with nothing new in the replay, an in-flight send most
+    // likely died with the old socket: put it back and send it again.
+    if (replay?.reconnect && !replay.sawActivity) {
+      const reverted = queueRef.current.map((it) =>
+        it.status === "in-flight" ? { ...it, status: "pending" as const } : it,
+      );
+      writeQueue(dispatchHeadIfIdle(reverted));
+    }
+  });
+
+  useWsMessage("session_metadata", (msg) => {
+    if (msg.session.id !== sessionId || isNotRunning(msg.session.status)) return;
+    setStoppedHint(false);
+    setResuming(false);
+    setSubscribeError(null);
+  });
 
   useWsMessage("session_taken_over", (msg) => {
     if (msg.sessionId === sessionId) setTakenOver(true);
@@ -207,9 +340,10 @@ export function SessionView() {
     // send-now item before its own echo (hiding its preview through the
     // redirect respawn) and re-arm Esc while that respawn is still running.
     if (isInterruptMarker(msg.text)) return;
+    if (!msg.text.startsWith("/")) setRecallText(msg.text);
+    if (!takeQueueEvent(msg.timestamp)) return;
     // Fresh turn re-arms Esc — the previous interrupt (if any) is over.
     interruptArmedRef.current = true;
-    if (!msg.text.startsWith("/")) setRecallText(msg.text);
     // Bus echoed our send — flip the in-flight item to bus-acked so we
     // stop drawing it from the queue (MessageStream's reducer now owns
     // rendering this bubble).
@@ -229,13 +363,21 @@ export function SessionView() {
     if (msg.sessionId !== sessionId) return;
     if (seenTurnIds.current.has(msg.turnId)) return;
     seenTurnIds.current.add(msg.turnId);
-    // Turn boundary: drop the bus-acked head; dispatch the next pending.
-    const cleaned = queueRef.current.filter((it) => it.status !== "bus-acked");
+    if (!takeQueueEvent(msg.timestamp)) return;
+    // Turn boundary: drop the bus-acked head; dispatch the next pending. In a
+    // replay, a reply newer than the watermark also retires an in-flight item:
+    // it was sent before the view left, and its echo may be older than the
+    // replayed tail.
+    const replaying = replayRef.current !== null;
+    const cleaned = queueRef.current.filter(
+      (it) => it.status !== "bus-acked" && !(replaying && it.status === "in-flight"),
+    );
     writeQueue(dispatchHeadIfIdle(cleaned));
   });
 
   useWsMessage("interrupt", (msg) => {
     if (msg.sessionId !== sessionId) return;
+    if (!takeQueueEvent(msg.timestamp)) return;
     // Interrupt ends whatever was in-flight; it is never resent. Pending tail
     // is left alone (the user pressed Esc to stop, not to fast-forward) —
     // unless a send-now asked for this interrupt, in which case its item is the
@@ -248,8 +390,32 @@ export function SessionView() {
   });
 
   useWsMessage("error", (msg) => {
-    if (msg.sessionId === sessionId && msg.code === "session_not_found") setNotFound(true);
+    if (msg.sessionId !== sessionId) return;
+    if (msg.code === "session_not_found") setNotFound(true);
+    if (msg.code === "subscribe_failed") {
+      setResuming(false);
+      setSubscribeError(msg.message);
+    }
+    if (msg.code === "session_stopped") {
+      // The send reached no CLI. Put it back at the head of the queue, where it
+      // waits for Resume instead of hanging as "sending".
+      writeQueue(
+        queueRef.current.map((it) =>
+          it.status === "in-flight" ? { ...it, status: "pending" as const } : it,
+        ),
+      );
+      setResuming(false);
+      setStoppedHint(true);
+    }
   });
+
+  /** Resume a stopped session: a subscribe takes the backend's `--resume` path. */
+  const handleResume = useCallback(() => {
+    setResuming(true);
+    setSubscribeError(null);
+    beginReplay(false);
+    subscribe(sessionId);
+  }, [sessionId, subscribe, beginReplay]);
 
   // Hide the chat input while an AskUserQuestion is unanswered — the CLI is
   // waiting on a structured answer, not free text, and two competing input
@@ -458,6 +624,7 @@ export function SessionView() {
             variant="secondary"
             onClick={() => {
               setTakenOver(false);
+              beginReplay(false);
               subscribe(sessionId);
             }}
           >
@@ -484,6 +651,11 @@ export function SessionView() {
     <div className="flex h-dvh flex-col">
       {session ? (
         <SessionTopBar session={session} />
+      ) : stopped ? (
+        <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
+          <SidebarToggle />
+          <span className="font-serif text-base italic text-muted-foreground">Session stopped</span>
+        </header>
       ) : (
         <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
           <SidebarToggle />
@@ -507,6 +679,23 @@ export function SessionView() {
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <AgentsStrip agents={agents} onOpen={() => setAgentsOpen(true)} />
+        {(stopped || subscribeError) && (
+          <div className="flex items-center gap-3 border-t border-border/60 bg-muted/30 px-4 py-2 text-sm">
+            <span className="min-w-0 flex-1 text-muted-foreground">
+              {subscribeError ??
+                (resuming
+                  ? "Resuming session…"
+                  : `Session stopped${
+                      pendingItems.length > 0
+                        ? ` · ${pendingItems.length} queued message${pendingItems.length === 1 ? "" : "s"} will send after resuming`
+                        : ""
+                    }`)}
+            </span>
+            <Button size="sm" onClick={handleResume} disabled={resuming}>
+              {resuming ? "Resuming…" : subscribeError ? "Retry" : "Resume"}
+            </Button>
+          </div>
+        )}
         {session && (
           <>
             <QueuePanel

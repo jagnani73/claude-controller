@@ -20,6 +20,18 @@ interface ApprovalCardProps {
    * locks the card — the request it would answer is gone.
    */
   outcome?: ApprovalOutcome;
+  /** Set once the request this card would answer is gone. Locks the card. */
+  expired?: ApprovalExpiry;
+}
+
+/**
+ * The approval can no longer be answered: Claude Code stopped waiting for it
+ * (`approval_expired`), the session stopped, or (`late`) the answer reached the
+ * backend after it had already stopped pending.
+ */
+export interface ApprovalExpiry {
+  reason: string;
+  late?: boolean;
 }
 
 type Mode = "idle" | "deny" | "edit";
@@ -32,6 +44,7 @@ export function ApprovalCard({
   resolved,
   agentLabel,
   outcome,
+  expired,
 }: ApprovalCardProps) {
   const [decision, setDecision] = useState<"allow" | "deny" | null>(resolved ?? null);
   const [mode, setMode] = useState<Mode>("idle");
@@ -44,6 +57,10 @@ export function ApprovalCard({
   // input *wholesale* — so it only makes sense when the input is an object we
   // can round-trip. A string-bodied input has no shape to preserve.
   const canEdit = isPlainObject(toolInput);
+
+  // A decision already sent stands unless the backend said it arrived too late;
+  // an expiry on an unanswered card locks it.
+  const showExpired = !outcome && expired && (expired.late || !decision);
 
   const approve = (updatedInput?: unknown) => {
     if (decision) return;
@@ -100,7 +117,7 @@ export function ApprovalCard({
         <div className="flex items-center gap-2 border-b border-accent/30 px-3 py-2">
           <ShieldCheck className="size-3.5 text-accent" strokeWidth={2} />
           <span className="font-mono text-xs uppercase tracking-wider text-accent">
-            Approval needed
+            {showExpired ? "Approval expired" : "Approval needed"}
           </span>
           <span className="text-xs text-muted-foreground">·</span>
           <span className="font-mono text-xs text-foreground/80">{toolName}</span>
@@ -127,6 +144,13 @@ export function ApprovalCard({
             <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
               {outcome.reason}
             </div>
+          </div>
+        ) : showExpired ? (
+          <div className="px-3 py-3 text-center text-sm text-muted-foreground">
+            {expired.late
+              ? "Not delivered · Claude Code was no longer waiting for this approval"
+              : "Expired · Claude Code is no longer waiting for this approval"}
+            <div className="mt-1 text-[11px] text-muted-foreground/70">{expired.reason}</div>
           </div>
         ) : decision ? (
           <div className="px-3 py-3 text-center text-sm text-muted-foreground">

@@ -112,7 +112,10 @@ export function useSessions() {
 
   useWsMessage("session_created", (msg) => {
     setSessions((prev) => {
-      if (prev.some((s) => s.id === msg.session.id)) return prev;
+      // A resumed session reuses its id: replace the stopped entry it revives.
+      if (prev.some((s) => s.id === msg.session.id)) {
+        return prev.map((s) => (s.id === msg.session.id ? msg.session : s));
+      }
       return [...prev, msg.session];
     });
     persistSessionConfig(msg.session);

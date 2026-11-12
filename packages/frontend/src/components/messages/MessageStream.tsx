@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ApprovalCard } from "@/components/messages/ApprovalCard";
+import { ApprovalCard, type ApprovalExpiry } from "@/components/messages/ApprovalCard";
 import { AssistantMessage } from "@/components/messages/AssistantMessage";
 import { approvalOutcomes } from "@/components/messages/approval-outcome";
 import { Markdown } from "@/components/messages/Markdown";
@@ -164,6 +164,9 @@ export type Action =
       toolUseId: string;
       decision: "allow" | "deny";
     }
+  | { type: "approval_expired"; toolUseId: string; expiry: ApprovalExpiry }
+  /** The session stopped: nothing it was asking can be answered any more. */
+  | { type: "expire_open_approvals"; reason: string }
   | {
       type: "compact_summary";
       sessionId: string;
@@ -183,7 +186,12 @@ export type Action =
       sessionId: string;
       timestamp: string;
     }
-  | { type: "prepend"; items: StreamItem[]; results?: Record<string, ToolResult> };
+  | {
+      type: "prepend";
+      items: StreamItem[];
+      results?: Record<string, ToolResult>;
+      expired?: Record<string, ApprovalExpiry>;
+    };
 
 export interface State {
   items: StreamItem[];
@@ -198,9 +206,14 @@ export interface State {
    * as unanswered. `fuseResults` reconciles the map onto items on every change.
    */
   results: Record<string, ToolResult>;
+  /**
+   * approval id → why it can no longer be answered. A map, like `results`, so
+   * an expiry lands on its card whichever arrives (or is paged in) first.
+   */
+  expired: Record<string, ApprovalExpiry>;
 }
 
-export const INITIAL_STATE: State = { items: [], seq: 0, results: {} };
+export const INITIAL_STATE: State = { items: [], seq: 0, results: {}, expired: {} };
 
 /** Attach known results to any tool item still missing one. Returns the same
  *  array reference when nothing changed so React bail-outs still work. */
@@ -391,6 +404,22 @@ export function reducer(state: State, action: Action): State {
       if (added.length === 0) return state;
       return { ...state, seq, items: fuseResults([...state.items, ...added], state.results) };
     }
+    case "approval_expired": {
+      const prev = state.expired[action.toolUseId];
+      if (prev && !!prev.late === !!action.expiry.late) return state;
+      return { ...state, expired: { ...state.expired, [action.toolUseId]: action.expiry } };
+    }
+    case "expire_open_approvals": {
+      // Cards already answered or expired keep what they show; the card itself
+      // ignores a non-late expiry once it has sent a decision.
+      const open = state.items.filter(
+        (it) => it.kind === "approval" && !it.resolved && !state.expired[it.id],
+      );
+      if (open.length === 0) return state;
+      const expired = { ...state.expired };
+      for (const it of open) expired[it.id] = { reason: action.reason };
+      return { ...state, expired };
+    }
     case "approval_resolved":
       return {
         ...state,
@@ -402,7 +431,16 @@ export function reducer(state: State, action: Action): State {
       };
     case "compact_summary": {
       const id = `c-${action.timestamp}-${state.items.length}`;
-      if (state.items.some((it) => it.kind === "compact_summary" && it.id === id)) return state;
+      // Same text at the same time is a replay (re-subscribe after a reconnect).
+      if (
+        state.items.some(
+          (it) =>
+            it.kind === "compact_summary" &&
+            it.timestamp === action.timestamp &&
+            it.text === action.text,
+        )
+      )
+        return state;
       return {
         ...state,
         items: [
@@ -418,6 +456,19 @@ export function reducer(state: State, action: Action): State {
       };
     }
     case "slash_command":
+      // A re-subscribe replays the tail of the log; identical name, payload and
+      // timestamp is that replay, not a second command.
+      if (
+        state.items.some(
+          (it) =>
+            it.kind === "slash_command" &&
+            it.timestamp === action.timestamp &&
+            it.name === action.name &&
+            it.args === action.args &&
+            it.output === action.output,
+        )
+      )
+        return state;
       return {
         ...state,
         items: [
@@ -434,9 +485,12 @@ export function reducer(state: State, action: Action): State {
         ],
       };
     case "interrupt": {
-      // Defensive de-dup against back-to-back interrupt events.
+      // Defensive de-dup against back-to-back interrupt events, and against a
+      // re-subscribe replaying one already shown.
       const last = state.items[state.items.length - 1];
       if (last && last.kind === "interrupt") return state;
+      if (state.items.some((it) => it.kind === "interrupt" && it.timestamp === action.timestamp))
+        return state;
       return {
         ...state,
         items: [
@@ -458,8 +512,18 @@ export function reducer(state: State, action: Action): State {
       // already-loaded page (now in the map), and a prepended result may belong
       // to a tool_call already in the stream.
       const results = action.results ? { ...state.results, ...action.results } : state.results;
-      if (fresh.length === 0 && results === state.results) return state;
-      return { ...state, results, items: fuseResults([...fresh, ...state.items], results) };
+      const expired =
+        action.expired && Object.keys(action.expired).length > 0
+          ? { ...action.expired, ...state.expired }
+          : state.expired;
+      if (fresh.length === 0 && results === state.results && expired === state.expired)
+        return state;
+      return {
+        ...state,
+        results,
+        expired,
+        items: fuseResults([...fresh, ...state.items], results),
+      };
     }
   }
 }
@@ -470,9 +534,14 @@ export function reducer(state: State, action: Action): State {
 export function eventsToItems(
   events: ServerMessage[],
   startOffset: number,
-): { items: StreamItem[]; results: Record<string, ToolResult> } {
+): {
+  items: StreamItem[];
+  results: Record<string, ToolResult>;
+  expired: Record<string, ApprovalExpiry>;
+} {
   const items: StreamItem[] = [];
   const results: Record<string, ToolResult> = {};
+  const expired: Record<string, ApprovalExpiry> = {};
   let idx = 0;
   for (const e of events) {
     const slot = startOffset + idx++;
@@ -526,6 +595,9 @@ export function eventsToItems(
           agentLabel: e.agent?.label,
         });
         break;
+      case "approval_expired":
+        expired[e.toolUseId] = { reason: e.reason };
+        break;
       case "compact_summary":
         items.push({
           kind: "compact_summary",
@@ -558,7 +630,7 @@ export function eventsToItems(
         break;
     }
   }
-  return { items, results };
+  return { items, results, expired };
 }
 
 interface MessageStreamProps {
@@ -787,13 +859,41 @@ export function MessageStream({
     });
   });
 
+  useWsMessage("approval_expired", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    dispatch({
+      type: "approval_expired",
+      toolUseId: msg.toolUseId,
+      expiry: { reason: msg.reason },
+    });
+  });
+
+  // A tap that reached the backend after the approval stopped pending.
+  useWsMessage("error", (msg) => {
+    if (msg.sessionId !== sessionId || msg.code !== "approval_expired" || !msg.toolUseId) return;
+    dispatch({
+      type: "approval_expired",
+      toolUseId: msg.toolUseId,
+      expiry: { reason: msg.message, late: true },
+    });
+  });
+
+  useWsMessage("session_stopped", (msg) => {
+    if (msg.sessionId !== sessionId) return;
+    dispatch({ type: "expire_open_approvals", reason: "The session stopped." });
+  });
+
   useWsMessage("history_available", (msg) => {
     if (msg.sessionId !== sessionId) return;
     // Sent after the replayed tail, so it marks the live boundary: everything
     // already here is history, everything from now on is a real turn.
     hydratedRef.current = true;
-    setEarliestIndex(msg.earliestIndex);
-    setHasMore(msg.hasMore);
+    // A re-subscribe (after a reconnect) replays only the tail again; keep any
+    // older pages already loaded rather than paging them in a second time.
+    const earliest =
+      earliestIndex === null ? msg.earliestIndex : Math.min(earliestIndex, msg.earliestIndex);
+    setEarliestIndex(earliest);
+    setHasMore(earliest > 0);
   });
 
   useWsMessage("history_page", (msg) => {
@@ -806,8 +906,8 @@ export function MessageStream({
         top: el.scrollTop,
       };
     }
-    const { items: newItems, results } = eventsToItems(msg.events, msg.fromIndex);
-    dispatch({ type: "prepend", items: newItems, results });
+    const { items: newItems, results, expired } = eventsToItems(msg.events, msg.fromIndex);
+    dispatch({ type: "prepend", items: newItems, results, expired });
     setEarliestIndex(msg.fromIndex);
     setHasMore(msg.hasMore);
     setLoadingHistory(false);
@@ -1102,6 +1202,7 @@ export function MessageStream({
                     resolved={item.resolved}
                     agentLabel={item.agentLabel}
                     outcome={outcomes.get(item.id)}
+                    expired={state.expired[item.id]}
                   />
                 );
               case "compact_summary":

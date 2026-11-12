@@ -66,6 +66,15 @@ export function AgentsSheet({ sessionId, agents, messages, open, onOpenChange }:
     if (msg.sessionId === selected?.streamId) setLoaded(true);
   });
 
+  // A snapshot means the session subscription was (re)established — after a
+  // reconnect, or a resume — and the backend ends every agent stream with the
+  // session subscription it belonged to. Ask for the open agent again; its
+  // MessageStream drops the replayed tail it already shows.
+  useWsMessage("agents_snapshot", (msg) => {
+    if (msg.sessionId !== sessionId || !open || !selectedId) return;
+    wsService.send({ type: "subscribe_agent", sessionId, agentId: selectedId });
+  });
+
   useWsMessage("agent_unavailable", (msg) => {
     if (msg.sessionId === selected?.streamId) setUnavailable(msg.message);
   });

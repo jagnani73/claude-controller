@@ -6,6 +6,17 @@ type AnyHandler = (msg: ServerMessage) => void;
 
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
+/**
+ * Heartbeat. Browsers answer the server's protocol pings without telling the
+ * page, so the page probes on its own: a `ping` every interval, and a socket
+ * that has delivered nothing (not even the `pong`) for `STALE_AFTER_MS` is
+ * treated as dead. After sleep or a network switch the old socket can sit
+ * half-open, still OPEN to the browser, for minutes.
+ */
+const PING_INTERVAL_MS = 20_000;
+const STALE_AFTER_MS = 45_000;
+/** On returning to the page, how long the probe may take before we reconnect. */
+const RESUME_PROBE_MS = 4_000;
 
 class WsService {
   private ws: WebSocket | null = null;
@@ -35,17 +46,123 @@ class WsService {
     "model_catalog",
   ]);
 
+  /** Successful opens so far; every one after the first is a reconnect. */
+  private opens = 0;
+  private reconnectListeners = new Set<() => void>();
+  /** When the current socket last delivered anything. */
+  private lastMessageAt = 0;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  private lifecycleBound = false;
+
   state: ConnectionState = "disconnected";
 
   connect(url: string): void {
     if (this.ws || this.state === "connecting") return;
     this.url = url;
     this.disposed = false;
+    this.bindLifecycle();
     this.doConnect();
+  }
+
+  /**
+   * Run `handler` after every reconnect (not the first open). The backend keeps
+   * no per-client state across connections, so whatever a view had subscribed
+   * to must be asked for again here.
+   */
+  onReconnect(handler: () => void): () => void {
+    this.reconnectListeners.add(handler);
+    return () => this.reconnectListeners.delete(handler);
+  }
+
+  /**
+   * Coming back to the page (or the network) is exactly when the socket is
+   * likely to be dead without the browser knowing. Reconnect at once if it is
+   * closed (skipping any backoff wait), otherwise probe it and reconnect if the
+   * probe goes unanswered.
+   */
+  private bindLifecycle(): void {
+    if (this.lifecycleBound || typeof window === "undefined") return;
+    this.lifecycleBound = true;
+    const check = () => {
+      if (document.visibilityState === "visible") this.checkLiveness();
+    };
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("online", check);
+    window.addEventListener("pageshow", check);
+  }
+
+  private checkLiveness(): void {
+    if (this.disposed || !this.url) return;
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (this.state !== "connecting") this.reconnectNow();
+      return;
+    }
+    if (this.probeTimer) return;
+    const sentAt = Date.now();
+    ws.send(JSON.stringify({ type: "ping" } satisfies ClientMessage));
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      if (this.ws === ws && this.lastMessageAt < sentAt) this.dropSocket(ws);
+    }, RESUME_PROBE_MS);
+  }
+
+  /** Skip the backoff wait and connect now. */
+  private reconnectNow(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+    this.doConnect();
+  }
+
+  /**
+   * Abandon a socket believed dead and reconnect straight away. Its handlers are
+   * detached first: `close()` on a half-open socket waits on a closing handshake
+   * that never comes, so its `onclose` could fire much later, or never.
+   */
+  private dropSocket(ws: WebSocket): void {
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    try {
+      ws.close();
+    } catch {
+      // Already closing; nothing to do.
+    }
+    if (this.ws === ws) this.ws = null;
+    this.stopHeartbeat();
+    this.setState("disconnected");
+    this.reconnectNow();
+  }
+
+  private startHeartbeat(ws: WebSocket): void {
+    this.stopHeartbeat();
+    this.pingTimer = setInterval(() => {
+      if (this.ws !== ws) return;
+      if (Date.now() - this.lastMessageAt > STALE_AFTER_MS) {
+        this.dropSocket(ws);
+        return;
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" } satisfies ClientMessage));
+      }
+    }, PING_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+    if (this.probeTimer) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
   }
 
   disconnect(): void {
     this.disposed = true;
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -117,11 +234,18 @@ class WsService {
     ws.onopen = () => {
       this.ws = ws;
       this.reconnectAttempt = 0;
+      this.lastMessageAt = Date.now();
+      this.startHeartbeat(ws);
       this.setState("connected");
       this.flushOutbound();
+      this.opens++;
+      if (this.opens > 1) {
+        for (const handler of this.reconnectListeners) handler();
+      }
     };
 
     ws.onmessage = (event) => {
+      this.lastMessageAt = Date.now();
       try {
         const msg = JSON.parse(event.data as string) as ServerMessage;
         this.emit(msg);
@@ -132,6 +256,7 @@ class WsService {
 
     ws.onclose = () => {
       this.ws = null;
+      this.stopHeartbeat();
       this.setState("disconnected");
       this.scheduleReconnect();
     };
