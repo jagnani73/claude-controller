@@ -8,6 +8,7 @@ import type {
   TranscriptEntry,
   UserEntry,
 } from "../types/transcript.types.js";
+import { unwrapPastedContent } from "../utils/pasted-content.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
 
@@ -415,7 +416,12 @@ export class TranscriptWatcher {
       }
       // Real chat content — anything pending didn't get a stdout, flush plain.
       this.flushPendingSlashCommand();
-      this.emitEvent({ kind: "user_prompt", sessionId, timestamp, text: content });
+      this.emitEvent({
+        kind: "user_prompt",
+        sessionId,
+        timestamp,
+        text: unwrapPastedContent(content),
+      });
       return;
     }
 
@@ -434,7 +440,12 @@ export class TranscriptWatcher {
         // Synthetic --resume bridge prompt arrives as an array-form text block
         // when Claude Code uses the structured user-content shape.
         if (block.text === SYNTHETIC_RESUME_USER_TEXT) continue;
-        this.emitEvent({ kind: "user_prompt", sessionId, timestamp, text: block.text });
+        this.emitEvent({
+          kind: "user_prompt",
+          sessionId,
+          timestamp,
+          text: unwrapPastedContent(block.text),
+        });
       }
     }
   }

@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ProjectSessionSummary } from "common/types";
 import { encodedProjectDir, streamJsonlEntries } from "./claude-paths.js";
+import { unwrapPastedContent } from "./pasted-content.js";
 
 export { encodedProjectDir };
 
@@ -161,5 +162,5 @@ function sanitize(text: string): string {
   if (text.startsWith("<local-command-caveat>")) return "";
   if (text.startsWith("<local-command-stdout>")) return "";
   if (text.startsWith("<command-")) return "";
-  return text.slice(0, 200).replace(/\s+/g, " ").trim();
+  return unwrapPastedContent(text).slice(0, 200).replace(/\s+/g, " ").trim();
 }
