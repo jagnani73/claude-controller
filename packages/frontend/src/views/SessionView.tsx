@@ -1,6 +1,8 @@
 import { Link, useParams } from "@tanstack/react-router";
 import { Loader2, SearchX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentsSheet } from "@/components/agents/AgentsSheet";
+import { AgentsStrip } from "@/components/agents/AgentsStrip";
 import { InputBar, type InputBarHandle } from "@/components/layout/InputBar";
 import { type QueueItem, QueuePanel } from "@/components/layout/QueuePanel";
 import { SessionTopBar } from "@/components/layout/SessionTopBar";
@@ -10,6 +12,7 @@ import { MessageStream } from "@/components/messages/MessageStream";
 import { SessionSettingsPopover } from "@/components/sessions/SessionSettingsPopover";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { useAgents } from "@/hooks/use-agents";
 import { useSessions } from "@/hooks/use-sessions";
 import { useWsMessage } from "@/hooks/use-ws";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -49,6 +52,10 @@ export function SessionView() {
   const [statusLine, setStatusLine] = useState("");
   const [recallText, setRecallText] = useState<string | null>(null);
   const [queue, setQueue] = useState<readonly InternalQueueItem[]>([]);
+  // Declared before the subscribe effect below so its per-session reset runs
+  // first and the snapshot that subscribing triggers is not wiped.
+  const { agents, messages: agentMessages } = useAgents(sessionId);
+  const [agentsOpen, setAgentsOpen] = useState(false);
 
   /**
    * Synchronous mirror of the queue state. All mutations go through here
@@ -127,6 +134,7 @@ export function SessionView() {
     writeQueue([]);
     seenTurnIds.current = new Set();
     interruptArmedRef.current = true;
+    setAgentsOpen(false);
     subscribe(sessionId);
     return () => {
       wsService.send({ type: "unsubscribe", sessionId });
@@ -364,6 +372,7 @@ export function SessionView() {
         />
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+        <AgentsStrip agents={agents} onOpen={() => setAgentsOpen(true)} />
         {session && (
           <>
             <QueuePanel
@@ -392,6 +401,13 @@ export function SessionView() {
         )}
         <StatusLine text={statusLine} />
       </div>
+      <AgentsSheet
+        sessionId={sessionId}
+        agents={agents}
+        messages={agentMessages}
+        open={agentsOpen}
+        onOpenChange={setAgentsOpen}
+      />
     </div>
   );
 }

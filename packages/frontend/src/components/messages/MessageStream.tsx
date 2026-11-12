@@ -56,6 +56,7 @@ export type StreamItem =
       toolName: string;
       toolInput: unknown;
       resolved?: "allow" | "deny";
+      agentLabel?: string;
     }
   | {
       kind: "compact_summary";
@@ -115,6 +116,7 @@ export type Action =
       toolUseId: string;
       toolName: string;
       toolInput: unknown;
+      agentLabel?: string;
     }
   | {
       type: "approval_resolved";
@@ -312,6 +314,7 @@ export function reducer(state: State, action: Action): State {
           sessionId: action.sessionId,
           toolName: action.toolName,
           toolInput: action.toolInput,
+          agentLabel: action.agentLabel,
         });
       }
       // AskUserQuestion: the PermissionRequest hook normally fires before the
@@ -479,6 +482,7 @@ export function eventsToItems(
           sessionId: e.sessionId,
           toolName: e.toolName,
           toolInput: e.toolInput,
+          agentLabel: e.agent?.label,
         });
         break;
       case "compact_summary":
@@ -546,6 +550,8 @@ interface MessageStreamProps {
    *  mounted while `session` is still resolving, and the label is cosmetic (the
    *  backend computes the actual resulting mode from the running model). */
   model?: ClaudeModel;
+  /** Text for the empty state; defaults to the session-start wording. */
+  emptyLabel?: string;
 }
 
 export function MessageStream({
@@ -554,6 +560,7 @@ export function MessageStream({
   isProcessing,
   onPendingQuestionChange,
   model,
+  emptyLabel = "Waiting for session to start…",
 }: MessageStreamProps) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const items = state.items;
@@ -714,6 +721,7 @@ export function MessageStream({
       toolUseId: msg.toolUseId,
       toolName: msg.toolName,
       toolInput: msg.toolInput,
+      agentLabel: msg.agent?.label,
     });
   });
 
@@ -907,7 +915,7 @@ export function MessageStream({
         )}
         {items.length === 0 && !loadingHistory ? (
           <div className="flex h-full min-h-[60vh] items-center justify-center font-serif text-base italic text-muted-foreground/60">
-            Waiting for session to start…
+            {emptyLabel}
           </div>
         ) : (
           renderEntries.map((entry) => {
@@ -1013,6 +1021,7 @@ export function MessageStream({
                     toolName={item.toolName}
                     toolInput={item.toolInput}
                     resolved={item.resolved}
+                    agentLabel={item.agentLabel}
                   />
                 );
               case "compact_summary":

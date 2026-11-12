@@ -11,6 +11,8 @@ interface ApprovalCardProps {
   toolName: string;
   toolInput: unknown;
   resolved?: "allow" | "deny";
+  /** Set when a subagent, not the lead, is asking — names who. */
+  agentLabel?: string;
 }
 
 type Mode = "idle" | "deny" | "edit";
@@ -21,6 +23,7 @@ export function ApprovalCard({
   toolName,
   toolInput,
   resolved,
+  agentLabel,
 }: ApprovalCardProps) {
   const [decision, setDecision] = useState<"allow" | "deny" | null>(resolved ?? null);
   const [mode, setMode] = useState<Mode>("idle");
@@ -93,6 +96,11 @@ export function ApprovalCard({
           </span>
           <span className="text-xs text-muted-foreground">·</span>
           <span className="font-mono text-xs text-foreground/80">{toolName}</span>
+          {agentLabel && (
+            <span className="ml-auto truncate rounded-md border border-accent/30 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent">
+              from {agentLabel}
+            </span>
+          )}
         </div>
 
         {mode !== "edit" && (
