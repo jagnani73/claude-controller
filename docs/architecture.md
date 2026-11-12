@@ -149,6 +149,17 @@ by Claude Code · the approval hook failed" (same pairing as above). The
 a valid empty object, so the plan picker still opens (`verify:plan-relay` passes).
 Other hooks keep the default: they are observational and answer `{}` at once.
 
+**An abandoned approval expires.** Claude Code closes the held `PermissionRequest`
+request when it stops waiting (Esc, a respawn or exit, an answer typed in the
+terminal, the hook timeout). `handlePermissionRequest` listens for the response's
+`close` before it finished, drops the pending entry and pushes an
+`approval_expired` bus event (logged, so a replay locks the card too), which the
+card renders as "Approval expired". A tap that arrives after that gets an `error`
+with code `approval_expired` and the `toolUseId`, shown on the card as "Not
+delivered". `session_stopped` also expires every open card in the stream. Live on
+2.1.322: Esc on a pending Write approval produced `approval_expired` about a
+second later, and the late allow got the error.
+
 `SessionStart` is **not** HTTP-capable in Claude Code, so the session id can't be
 learned from a hook, and doesn't need to be: the controller chooses it. A fresh
 spawn generates a UUID and passes `--session-id <uuid>`; a resume passes
@@ -380,6 +391,47 @@ sequenceDiagram
     Phone->>Server: {type: "input", text: "/commit"}
     Server->>PTY: write to stdin
 ```
+
+### Subscriptions, reconnects and stopped sessions
+
+- **Nothing per client survives a connection.** The backend builds a fresh
+  `ClientState` for every socket, so the PWA re-subscribes after every reconnect
+  (`wsService.onReconnect` in `SessionView`; the first open is the route's own
+  subscribe). The replayed tail is deduped by `MessageStream` (user prompts by
+  text + timestamp, replies by text, tools and approvals by id, slash commands,
+  interrupts and compaction summaries by timestamp), and `history_available` never
+  moves `earliestIndex` forward past pages already loaded. `AgentsSheet` asks for
+  its open agent again on every `agents_snapshot`, which is sent each time the
+  session subscription is (re)established, because that subscription ends every
+  agent stream it owned.
+- **Heartbeat, both ends.** `server.ts` pings every client every 30s and
+  `terminate()`s one that missed the previous pong; `terminate` emits `close`, so
+  ws.service runs the same cleanup as for a clean disconnect. Browsers answer
+  protocol pings without telling the page, so the PWA also sends an app-level
+  `ping` (answered `pong`) every 20s and drops a socket that delivered nothing for
+  45s; on `visibilitychange` to visible, `online` and `pageshow` it reconnects at
+  once if closed (skipping the backoff wait) or probes and reconnects if the probe
+  is not answered within 4s.
+- **Only the latest subscribe attaches.** `ClientState.subscribeGen` is bumped by
+  every `subscribe` and `create_session`; one that finishes starting a session
+  attaches only if it is still the latest, and an `unsubscribe` for the pending
+  id cancels it. Failures reach the client as `error` code `subscribe_failed`.
+- **A stopped session is never attached to.** `subscribe` uses a registry hit only
+  while its PTY is alive; a stopped or crashed one (its bus is disposed, so its
+  history is empty) takes the same `--resume <id>` path as a past chat, built
+  from the corpse's config, and an absent one falls back to the client's
+  remembered config, then disk discovery. `SessionManager.create` still reuses a
+  live session instead of spawning a duplicate. Input or a slash command for a
+  session with no live PTY (stopped or absent) is answered with `error` code
+  `session_stopped`; `SessionView` puts the item back at the head of its queue and
+  shows "Session stopped" with a Resume action (a subscribe). A session known to
+  be stopped is not re-subscribed on reconnect, since that would resume it.
+- **Queues are per session.** `SessionView` keeps each session's queue in a
+  module-level store, so switching chats keeps queued prompts. They are
+  dispatched only while their session is on screen: the backend streams only the
+  subscribed session, so there is no turn-end signal for the others. On return the
+  replay is filtered against the last event the queue acted on (`lastSeenAt`), so
+  what happened while away drives the queue and older events do not.
 
 ---
 
