@@ -15,7 +15,7 @@ const OBSERVED_CYCLES: Record<KnownClaudeModel, PermissionMode[]> = {
   opusplan: ["acceptEdits", "plan", "auto", "default"],
   sonnet: ["acceptEdits", "plan", "auto", "default"],
   "sonnet[1m]": ["acceptEdits", "plan", "auto", "default"],
-  haiku: ["acceptEdits", "plan", "default"],
+  haiku: ["acceptEdits", "plan", "auto", "default"],
 };
 
 describe("cycleCanIncludeAuto", () => {
@@ -29,13 +29,13 @@ describe("cycleCanIncludeAuto", () => {
     expect(Object.keys(OBSERVED_CYCLES).sort()).toEqual([...CLAUDE_MODELS].sort());
   });
 
-  it("excludes haiku, the only model whose cycle drops the auto stop", () => {
-    expect(cycleCanIncludeAuto("haiku")).toBe(false);
+  it("includes haiku, which gained the auto stop by 2.1.322", () => {
+    expect(cycleCanIncludeAuto("haiku")).toBe(true);
   });
 
   it("includes opusplan, which resolves to auto-capable models in both modes", () => {
     // Regression: this returned false on the theory that a dual-model alias was
-    // excluded like haiku. The live cycle includes auto, so `cycleDistance` was
+    // excluded like haiku once was. The live cycle includes auto, so `cycleDistance` was
     // writing one Shift+Tab too few and landing sessions in the wrong mode.
     expect(cycleCanIncludeAuto("opusplan")).toBe(true);
   });

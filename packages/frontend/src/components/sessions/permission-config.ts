@@ -25,10 +25,13 @@ export function permissionOptionsFor(
     return PERMISSION_OPTIONS.map((opt) => ({ ...opt, disabled: true }));
   }
   const autoDisabled = !supportsAutoMode(model);
-  const autoHint = model === "haiku" ? "not on haiku" : "not verified for this model";
   return PERMISSION_OPTIONS.map((opt) =>
     opt.value === "auto"
-      ? { ...opt, disabled: autoDisabled, hint: autoDisabled ? autoHint : undefined }
+      ? {
+          ...opt,
+          disabled: autoDisabled,
+          hint: autoDisabled ? "not verified for this model" : undefined,
+        }
       : opt,
   );
 }

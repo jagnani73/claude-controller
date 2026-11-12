@@ -17,10 +17,12 @@ import { isKnownClaudeModel } from "./types/index.js";
  *
  * Every answer here is **observed**, not derived: `pnpm verify:permission-cycle`
  * walks the real cycle for each `KnownClaudeModel` by pressing Shift+Tab in a live
- * TUI and reading the mode the CLI renders. Haiku is the only alias whose cycle
- * omits auto; `opusplan` includes it, because it resolves to Opus in plan mode
- * and Sonnet outside it and both of those are auto-capable, so the alias never
- * lands on a model that would drop the stop.
+ * TUI and reading the mode the CLI renders. On the target build every alias
+ * includes auto. `haiku` used to be the exception (it omitted auto through
+ * 2.1.251) and gained the stop by 2.1.322; `opusplan` includes it because it
+ * resolves to Opus in plan mode and Sonnet outside it, both auto-capable. A
+ * `false` answer is still a legitimate observation: if a future build drops the
+ * stop for an alias again, record it here rather than collapsing the switch.
  *
  * Do not re-derive this from `claude-code-source/`. That snapshot's gate
  * (`modelSupportsAutoMode`, `betas.ts:160`) allowlists `/^claude-(opus|sonnet)-4-6/`,
@@ -48,9 +50,8 @@ export function cycleCanIncludeAuto(model: KnownClaudeModel): boolean {
     case "opusplan":
     case "sonnet":
     case "sonnet[1m]":
-      return true;
     case "haiku":
-      return false;
+      return true;
   }
 }
 

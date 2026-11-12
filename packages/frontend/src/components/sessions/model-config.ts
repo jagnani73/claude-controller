@@ -99,8 +99,8 @@ export function supportsMaxEffort(model: ClaudeModel): boolean {
  * Auto permission mode gate. Delegates to the shared `autoCycleSupport` so
  * the frontend (enable/disable the option + clamp on model switch) and the
  * backend (PTY Shift+Tab keystroke math) share one source of truth. Currently
- * every verified model but haiku — see `cycleCanIncludeAuto` for how it was
- * established. An unverified model is not offered auto.
+ * every verified alias (haiku included since 2.1.322) — see `cycleCanIncludeAuto`
+ * for how it was established. An unverified model is not offered auto.
  */
 export function supportsAutoMode(model: ClaudeModel): boolean {
   return autoCycleSupport(model) === true;

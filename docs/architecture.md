@@ -189,7 +189,10 @@ each `KnownClaudeModel` by pressing Shift+Tab in a live TUI and reading the mode
 CLI names in its own footer. It submits no prompt, so unlike the other probes it
 costs nothing.
 
-The result on the target build: every alias includes auto **except `haiku`**.
+The result on the target build: **every alias includes auto**. `haiku` omitted it
+through 2.1.251 and gained the stop by 2.1.322 — the probe caught the change, which
+is exactly the kind of drift it exists for (an unchanged predicate would have
+written one Shift+Tab too few on haiku and landed a `default` pick in `auto`).
 `opusplan` includes it — it resolves to Opus in plan mode and Sonnet outside,
 and both are auto-capable, so the dual-model alias never lands on a model that
 would drop the stop. This is also a worked example of the snapshot being wrong:
