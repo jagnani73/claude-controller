@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { WriteStream } from "node:fs";
 import {
   createWriteStream,
   existsSync,
   type FSWatcher,
   mkdirSync,
   readFileSync,
+  type WriteStream,
   watch,
 } from "node:fs";
 import { unlink } from "node:fs/promises";
@@ -82,6 +82,9 @@ const PLAN_CONFIRM_TIMEOUT_MS = 8_000;
 const RESPAWN_EXIT_TIMEOUT_MS = 5_000;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** How long a freshly started CLI gets to boot before input is forwarded. */
+const FRESH_BOOT_GRACE_MS = 3_000;
 
 export class Session extends EventEmitter<SessionEvents> {
   /**
@@ -269,8 +272,7 @@ export class Session extends EventEmitter<SessionEvents> {
       settingsJson: buildHooksConfig(deps.hooksBaseUrl, this.spawnToken, {
         statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
       }),
-      resumeSessionId: config.resumeSessionId,
-      newSessionId: config.resumeSessionId ? undefined : sessionId,
+      ...(config.resumeSessionId ? this.spawnIdentity(sessionId) : { newSessionId: sessionId }),
       effort: this.currentEffort,
     });
 
@@ -1195,6 +1197,7 @@ export class Session extends EventEmitter<SessionEvents> {
 
       const dumpScriptPath = statusLineDumpScriptPath();
       const spawnedAt = Date.now();
+      const identity = this.spawnIdentity(this._id);
       this.pty.spawn({
         cwd: this.config.cwd,
         claudeBin: this.deps.serverConfig.claudeBin,
@@ -1205,10 +1208,13 @@ export class Session extends EventEmitter<SessionEvents> {
         settingsJson: buildHooksConfig(this.deps.hooksBaseUrl, this.spawnToken, {
           statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
         }),
-        resumeSessionId: this._id,
+        ...identity,
         forceModel: true,
         effort: this.currentEffort,
       });
+      // A fresh start writes no resume block to wait for, so the ready-wait would
+      // only time out; give the CLI a fixed moment to boot instead.
+      if (!identity.resumeSessionId) await delay(FRESH_BOOT_GRACE_MS);
       // Claude Code takes a few seconds to boot before it reads stdin: it writes
       // a `--resume` synthetic block to the JSONL (continue-from-here marker,
       // attachments, /remote-control system message, ...) and only attaches its
@@ -1216,7 +1222,7 @@ export class Session extends EventEmitter<SessionEvents> {
       // dropped — the user sees "I changed settings, sent a message, nothing
       // happened." Wait for the bus to receive a new transcript event after our
       // spawnedAt, then for an 800ms quiet period (= Claude stopped writing).
-      await this.waitForReady(spawnedAt);
+      else await this.waitForReady(spawnedAt);
     } finally {
       this.respawning = false;
       // A spawn that threw (cwd gone) or a new PTY that died while we waited
@@ -1232,6 +1238,19 @@ export class Session extends EventEmitter<SessionEvents> {
     }
     this.touch();
     this.emit("metadataChanged");
+  }
+
+  /**
+   * How to start the CLI for this session's id. `--resume` needs a
+   * conversation on disk, and before the first message there is none: the CLI
+   * then exits at once with "No conversation found with session ID". That hit
+   * every restart of a session that had not been sent anything yet (a model or
+   * effort pick before the first message, a reconnect or resume after a backend
+   * restart). Start such a session fresh under the same id instead.
+   */
+  private spawnIdentity(id: string): { resumeSessionId?: string; newSessionId?: string } {
+    const path = this.transcript?.path ?? resolveTranscriptPath(this.config.cwd, id);
+    return existsSync(path) ? { resumeSessionId: id } : { newSessionId: id };
   }
 
   private waitForReady(spawnedAt: number): Promise<void> {
