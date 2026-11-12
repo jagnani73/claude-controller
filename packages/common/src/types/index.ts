@@ -204,6 +204,13 @@ export interface SessionInfo {
    * "will switch to X" rather than implying the model already changed.
    */
   modelPending?: boolean;
+  /**
+   * The alias the PTY is running right now. Equals `model` unless a pick is
+   * pending. Use it for anything that acts on the running process (walking the
+   * Shift+Tab cycle, labelling the plan picker); `model` is what the next
+   * respawn will run.
+   */
+  runningModel?: ClaudeModel;
   tags: string[];
   createdAt: number;
   /** Live snapshot from Claude Code's statusline payload, when available. */

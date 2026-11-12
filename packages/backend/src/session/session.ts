@@ -1355,6 +1355,7 @@ export class Session extends EventEmitter<SessionEvents> {
       permissionMode: this.currentPermissionMode,
       effort: this.pendingEffort ?? this.currentEffort,
       modelPending: this.pendingModel !== null,
+      runningModel: this.currentModel,
       tags: this.config.tags ?? [],
       createdAt: this.createdAt,
       statusSnapshot: this.statusSnapshot ?? undefined,

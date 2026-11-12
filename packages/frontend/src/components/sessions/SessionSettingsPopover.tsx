@@ -42,6 +42,7 @@ export function SessionSettingsPopover({ session, onChange }: SessionSettingsPop
             }}
             onChange={onChange}
             live
+            runningModel={session.runningModel}
           />
         </div>
       </PopoverContent>

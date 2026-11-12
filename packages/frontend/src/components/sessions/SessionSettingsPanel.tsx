@@ -24,6 +24,12 @@ interface SessionSettingsPanelProps {
    * a model whose cycle is unverified.
    */
   live?: boolean;
+  /**
+   * The model the running PTY is on, when it differs from a pending pick in
+   * `value.model`. A live mode change walks *its* Shift+Tab cycle, so it, not the
+   * pick, decides whether mode switching is available and whether auto is a stop.
+   */
+  runningModel?: ClaudeModel;
 }
 
 /**
@@ -36,9 +42,17 @@ interface SessionSettingsPanelProps {
  * back to default in a single onChange call so the consumer sees one atomic
  * tuple update instead of a sequence.
  */
-export function SessionSettingsPanel({ value, onChange, live = false }: SessionSettingsPanelProps) {
+export function SessionSettingsPanel({
+  value,
+  onChange,
+  live = false,
+  runningModel,
+}: SessionSettingsPanelProps) {
   const modelOptions = useModelOptions(value.model);
-  const modeLocked = live && !supportsLiveModeSwitch(value.model);
+  // Live mode changes act on the running process; the create form's mode is a
+  // spawn flag for the picked model.
+  const modeModel = live ? (runningModel ?? value.model) : value.model;
+  const modeLocked = live && !supportsLiveModeSwitch(modeModel);
   const handleModel = (model: ClaudeModel) => {
     onChange({
       model,
@@ -67,7 +81,7 @@ export function SessionSettingsPanel({ value, onChange, live = false }: SessionS
       <OptionPills
         label="Permission mode"
         value={value.permissionMode}
-        options={permissionOptionsFor(value.model, { live })}
+        options={permissionOptionsFor(modeModel, { live })}
         onChange={handlePermissionMode}
         note={modeLocked ? UNVERIFIED_MODE_NOTE : undefined}
       />

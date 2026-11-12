@@ -368,7 +368,8 @@ export function SessionView() {
       <div className="min-h-0 flex-1">
         <MessageStream
           sessionId={sessionId}
-          model={session?.model}
+          // The plan picker belongs to the running process, not a pending pick.
+          model={session?.runningModel ?? session?.model}
           inFlightPreview={
             inFlightItem ? { text: inFlightItem.text, timestamp: inFlightItem.timestamp } : null
           }
