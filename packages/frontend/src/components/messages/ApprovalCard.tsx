@@ -117,7 +117,17 @@ export function ApprovalCard({
         <div className="flex items-center gap-2 border-b border-accent/30 px-3 py-2">
           <ShieldCheck className="size-3.5 text-accent" strokeWidth={2} />
           <span className="font-mono text-xs uppercase tracking-wider text-accent">
-            {showExpired ? "Approval expired" : "Approval needed"}
+            {outcome
+              ? "Approval rejected"
+              : showExpired
+                ? expired.late
+                  ? "Approval not delivered"
+                  : "Approval expired"
+                : decision === "allow"
+                  ? "Approved"
+                  : decision === "deny"
+                    ? "Denied"
+                    : "Approval needed"}
           </span>
           <span className="text-xs text-muted-foreground">·</span>
           <span className="font-mono text-xs text-foreground/80">{toolName}</span>
@@ -147,10 +157,7 @@ export function ApprovalCard({
           </div>
         ) : showExpired ? (
           <div className="px-3 py-3 text-center text-sm text-muted-foreground">
-            {expired.late
-              ? "Not delivered · Claude Code was no longer waiting for this approval"
-              : "Expired · Claude Code is no longer waiting for this approval"}
-            <div className="mt-1 text-[11px] text-muted-foreground/70">{expired.reason}</div>
+            {expired.reason || "Claude Code is no longer waiting for this approval."}
           </div>
         ) : decision ? (
           <div className="px-3 py-3 text-center text-sm text-muted-foreground">
