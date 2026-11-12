@@ -18,7 +18,7 @@
  *
  * Bump this only after re-verifying the relays against the newer build.
  */
-export const CLAUDE_CODE_TARGET_VERSION = "2.1.251";
+export const CLAUDE_CODE_TARGET_VERSION = "2.1.322";
 
 /**
  * Version of the gitignored `claude-code-source/` reference snapshot.

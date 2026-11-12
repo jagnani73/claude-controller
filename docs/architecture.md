@@ -93,7 +93,8 @@ flat `{permissionDecision}` form, while `updatedInput` is honoured only in the
 schema form `{hookEventName, decision:{behavior, updatedInput}}`. Attaching
 `updatedInput` to the flat form makes the CLI discard the whole response and fall
 back to its own terminal picker — invisible to the phone, so the session hangs
-with no error. Both forms are verified against 2.1.251.
+with no error. Both forms are verified against 2.1.251 and re-verified on 2.1.322
+(`pnpm verify:approval-edit`).
 
 `SessionStart` is **not** HTTP-capable in Claude Code, so the session id can't be
 learned from a hook. Instead it's discovered by watching
