@@ -126,6 +126,11 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
         reason: "safe mode disables hooks, which the controller depends on entirely",
       });
     }
+    // Agent teams are what let agents message each other (SendMessage between
+    // teammates); without the flag the agents view only ever shows plain
+    // subagents that never talk. Experimental upstream and behind a killswitch,
+    // so an operator who set it explicitly (e.g. "0") keeps their choice.
+    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS ??= "1";
     if (options.effort && options.effort !== "auto") {
       // Per-session effort isolation — env wins over settings.json in Claude
       // Code's resolve chain, so a parallel session's `/effort` won't bleed in.
