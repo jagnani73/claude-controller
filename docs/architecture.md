@@ -706,6 +706,36 @@ when it writes `\r`. The file is absent on the development machine, so the
 default binding applies there. If a user rebinds submit, the resend loop would
 retry and give up rather than fail loudly. Unverified.
 
+**A resume can open a usage warning since 2.1.304 — from the changelog,
+unverified.** Upstream: "Added a warning on Pro and Max plans when resuming an
+inactive conversation would use a noticeable share of your 5-hour usage limit:
+resume anyway, or start a new conversation". Every model or effort change
+respawns with `--resume` and then pastes the prompt and sends Enter, so if the
+warning appears that Enter answers it, and nothing tells the phone which option
+it chose. Likeliest on a large conversation whose prompt cache has expired.
+Needs a PTY capture of a real resume before any handling is designed.
+
+**Invisible characters are cleaned and reviewed since 2.1.277 — from the
+changelog, unverified.** Upstream removes "invisible Unicode formatting and tag
+characters" and shows the cleaned prompt for review. Since 2.1.316 plain prompts
+send cleaned on the first Enter, but "commands still wait for review", so a slash
+command carrying such a character waits, and `submitWithConfirmation`'s resent
+Enter confirms the review for the user. That matches intent (the user sent the
+command), so the controller deliberately does not strip characters itself.
+
+**Vim mode changes what one Esc does in a question note — from the changelog,
+unverified.** 2.1.301: "Esc cancels only from NORMAL" in vim mode.
+`buildKeystrokes` leaves the preview-notes field with a single Esc, which in vim
+INSERT mode would only switch to NORMAL. The relay assumes the default editing
+mode; `verify:question-relay` runs without vim mode.
+
+**Edited approvals are validated since 2.1.300 — from the changelog, re-tested
+in the plain case.** Upstream: "updatedInput from PreToolUse and PermissionRequest
+hooks is now validated like Claude's own input: unknown keys are dropped, and
+input the tool rejects denies the call". `verify:approval-edit` passes on 2.1.322
+with a valid edit; an edit with a misspelled key is now silently dropped and an
+invalid one becomes a denial, which the card does not explain yet.
+
 ## Reference: Claude Code source
 
 `claude-code-source/` (gitignored, not built) contains a snapshot of the CLI source
