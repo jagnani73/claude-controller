@@ -263,6 +263,28 @@ navigation rather than relay structured data.
 
 ---
 
+## Agents view (subagents and teammates)
+
+Every subagent writes its own sidechain transcript, so the controller treats an
+agent as a *virtual session*: the same `TranscriptWatcher` tails
+`<projectDir>/<sessionId>/subagents/**/agent-<id>.jsonl` into a child `SessionBus`
+addressed by a composite stream id, and the existing stream and history machinery
+renders it unchanged. See *Agents view* in `CLAUDE.md` for the full contract; the
+short version:
+
+- **Tree:** rebuilt from `agent-<id>.meta.json` on disk (works for resumed
+  sessions); `SubagentStart`/`SubagentStop` hooks add live status. Parent = the
+  owner of the `Agent` tool call named in the meta; teammates hang off the lead.
+- **Conversation:** `PreToolUse` scoped to `SendMessage` becomes `agent_message`.
+  Agent teams are forced on via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` so agents
+  can message each other at all.
+- **Wire:** `agents_snapshot` / `agent_update` / `agent_message` on the session
+  subscription; `subscribe_agent` / `unsubscribe_agent` per agent transcript.
+- **Read-only.** No structured way to send input to one agent was found; the
+  candidates tried and not tried are recorded in `CLAUDE.md`.
+
+---
+
 ## Packages
 
 | Package | Runtime | Responsibility | Key deps |
