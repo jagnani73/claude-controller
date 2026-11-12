@@ -12,7 +12,7 @@ import type {
   ServerMessage,
   SessionInfo,
 } from "common/types";
-import { agentStreamId, parseAgentStreamId } from "common/types";
+import { agentStreamId, isPermissionMode, parseAgentStreamId } from "common/types";
 import ignore, { type Ignore } from "ignore";
 import type { WebSocket } from "ws";
 import type { Session } from "../session/session.js";
@@ -182,10 +182,14 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
         ...(event.agent ? { agent: event.agent } : {}),
       };
     case "permission_mode":
+      // A mode we don't model (`dontAsk`, `bypassPermissions`) is never sent:
+      // the client could neither label it nor cycle away from it. `Session`
+      // logs and ignores the same value on its own mirror.
+      if (!isPermissionMode(event.mode)) return null;
       return {
         type: "permission_mode",
         sessionId: event.sessionId,
-        mode: event.mode as PermissionMode,
+        mode: event.mode,
       };
     case "compact_start":
       return {

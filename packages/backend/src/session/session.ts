@@ -17,7 +17,7 @@ import type {
   SessionStatus,
   SessionStatusSnapshot,
 } from "common/types";
-import { isClaudeModel, isEffortLevel } from "common/types";
+import { isClaudeModel, isEffortLevel, isPermissionMode } from "common/types";
 import {
   CLAUDE_CODE_MINIMUM_VERSION,
   CLAUDE_CODE_TARGET_VERSION,
@@ -536,7 +536,19 @@ export class Session extends EventEmitter<SessionEvents> {
         return;
       }
       if (event.kind !== "permission_mode") return;
-      const mode = event.mode as PermissionMode;
+      const mode = event.mode;
+      // Ignore modes we don't model (`dontAsk`, `bypassPermissions`; 2.1.321+
+      // Space on "Auto (default)" saves Don't Ask): `cycleDistance` from an
+      // unknown mode is 0, so mirroring it would make the next phone-side mode
+      // change silently do nothing. Keeping the last known mode at least walks
+      // the cycle from a real stop.
+      if (!isPermissionMode(mode)) {
+        log.info("Ignoring unmodelled permission mode from transcript", {
+          sessionId: id,
+          mode,
+        });
+        return;
+      }
       if (this.currentPermissionMode === mode) return;
       this.currentPermissionMode = mode;
       this.emit("metadataChanged");

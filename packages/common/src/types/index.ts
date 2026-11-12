@@ -9,6 +9,26 @@ export type { CliVersionStatus };
 /** Session permission modes matching Claude Code CLI */
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "auto";
 
+/** Runtime-checkable list of {@link PermissionMode} for validating untrusted input. */
+export const PERMISSION_MODES: readonly PermissionMode[] = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "auto",
+];
+
+/**
+ * Narrow an arbitrary string to a {@link PermissionMode}.
+ *
+ * Claude Code has modes we don't model (`dontAsk`, `bypassPermissions`), and
+ * the transcript records whichever one is active, so anything unrecognized must
+ * be ignored rather than coerced into the union: `cycleDistance` from an unknown
+ * mode is 0, so a later phone-side mode change would silently do nothing.
+ */
+export function isPermissionMode(value: string): value is PermissionMode {
+  return (PERMISSION_MODES as readonly string[]).includes(value);
+}
+
 /** Session state */
 export type SessionStatus =
   | "running"
