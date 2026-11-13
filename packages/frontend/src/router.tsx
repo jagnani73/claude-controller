@@ -1,7 +1,11 @@
-import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  lazyRouteComponent,
+} from "@tanstack/react-router";
 import { AppShell } from "./components/layout/AppShell";
 import { HomeView } from "./views/HomeView";
-import { SessionView } from "./views/SessionView";
 
 const rootRoute = createRootRoute({
   component: AppShell,
@@ -16,7 +20,7 @@ const indexRoute = createRoute({
 const sessionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/session/$sessionId",
-  component: SessionView,
+  component: lazyRouteComponent(() => import("./views/SessionView"), "SessionView"),
 });
 
 const routeTree = rootRoute.addChildren([indexRoute, sessionRoute]);

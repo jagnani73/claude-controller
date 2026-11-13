@@ -1,9 +1,11 @@
+import { memo } from "react";
+
 interface UserMessageProps {
   text: string;
   timestamp: string;
 }
 
-export function UserMessage({ text, timestamp }: UserMessageProps) {
+export const UserMessage = memo(function UserMessage({ text, timestamp }: UserMessageProps) {
   return (
     <div className="group/message flex justify-end px-4 py-3">
       <div className="max-w-[80%] rounded-2xl rounded-br-md border border-border/60 bg-card px-4 py-2.5">
@@ -16,7 +18,7 @@ export function UserMessage({ text, timestamp }: UserMessageProps) {
       </div>
     </div>
   );
-}
+});
 
 function formatTime(iso: string): string {
   try {

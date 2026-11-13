@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
@@ -98,7 +99,9 @@ const components: Components = {
     ) : null,
 };
 
-export function Markdown({ text, variant = "default" }: MarkdownProps) {
+const remarkPlugins = [remarkGfm];
+
+export const Markdown = memo(function Markdown({ text, variant = "default" }: MarkdownProps) {
   return (
     <div
       className={cn(
@@ -106,9 +109,9 @@ export function Markdown({ text, variant = "default" }: MarkdownProps) {
         variant === "muted" ? "text-foreground/90" : "text-foreground",
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
         {text}
       </ReactMarkdown>
     </div>
   );
-}
+});

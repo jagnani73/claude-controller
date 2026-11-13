@@ -6,9 +6,9 @@ import { AgentsSheet } from "@/components/agents/AgentsSheet";
 import { AgentsStrip } from "@/components/agents/AgentsStrip";
 import { InputBar, type InputBarHandle } from "@/components/layout/InputBar";
 import { type QueueItem, QueuePanel } from "@/components/layout/QueuePanel";
+import { SessionStatusLine } from "@/components/layout/SessionStatusLine";
 import { SessionTopBar } from "@/components/layout/SessionTopBar";
 import { SidebarToggle } from "@/components/layout/SidebarToggle";
-import { StatusLine } from "@/components/layout/StatusLine";
 import { MessageStream } from "@/components/messages/MessageStream";
 import { parseTeammateText } from "@/components/messages/teammate-message";
 import { SessionSettingsPopover } from "@/components/sessions/SessionSettingsPopover";
@@ -179,7 +179,7 @@ export function SessionView() {
     inputErrorRef.current = value;
     setInputErrorState(value);
   }, []);
-  const [statusLine, setStatusLine] = useState("");
+
   const [recallText, setRecallText] = useState<string | null>(null);
   const [queue, setQueue] = useState<readonly InternalQueueItem[]>(
     () => storedQueue(sessionId).items,
@@ -330,7 +330,7 @@ export function SessionView() {
     setResuming(false);
     setSubscribeError(null);
     setInputError(null);
-    setStatusLine("");
+
     setRecallText(null);
     // This session's own queue, as it was left (see `queueStore`).
     const stored = storedQueue(sessionId);
@@ -425,10 +425,6 @@ export function SessionView() {
 
   useWsMessage("session_taken_over", (msg) => {
     if (msg.sessionId === sessionId) setTakenOver(true);
-  });
-
-  useWsMessage("status_line", (msg) => {
-    if (msg.sessionId === sessionId) setStatusLine(msg.text);
   });
 
   useWsMessage("user_prompt", (msg) => {
@@ -812,9 +808,7 @@ export function SessionView() {
           sessionId={sessionId}
           // The plan picker belongs to the running process, not a pending pick.
           model={session?.runningModel}
-          inFlightPreview={
-            inFlightItem ? { text: inFlightItem.text, timestamp: inFlightItem.timestamp } : null
-          }
+          inFlightPreview={inFlightItem ?? null}
           isProcessing={isProcessing}
           onPendingQuestionChange={setHasPendingQuestion}
         />
@@ -879,7 +873,7 @@ export function SessionView() {
             )}
           </>
         )}
-        <StatusLine text={statusLine} />
+        <SessionStatusLine key={sessionId} sessionId={sessionId} />
       </div>
       <AgentsSheet
         sessionId={sessionId}
