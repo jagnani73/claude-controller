@@ -101,6 +101,7 @@ export interface StatusLinePayload {
 }
 
 const RUN_TIMEOUT_MS = 5000;
+let windowsOwnershipFailed = false;
 
 /** Leading + trailing latest-value work, with no overlapping executions. */
 export class StatusLineScheduler {
@@ -248,22 +249,41 @@ export async function runStatusLine(
   payloadJson: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  if (signal?.aborted) return null;
+  if (signal?.aborted || (platform() === "win32" && windowsOwnershipFailed)) return null;
   return await new Promise<string | null>((resolve) => {
     const isWindows = platform() === "win32";
     const direct = isWindows ? directBashSpawn(command) : null;
-    const proc = direct
-      ? spawn(direct.exe, direct.args, { windowsHide: true })
-      : isWindows
-        ? spawn("cmd.exe", ["/c", command], { windowsHide: true })
-        : spawn(command, { shell: "/bin/sh", detached: true });
+    const scripts = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts");
+    const proc = isWindows
+      ? spawn(
+          join(
+            process.env.SystemRoot ?? "C:\\Windows",
+            "System32",
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe",
+          ),
+          [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            join(scripts, "statusline-job.ps1"),
+            process.execPath,
+            join(scripts, "statusline-runner.cjs"),
+          ],
+          { windowsHide: true },
+        )
+      : spawn(command, { shell: "/bin/sh", detached: true });
 
     let stdout = "";
     let stderr = "";
     let finished = false;
     let cancelled = false;
     let cleanupTimer: NodeJS.Timeout | undefined;
-    let killer: ReturnType<typeof spawn> | undefined;
+
     const done = (value: string | null) => {
       if (finished) return;
       finished = true;
@@ -273,7 +293,7 @@ export async function runStatusLine(
       proc.stdin.destroy();
       proc.stdout.destroy();
       proc.stderr.destroy();
-      killer?.kill();
+
       proc.unref();
       resolve(value);
     };
@@ -301,17 +321,19 @@ export async function runStatusLine(
       proc.stdout.destroy();
       proc.stderr.destroy();
       if (isWindows) {
-        // Do not kill the shell first: taskkill needs it to discover descendants.
-        // Never target a name or a PID whose exit we have already observed.
-        if (proc.pid && proc.exitCode === null && proc.signalCode === null) {
-          killer = spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
-            windowsHide: true,
-            stdio: "ignore",
-          });
-          killer.on("error", () => {});
-        }
+        // Kill the job OWNER via Node's process handle, never a shell PID.
+        // It joins a kill-on-close job before launching user code, and keeps
+        // the only job handle alive through inherited-pipe completion. Even
+        // an unexpected owner exit closes that handle and kills descendants.
+        proc.kill("SIGKILL");
         cleanupTimer = setTimeout(() => {
-          if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+          if (proc.exitCode === null && proc.signalCode === null) {
+            windowsOwnershipFailed = true;
+            log.error(
+              "Windows status-line owner did not exit; further executions disabled. " +
+                "Check process permissions and restart the backend after resolving the stuck launcher.",
+            );
+          }
           done(null);
         }, 1000);
       } else {
@@ -336,7 +358,8 @@ export async function runStatusLine(
     });
     proc.on("error", (err) => {
       clearTimeout(timer);
-      log.warn("status-line spawn failed", { error: err.message });
+      if (isWindows) log.error("status-line job launcher failed", { error: err.message });
+      else log.warn("status-line spawn failed", { error: err.message });
       if (!cancelled) done(null);
     });
     proc.stderr.on("data", (chunk: Buffer) => {
@@ -346,7 +369,8 @@ export async function runStatusLine(
       clearTimeout(timer);
       if (cancelled) return;
       if (code !== 0) {
-        log.warn("status-line exited non-zero", {
+        const report = isWindows ? log.error : log.warn;
+        report("status-line exited non-zero (on Windows, also check the job launcher)", {
           code,
           stderr: stderr.slice(0, 500),
           stdout: stdout.slice(0, 200),
@@ -358,7 +382,15 @@ export async function runStatusLine(
     });
 
     try {
-      proc.stdin.write(`${payloadJson}\n`);
+      proc.stdin.write(
+        isWindows
+          ? JSON.stringify({
+              exe: direct?.exe ?? "cmd.exe",
+              args: direct?.args ?? ["/c", command],
+              payload: payloadJson,
+            })
+          : `${payloadJson}\n`,
+      );
       proc.stdin.end();
     } catch {
       // Process likely already exited; close handler will resolve.
