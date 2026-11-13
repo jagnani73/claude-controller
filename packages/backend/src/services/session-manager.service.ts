@@ -126,7 +126,9 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
   /** Bus + agent registry for a hook POST, by the spawn token in its URL. */
   getHookTarget(spawnToken: string): HookTarget | null {
     const session = this.byToken.get(spawnToken);
-    return session?.resolved ? { bus: session.bus, agents: session.agents } : null;
+    return session?.resolved
+      ? { bus: session.bus, agents: session.agents, shellJobs: session.shellJobs }
+      : null;
   }
 
   list(): SessionInfo[] {

@@ -1,3 +1,4 @@
+import type { ShellJobClientMessage, ShellJobServerMessage } from "../shell-job-types.js";
 import type { CliVersionStatus } from "../version.js";
 
 // Re-exported so consumers of `common/types` can name the type of
@@ -406,6 +407,7 @@ export type ErrorMessage =
 
 /** Server → Client messages */
 export type ServerMessage =
+  | ShellJobServerMessage
   | { type: "connected"; sessions: SessionInfo[]; workDir: string }
   | { type: "session_created"; session: SessionInfo }
   | { type: "session_stopped"; sessionId: string; exitCode: number | null }
@@ -630,6 +632,7 @@ export function planTextOf(input: unknown): string | null {
 
 /** Client → Server messages */
 export type ClientMessage =
+  | ShellJobClientMessage
   | { type: "input"; sessionId: string; text: string; settings?: RespawnSettings }
   | { type: "slash_command"; sessionId: string; command: string; settings?: RespawnSettings }
   | { type: "interrupt"; sessionId: string }

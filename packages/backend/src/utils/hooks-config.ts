@@ -46,6 +46,8 @@ const HOOK_SYNC: readonly { event: HookEventName; matcher?: string; handler?: Ha
     event: "PermissionRequest",
     handler: { timeout: PERMISSION_REQUEST_TIMEOUT_S, onFailure: "block" },
   },
+  { event: "PostToolUse", matcher: "Bash|TaskStop" },
+  { event: "Stop" },
   { event: "PreCompact" },
   { event: "PostCompact" },
   // PreToolUse fires BEFORE the interactive permission picker — the only signal

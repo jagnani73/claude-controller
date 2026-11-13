@@ -38,7 +38,7 @@ import { forgetSpawn, rememberSpawn } from "../services/orphan-reaper.service.js
 import { PtyService } from "../services/pty.service.js";
 import { CHUNK_DELAY_MS, type KeystrokeChunk } from "../services/question.input.js";
 import { SessionBus, type SessionBusEvent } from "../services/session-bus.service.js";
-
+import { ShellJobs } from "../services/shell-jobs.service.js";
 import {
   readDumpedPayload,
   resolveStatusLineCommand,
@@ -95,6 +95,7 @@ export class Session extends EventEmitter<SessionEvents> {
   readonly spawnToken: string;
   readonly config: SessionConfig;
   readonly createdAt: number;
+  readonly shellJobs: ShellJobs;
   /** Resolves once the initial transcript drain completed (a resume's history
    * is on the bus). The id itself is known from the constructor on. */
   readonly ready: Promise<void>;
@@ -251,6 +252,7 @@ export class Session extends EventEmitter<SessionEvents> {
     // could not tell apart several sessions started in one folder at once: they
     // all claimed the first file and their output crossed.
     const sessionId = config.resumeSessionId ?? randomUUID();
+    this.shellJobs = new ShellJobs(sessionId, config.cwd);
     this.resolveId(sessionId);
     // For a fresh session the transcript does not exist yet; the watcher waits
     // for it (and for its project directory) and drains nothing until then.
@@ -260,6 +262,7 @@ export class Session extends EventEmitter<SessionEvents> {
       this.handleModelChange,
       this.handleCliVersion,
       this.handleEffortChange,
+      (entry, replay) => this.shellJobs.transcript(entry, replay),
     );
     const drainDone = this.transcript.start().catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -297,21 +300,24 @@ export class Session extends EventEmitter<SessionEvents> {
     const dumpScriptPath = statusLineDumpScriptPath();
     this.statusLinePayloadFile = statusLinePayloadPath(deps.serverConfig.dumpDir, this.spawnToken);
 
-    this.pty.spawn({
-      cwd: config.cwd,
-      claudeBin: deps.serverConfig.claudeBin,
-      model: config.model,
-      permissionMode: config.permissionMode,
-      cols: deps.serverConfig.pty.cols,
-      rows: deps.serverConfig.pty.rows,
-      settingsJson: buildHooksConfig(deps.hooksBaseUrl, this.spawnToken, {
-        statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
-      }),
-      identity: config.resumeSessionId
-        ? this.spawnIdentity(sessionId)
-        : { kind: "new", id: sessionId },
-      effort: this.currentEffort,
-    });
+    this.pty.spawn(
+      {
+        cwd: config.cwd,
+        claudeBin: deps.serverConfig.claudeBin,
+        model: config.model,
+        permissionMode: config.permissionMode,
+        cols: deps.serverConfig.pty.cols,
+        rows: deps.serverConfig.pty.rows,
+        settingsJson: buildHooksConfig(deps.hooksBaseUrl, this.spawnToken, {
+          statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
+        }),
+        identity: config.resumeSessionId
+          ? this.spawnIdentity(sessionId)
+          : { kind: "new", id: sessionId },
+        effort: this.currentEffort,
+      },
+      (env) => this.shellJobs.setChildEnvironment(env),
+    );
 
     this.startStatusLinePolling();
   }
@@ -619,6 +625,7 @@ export class Session extends EventEmitter<SessionEvents> {
    */
   private handlePtyGone(info: { exitCode: number; signal?: number }): void {
     this.teardownStatusLineAndCapture();
+    this.shellJobs.close();
     this.setStatus("stopped");
     this.transcript?.stop();
     this.openToolCalls.clear();
@@ -663,6 +670,7 @@ export class Session extends EventEmitter<SessionEvents> {
     if (this.openToolCalls.size > 0) return "tool_running";
     if (this.planPicker) return "plan_picker";
     if (this._agents?.hasRunning()) return "agents_running";
+    if (this.shellJobs.hasRunning()) return "shell_jobs_running";
     return null;
   }
 
@@ -1262,6 +1270,7 @@ export class Session extends EventEmitter<SessionEvents> {
       // stale `claude-sonnet-5` "corrects" the alias straight back to sonnet. The
       // resumed session reports its own model and effort on its first turn.
       this.reconciler.invalidate();
+      this.shellJobs.settle();
       // Their host process is gone; none of the agents it was running still is,
       // and none of its tool calls will ever report a result.
       this._agents?.settleRunning();
@@ -1271,20 +1280,23 @@ export class Session extends EventEmitter<SessionEvents> {
       const dumpScriptPath = statusLineDumpScriptPath();
       const spawnedAt = Date.now();
       const identity = this.spawnIdentity(this._id);
-      this.pty.spawn({
-        cwd: this.config.cwd,
-        claudeBin: this.deps.serverConfig.claudeBin,
-        model: this.currentModel,
-        permissionMode: this.currentPermissionMode,
-        cols: this.deps.serverConfig.pty.cols,
-        rows: this.deps.serverConfig.pty.rows,
-        settingsJson: buildHooksConfig(this.deps.hooksBaseUrl, this.spawnToken, {
-          statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
-        }),
-        identity,
-        forceModel: true,
-        effort: this.currentEffort,
-      });
+      this.pty.spawn(
+        {
+          cwd: this.config.cwd,
+          claudeBin: this.deps.serverConfig.claudeBin,
+          model: this.currentModel,
+          permissionMode: this.currentPermissionMode,
+          cols: this.deps.serverConfig.pty.cols,
+          rows: this.deps.serverConfig.pty.rows,
+          settingsJson: buildHooksConfig(this.deps.hooksBaseUrl, this.spawnToken, {
+            statusLine: { dumpScriptPath, payloadFilePath: this.statusLinePayloadFile },
+          }),
+          identity,
+          forceModel: true,
+          effort: this.currentEffort,
+        },
+        (env) => this.shellJobs.setChildEnvironment(env),
+      );
       // A fresh start writes no resume block to wait for, so the ready-wait would
       // only time out; give the CLI a fixed moment to boot instead.
       if (identity.kind === "new") await delay(FRESH_BOOT_GRACE_MS);
@@ -1523,6 +1535,7 @@ export class Session extends EventEmitter<SessionEvents> {
   stop(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.shellJobs.close();
     log.info("Stopping", { token: this.spawnToken });
     this.teardownStatusLineAndCapture();
     this.openToolCalls.clear();

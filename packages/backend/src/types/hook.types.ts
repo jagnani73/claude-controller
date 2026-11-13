@@ -111,7 +111,17 @@ export interface SubagentStopPayload extends BaseHookPayload {
   stop_hook_active?: boolean;
 }
 
+export interface ShellJobHookPayload extends BaseHookPayload {
+  hook_event_name: "PostToolUse" | "Stop";
+  tool_name?: string;
+  tool_use_id?: string;
+  tool_input?: unknown;
+  tool_response?: unknown;
+  background_tasks?: unknown[];
+}
+
 export type HookPayload =
+  | ShellJobHookPayload
   | PermissionRequestPayload
   | PreCompactPayload
   | PostCompactPayload

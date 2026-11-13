@@ -15,6 +15,7 @@ import type { AgentRegistry } from "./agent-registry.service.js";
 import { buildApprovalResponse } from "./approval-response.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
+import type { ShellJobs } from "./shell-jobs.service.js";
 
 const log = LoggerService.scoped("hooks");
 
@@ -24,6 +25,7 @@ const LOOPBACK_HOST = "127.0.0.1";
 export interface HookTarget {
   bus: SessionBus;
   agents: AgentRegistry;
+  shellJobs?: ShellJobs;
 }
 
 type TargetLookup = (spawnToken: string) => HookTarget | null;
@@ -215,6 +217,10 @@ export class HooksService {
     const { bus, agents } = target;
 
     switch (event) {
+      case "PostToolUse":
+      case "Stop":
+        target.shellJobs?.hook(event, payload);
+        return {};
       case "PermissionRequest":
         return this.handlePermissionRequest(bus, agents, payload as PermissionRequestPayload, res);
       case "SubagentStart":

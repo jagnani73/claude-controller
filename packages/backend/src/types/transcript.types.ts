@@ -49,6 +49,10 @@ export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
 export interface UserEntry extends BaseEntry {
   type: "user";
   isMeta?: boolean;
+  toolUseResult?: unknown;
+  origin?: { kind?: string; producer?: string };
+  promptSource?: string;
+  turnOrigin?: string;
   isCompactSummary?: boolean;
   message: {
     role: "user";

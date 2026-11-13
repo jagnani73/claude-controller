@@ -61,7 +61,7 @@ function shellQuote(arg: string): string {
 export class PtyService extends EventEmitter<PtyManagerEvents> {
   private process: pty.IPty | null = null;
 
-  spawn(options: PtySpawnOptions): void {
+  spawn(options: PtySpawnOptions, onEnvironment?: (env: Record<string, string>) => void): void {
     if (this.process) {
       throw new Error("PTY process already running");
     }
@@ -143,6 +143,7 @@ export class PtyService extends EventEmitter<PtyManagerEvents> {
       env.CLAUDE_CODE_EFFORT_LEVEL = options.effort;
     }
 
+    onEnvironment?.(env);
     const proc = pty.spawn(shell, shellArgs, {
       name: "xterm-256color",
       cols: options.cols,

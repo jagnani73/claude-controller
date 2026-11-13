@@ -10,6 +10,7 @@ import type {
   UserEntry,
 } from "../types/transcript.types.js";
 import { unwrapPastedContent } from "../utils/pasted-content.js";
+import { isTaskNotification } from "./shell-jobs.service.js";
 
 /** How often to look for a project directory the CLI has not created yet. */
 const DIR_POLL_MS = 500;
@@ -114,6 +115,7 @@ export class TranscriptWatcher {
     private readonly onCliVersion?: (version: string) => void,
     /** Fires when a fresh assistant turn changes the resolved effort level. */
     private readonly onEffortChange?: (effort: string) => void,
+    private readonly onShellEntry?: (entry: TranscriptEntry, replay: boolean) => void,
   ) {}
 
   private emitEvent(event: Parameters<SessionBus["push"]>[0]): void {
@@ -369,6 +371,7 @@ export class TranscriptWatcher {
 
   private handleEntry(entry: TranscriptEntry): void {
     this.noteCliVersion(entry);
+    this.onShellEntry?.(entry, this.initialScan);
     if (entry.type === "assistant") {
       this.flushPendingSlashCommand();
       this.handleAssistant(entry as AssistantEntry);
@@ -448,6 +451,24 @@ export class TranscriptWatcher {
   }
 
   private handleUser(entry: UserEntry): void {
+    // Internal task notices are never prompt acknowledgements or recall entries.
+    // Preserve tool results in a mixed entry, but route its text only to jobs.
+    if (isTaskNotification(entry)) {
+      if (Array.isArray(entry.message.content)) {
+        for (const block of entry.message.content) {
+          if (block.type === "tool_result")
+            this.emitEvent({
+              kind: "tool_result",
+              sessionId: this.bus.sessionId,
+              timestamp: entry.timestamp,
+              toolUseId: block.tool_use_id,
+              result: block.content,
+              isError: block.is_error ?? false,
+            });
+        }
+      }
+      return;
+    }
     if (entry.isMeta) return;
     const sessionId = this.bus.sessionId;
     const timestamp = entry.timestamp;

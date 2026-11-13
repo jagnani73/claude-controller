@@ -32,6 +32,8 @@ import { previewToolResult } from "./tool-result-preview.js";
 const log = LoggerService.scoped("ws");
 
 const clients = new Map<WebSocket, ClientState>();
+// Request-only job reads: no filesystem watchers or output buffers per socket.
+const shellRequests = new WeakMap<WebSocket, { snapshot: number; output: number; busy: boolean }>();
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === ws.OPEN) {
@@ -614,6 +616,77 @@ function handleMessage(
   config: ServerConfig,
 ): void {
   switch (msg.type) {
+    case "shell_jobs_request":
+    case "shell_job_output_request": {
+      // Optional for older clients; never echo unbounded/unvalidated client data.
+      if (
+        msg.requestId !== undefined &&
+        (typeof msg.requestId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(msg.requestId))
+      )
+        return;
+      const requestId = msg.requestId;
+      const state = clients.get(ws);
+      const session = sessionManager.get(msg.sessionId);
+      const rate = shellRequests.get(ws) ?? { snapshot: 0, output: 0, busy: false };
+      shellRequests.set(ws, rate);
+      const key = msg.type === "shell_jobs_request" ? "snapshot" : "output";
+      if (rate.busy || Date.now() - rate[key] < 500 || ws.bufferedAmount > 256 * 1024) return;
+      rate[key] = Date.now();
+      if (!state || state.subscribedSessionId !== msg.sessionId || !session) {
+        if (msg.type === "shell_jobs_request")
+          send(ws, {
+            type: "shell_jobs_snapshot",
+            requestId,
+            sessionId: msg.sessionId,
+            jobs: [],
+            truncated: false,
+            error: "Subscribe to a live session first.",
+          });
+        else
+          send(ws, {
+            type: "shell_job_output",
+            requestId,
+            sessionId: msg.sessionId,
+            jobId: msg.jobId,
+            text: "",
+            offset: 0,
+            reset: true,
+            truncated: false,
+            error: "Session unavailable.",
+          });
+        return;
+      }
+      if (msg.type === "shell_jobs_request") {
+        rate.busy = true;
+        void session.ready
+          .then(() => {
+            if (
+              clients.get(ws) === state &&
+              state.subscribedSessionId === session.id &&
+              ws.bufferedAmount < 256 * 1024
+            )
+              send(ws, {
+                type: "shell_jobs_snapshot",
+                requestId,
+                sessionId: session.id,
+                ...session.shellJobs.snapshot(),
+              });
+          })
+          .finally(() => {
+            rate.busy = false;
+          });
+      } else {
+        void session.shellJobs.output(msg.jobId, msg.offset).then((result) => {
+          if (
+            clients.get(ws) === state &&
+            state.subscribedSessionId === session.id &&
+            ws.bufferedAmount < 256 * 1024
+          )
+            send(ws, { ...result, requestId });
+        });
+      }
+      return;
+    }
     case "input": {
       const session = sessionManager.get(msg.sessionId);
       if (rejectIfNotRunning(ws, msg.sessionId, session)) return;
