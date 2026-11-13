@@ -432,7 +432,17 @@ export type ServerMessage =
       toolUseId: string;
       result: unknown;
       isError: boolean;
+      preview?: ToolResultPreview;
       timestamp: string;
+    }
+  | {
+      type: "tool_result_full";
+      sessionId: string;
+      toolUseId: string;
+      requestId: string;
+      outcome:
+        | { status: "available"; result: unknown; isError: boolean }
+        | { status: "unavailable" };
     }
   | {
       type: "approval_request";
@@ -564,9 +574,23 @@ export interface AnswerEntry {
 }
 
 /** A tool result projected for rendering: the raw value plus the error flag. */
+export interface ApprovalResultOutcome {
+  kind: "edit_rejected" | "hook_failed";
+  reason: string;
+}
+
+/** Present only when result is an incomplete, textual preview of the original. */
+export interface ToolResultPreview {
+  truncated: true;
+  format: "text" | "json";
+  totalBytes: number;
+  approvalOutcome?: ApprovalResultOutcome;
+}
+
 export interface ToolResult {
   value: unknown;
   isError: boolean;
+  preview?: ToolResultPreview;
 }
 
 // ─── Plan-mode relay ──────────────────────────────────────────────
@@ -732,6 +756,12 @@ export type ClientMessage =
     }
   | { type: "resize"; sessionId: string; cols: number; rows: number }
   | { type: "set_permission_mode"; sessionId: string; mode: PermissionMode }
+  | {
+      type: "fetch_tool_result";
+      sessionId: string;
+      toolUseId: string;
+      requestId: string;
+    }
   | {
       type: "fetch_history";
       sessionId: string;

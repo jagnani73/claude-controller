@@ -8,6 +8,7 @@ import { useWsState } from "@/hooks/use-ws";
 import { cn } from "@/lib/utils";
 import { wsService } from "@/services/ws.service";
 import { Markdown } from "./Markdown";
+import { useSpecializedResult } from "./use-specialized-result";
 
 interface PlanCardProps {
   sessionId: string;
@@ -36,7 +37,8 @@ type PlanAction = PlanDecision | "cancel";
  * may be showing its two-option picker, where `2` means No, so the card offers
  * nothing that would need `2` (Yes → `1`, No → Esc; the backend enforces it).
  */
-export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCardProps) {
+export function PlanCard({ sessionId, toolUseId, input, result: preview, model }: PlanCardProps) {
+  const { result, control } = useSpecializedResult(sessionId, toolUseId, preview);
   const plan = useMemo(() => planTextOf(input), [input]);
   const planless = plan === null;
   const [submitted, setSubmitted] = useState<PlanAction | null>(null);
@@ -81,8 +83,9 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
     });
   };
 
-  const lockedLabel =
-    planless && submitted === "approve-primary"
+  const lockedLabel = result?.isError
+    ? "Couldn't deliver"
+    : planless && submitted === "approve-primary"
       ? "Exited plan mode"
       : submitted === "approve-primary"
         ? `Approved · ${primaryLabel}`
@@ -90,9 +93,7 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
           ? "Approved · manual approvals"
           : submitted === "cancel"
             ? "Kept planning"
-            : result?.isError
-              ? "Couldn't deliver"
-              : "Responded";
+            : "Responded";
 
   return (
     <div className="px-4 py-2">
@@ -122,6 +123,7 @@ export function PlanCard({ sessionId, toolUseId, input, result, model }: PlanCar
         {isLocked ? (
           <div className="px-3 py-3 text-sm text-muted-foreground">
             {lockedLabel}
+            {control}
             {result && (
               <details className="mt-2">
                 <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">

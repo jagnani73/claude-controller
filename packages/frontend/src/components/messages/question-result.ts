@@ -38,6 +38,11 @@ export function resultToText(v: unknown): string | null {
       .join("");
     return joined || null;
   }
+  if (v && typeof v === "object") {
+    const block = v as { text?: unknown; content?: unknown };
+    if (typeof block.text === "string") return block.text;
+    if (Array.isArray(block.content)) return resultToText(block.content);
+  }
   return null;
 }
 

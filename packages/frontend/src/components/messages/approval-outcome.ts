@@ -1,3 +1,5 @@
+import type { ToolResult } from "common/types";
+
 /**
  * What Claude Code actually did with an answered approval, when that differs
  * from what the card would otherwise claim.
@@ -27,7 +29,7 @@ interface ToolLike {
   kind: "tool";
   toolName: string;
   input: unknown;
-  result: { value: unknown; isError: boolean } | null;
+  result: ToolResult | null;
 }
 
 interface ApprovalLike {
@@ -46,6 +48,8 @@ const HOOK_FAILED = /blocking because onFailure is "block"/;
 /** Classify a tool result as one of the approval failures above, or null. */
 export function classifyApprovalResult(result: ToolLike["result"]): ApprovalOutcome | null {
   if (!result?.isError) return null;
+  // A preview cannot reliably classify a marker beyond its prefix.
+  if (result.preview) return result.preview.approvalOutcome ?? null;
   const text = resultText(result.value).trim();
   const edit = EDIT_REJECTED.exec(text);
   if (edit) return { kind: "edit_rejected", reason: text.slice(edit[0].length).trim() || text };

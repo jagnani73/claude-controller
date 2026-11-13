@@ -27,6 +27,7 @@ import { buildPlanKeystrokes } from "./plan.input.js";
 import { buildKeystrokes } from "./question.input.js";
 import type { SessionBus, SessionBusEvent } from "./session-bus.service.js";
 import type { SessionManager } from "./session-manager.service.js";
+import { previewToolResult } from "./tool-result-preview.js";
 
 const log = LoggerService.scoped("ws");
 
@@ -172,7 +173,7 @@ function busEventToMessage(event: SessionBusEvent): ServerMessage | null {
         type: "tool_result",
         sessionId: event.sessionId,
         toolUseId: event.toolUseId,
-        result: event.result,
+        ...previewToolResult(event),
         isError: event.isError,
         timestamp: event.timestamp,
       };
@@ -1068,6 +1069,25 @@ function handleMessage(
       const streamId = agentStreamId(msg.sessionId, msg.agentId);
       state?.agentSubs.get(streamId)?.();
       state?.agentSubs.delete(streamId);
+      return;
+    }
+
+    case "fetch_tool_result": {
+      // Resolve only registered session/agent buses; never accept a disk path.
+      const bus = busForHistory(sessionManager, msg.sessionId);
+      const event = bus
+        ?.getEventLog()
+        .find((entry) => entry.kind === "tool_result" && entry.toolUseId === msg.toolUseId);
+      send(ws, {
+        type: "tool_result_full",
+        sessionId: msg.sessionId,
+        toolUseId: msg.toolUseId,
+        requestId: msg.requestId,
+        outcome:
+          event?.kind === "tool_result"
+            ? { status: "available", result: event.result, isError: event.isError }
+            : { status: "unavailable" },
+      });
       return;
     }
 

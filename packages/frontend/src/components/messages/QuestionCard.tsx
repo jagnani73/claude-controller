@@ -7,6 +7,7 @@ import { useWsState } from "@/hooks/use-ws";
 import { cn } from "@/lib/utils";
 import { wsService } from "@/services/ws.service";
 import { answerIncludesLabel, extractAnswer } from "./question-result";
+import { useSpecializedResult } from "./use-specialized-result";
 
 interface AskOption {
   label: string;
@@ -39,7 +40,8 @@ interface PerQuestionState {
 
 const blankState = (): PerQuestionState => ({ selectedLabels: [], customText: "", notes: "" });
 
-export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCardProps) {
+export function QuestionCard({ sessionId, toolUseId, input, result: preview }: QuestionCardProps) {
+  const { result, control } = useSpecializedResult(sessionId, toolUseId, preview);
   const questions = useMemo(() => extractQuestions(input), [input]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [state, setState] = useState<Record<number, PerQuestionState>>(() => {
@@ -55,6 +57,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
     return initial;
   });
   const [submitted, setSubmitted] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
   // Gate submit/cancel on a live socket: question_response is a one-shot,
   // time-sensitive action, so we don't want to optimistically lock the card and
   // queue an answer that fires (stale) on a later reconnect.
@@ -135,6 +138,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
 
   const cancel = (): void => {
     if (submitted || !connected) return;
+    setCancelled(true);
     setSubmitted(true);
     wsService.sendResponse(toolUseId, {
       type: "question_response",
@@ -170,7 +174,10 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
   // page reload — but the tool result carries the answer in prose. Recover it
   // so a reloaded "answered" card shows what was chosen instead of "No answer
   // recorded". Local state wins while live; the result is the fallback.
-  const lockedAnswerText = isLocked && result ? extractAnswer(result.value, q.question) : null;
+  const lockedAnswerText =
+    isLocked && result && !result.preview && !result.isError
+      ? extractAnswer(result.value, q.question)
+      : null;
   const recoveredLabels = lockedAnswerText
     ? q.options.filter((o) => answerIncludesLabel(lockedAnswerText, o.label)).map((o) => o.label)
     : [];
@@ -179,13 +186,12 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
   // pre-selected first-option default (single-select pre-selects options[0]) and
   // would show the wrong "You picked". Prefer the answer recovered from the
   // result. When WE submitted, trust the live local selection.
-  const answeredElsewhere = !!result && !submitted;
-  const effectiveSelectedLabels =
-    answeredElsewhere && lockedAnswerText
-      ? recoveredLabels
-      : s.selectedLabels.length > 0
-        ? s.selectedLabels
-        : recoveredLabels;
+  const trustLocal = submitted && !cancelled && !result?.isError;
+  const effectiveSelectedLabels = isLocked
+    ? trustLocal
+      ? s.selectedLabels
+      : recoveredLabels
+    : s.selectedLabels;
   const hasPreview = !q.multiSelect && q.options.some((o) => o.preview);
   const focusedOption =
     q.options.find((o) => o.label === effectiveSelectedLabels[0]) ?? q.options[0];
@@ -214,7 +220,13 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
               // Stay clickable after lock so answers can be reviewed per tab.
               // A successful result means every question was answered, even
               // after a reload wiped the local per-question state.
-              const answered = hasAnswerFor(qi) || (!!result && !result.isError);
+              const answered = isLocked
+                ? trustLocal ||
+                  (!!result &&
+                    !result.preview &&
+                    !result.isError &&
+                    extractAnswer(result.value, qq.question) !== null)
+                : hasAnswerFor(qi);
               return (
                 <button
                   type="button"
@@ -240,7 +252,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
 
           {isLocked && (
             <div className="rounded-md border border-accent/30 bg-accent/[0.06] px-3 py-2 text-sm">
-              {s.customText.trim() ? (
+              {trustLocal && s.customText.trim() ? (
                 <>
                   <span className="mr-2 text-xs uppercase tracking-wider text-muted-foreground">
                     You typed
@@ -264,9 +276,11 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
                   <span className="text-foreground">{lockedAnswerText}</span>
                 </>
               ) : (
-                <span className="text-muted-foreground italic">No answer recorded</span>
+                <span className="text-muted-foreground italic">
+                  {result?.preview ? "Saved answer not loaded" : "No answer recorded"}
+                </span>
               )}
-              {s.notes.trim() && (
+              {trustLocal && s.notes.trim() && (
                 <div className="mt-1.5 border-t border-border/30 pt-1.5">
                   <span className="mr-2 text-xs uppercase tracking-wider text-muted-foreground">
                     Note
@@ -388,6 +402,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result }: QuestionCa
             </div>
           )}
 
+          {control}
           {result && (
             <details>
               <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">

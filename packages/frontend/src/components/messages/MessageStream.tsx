@@ -2,6 +2,7 @@ import type { ClaudeModel, CompactTrigger, ServerMessage, ToolResult } from "com
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import {
   Fragment,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -88,7 +89,7 @@ export type StreamItem =
       sessionId: string;
       toolName: string;
       input: unknown;
-      result: { value: unknown; isError: boolean } | null;
+      result: ToolResult | null;
     }
   | {
       kind: "approval";
@@ -150,6 +151,7 @@ export type Action =
       toolUseId: string;
       result: unknown;
       isError: boolean;
+      preview?: ToolResult["preview"];
     }
   | {
       type: "approval_request";
@@ -355,7 +357,11 @@ export function reducer(state: State, action: Action): State {
       // hasn't arrived (or is in a not-yet-loaded history page), then fuse.
       const results = {
         ...state.results,
-        [action.toolUseId]: { value: action.result, isError: action.isError },
+        [action.toolUseId]: {
+          value: action.result,
+          isError: action.isError,
+          preview: action.preview,
+        },
       };
       return { ...state, results, items: fuseResults(state.items, results) };
     }
@@ -578,7 +584,7 @@ export function eventsToItems(
       case "tool_result": {
         // Record every result; the reducer fuses it onto the tool card whether
         // or not the matching tool_call is in this same page.
-        results[e.toolUseId] = { value: e.result, isError: e.isError };
+        results[e.toolUseId] = { value: e.result, isError: e.isError, preview: e.preview };
         const match = items.find((it) => it.kind === "tool" && it.id === e.toolUseId);
         if (match && match.kind === "tool") {
           match.result = results[e.toolUseId];
@@ -667,7 +673,9 @@ interface MessageStreamProps {
   emptyLabel?: string;
 }
 
-export function MessageStream({
+// Parent metadata/agent updates must not revisit the entire transcript.
+// Own WS subscriptions still update this component normally.
+export const MessageStream = memo(function MessageStream({
   sessionId,
   inFlightPreview,
   isProcessing,
@@ -809,6 +817,7 @@ export function MessageStream({
       toolUseId: msg.toolUseId,
       result: msg.result,
       isError: msg.isError,
+      preview: msg.preview,
     });
   });
 
@@ -1124,15 +1133,18 @@ export function MessageStream({
                     <div className="mt-1">
                       {entry.items.map((it) =>
                         it.toolName === "AskUserQuestion" ? (
-                          <QuestionCard
-                            key={questionCardKey(it)}
-                            sessionId={it.sessionId}
-                            toolUseId={it.id}
-                            input={it.input}
-                            result={it.result}
-                          />
+                          <Fragment key={questionCardKey(it)}>
+                            <QuestionCard
+                              sessionId={it.sessionId}
+                              toolUseId={it.id}
+                              input={it.input}
+                              result={it.result}
+                            />
+                          </Fragment>
                         ) : (
                           <ToolCallCard
+                            sessionId={it.sessionId}
+                            toolUseId={it.id}
                             key={it.id}
                             toolName={it.toolName}
                             input={it.input}
@@ -1173,29 +1185,33 @@ export function MessageStream({
               case "tool":
                 if (item.toolName === "AskUserQuestion") {
                   return (
-                    <QuestionCard
-                      key={questionCardKey(item)}
-                      sessionId={item.sessionId}
-                      toolUseId={item.id}
-                      input={item.input}
-                      result={item.result}
-                    />
+                    <Fragment key={questionCardKey(item)}>
+                      <QuestionCard
+                        sessionId={item.sessionId}
+                        toolUseId={item.id}
+                        input={item.input}
+                        result={item.result}
+                      />
+                    </Fragment>
                   );
                 }
                 if (item.toolName === "ExitPlanMode") {
                   return (
-                    <PlanCard
-                      key={item.id}
-                      sessionId={item.sessionId}
-                      toolUseId={item.id}
-                      input={item.input}
-                      result={item.result}
-                      model={model}
-                    />
+                    <Fragment key={item.id}>
+                      <PlanCard
+                        sessionId={item.sessionId}
+                        toolUseId={item.id}
+                        input={item.input}
+                        result={item.result}
+                        model={model}
+                      />
+                    </Fragment>
                   );
                 }
                 return (
                   <ToolCallCard
+                    sessionId={item.sessionId}
+                    toolUseId={item.id}
                     key={item.id}
                     toolName={item.toolName}
                     input={item.input}
@@ -1275,7 +1291,7 @@ export function MessageStream({
       </div>
     </div>
   );
-}
+});
 
 // Stable React key for AskUserQuestion cards. Keying on `uid` (assigned once,
 // never mutated) rather than `id` (which flips from the `pr:` placeholder to
