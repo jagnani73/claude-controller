@@ -27,7 +27,9 @@ import { buildPlanKeystrokes } from "./plan.input.js";
 import { buildKeystrokes } from "./question.input.js";
 import type { SessionBus, SessionBusEvent } from "./session-bus.service.js";
 import type { SessionManager } from "./session-manager.service.js";
+import type { TerminalManager } from "./terminal-manager.service.js";
 import { previewToolResult } from "./tool-result-preview.js";
+import { handleWorkspaceRequest } from "./workspace.service.js";
 
 const log = LoggerService.scoped("ws");
 
@@ -616,6 +618,10 @@ function handleMessage(
   config: ServerConfig,
 ): void {
   switch (msg.type) {
+    case "workspace_request":
+      void handleWorkspaceRequest(ws, msg, sessionManager, (response) => send(ws, response));
+      return;
+
     case "shell_jobs_request":
     case "shell_job_output_request": {
       // Optional for older clients; never echo unbounded/unvalidated client data.
@@ -1209,6 +1215,7 @@ export function handleConnection(
   sessionManager: SessionManager,
   hooksService: HooksService,
   config: ServerConfig,
+  terminals?: TerminalManager,
 ): void {
   clients.set(ws, {
     subscribedSessionId: null,
@@ -1230,6 +1237,7 @@ export function handleConnection(
   ws.on("message", (raw) => {
     try {
       const msg = JSON.parse(raw.toString()) as ClientMessage;
+      if (terminals?.handle(ws, msg)) return;
       handleMessage(ws, msg, sessionManager, hooksService, config);
     } catch (err) {
       log.error("Invalid message", { error: err });
@@ -1241,6 +1249,7 @@ export function handleConnection(
   // socket dead, so a half-open client is cleaned up exactly like a closed one.
   ws.on("close", () => {
     log.info("Client disconnected");
+    terminals?.disconnect(ws);
     const state = clients.get(ws);
     if (state?.cleanup) state.cleanup();
     if (state) closeAgentSubs(state);

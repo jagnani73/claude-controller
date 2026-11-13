@@ -26,6 +26,10 @@
       "import": "./dist/model.js",
       "types": "./dist/model.d.ts"
     },
+    "./terminal-types": {
+      "import": "./dist/terminal-types.js",
+      "types": "./dist/terminal-types.d.ts"
+    },
     "./version": {
       "import": "./dist/version.js",
       "types": "./dist/version.d.ts"

@@ -1,7 +1,7 @@
 import { Link, useParams } from "@tanstack/react-router";
 import type { ErrorCode, SessionStatus } from "common/types";
 import { Loader2, SearchX } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AgentsSheet } from "@/components/agents/AgentsSheet";
 import { AgentsStrip } from "@/components/agents/AgentsStrip";
 import { InputBar, type InputBarHandle } from "@/components/layout/InputBar";
@@ -19,6 +19,19 @@ import { useSessions } from "@/hooks/use-sessions";
 import { useWsMessage } from "@/hooks/use-ws";
 import { useWorkspace } from "@/lib/workspace-context";
 import { wsService } from "@/services/ws.service";
+
+const TerminalPanel = lazy(() => import("@/components/workspace/TerminalPanel"));
+const ShellJobsPanel = lazy(() =>
+  import("@/components/workspace/ShellJobsPanel").then((module) => ({
+    default: module.ShellJobsPanel,
+  })),
+);
+
+const WorkspacePanel = lazy(() =>
+  import("@/components/workspace/WorkspacePanel").then((module) => ({
+    default: module.WorkspacePanel,
+  })),
+);
 
 /**
  * Per-queue-item lifecycle:
@@ -188,6 +201,7 @@ export function SessionView() {
   // first and the snapshot that subscribing triggers is not wiped.
   const { agents, messages: agentMessages } = useAgents(sessionId);
   const [agentsOpen, setAgentsOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   /**
    * Synchronous mirror of the queue state. All mutations go through here
@@ -339,6 +353,7 @@ export function SessionView() {
     seenTurnIds.current = stored.seenTurnIds;
     interruptArmedRef.current = true;
     setAgentsOpen(false);
+    setWorkspaceOpen(false);
     beginReplay(false);
     subscribe(sessionId);
     return () => {
@@ -788,7 +803,7 @@ export function SessionView() {
   return (
     <div className="flex h-dvh flex-col">
       {session ? (
-        <SessionTopBar session={session} />
+        <SessionTopBar session={session} onOpenWorkspace={() => setWorkspaceOpen(true)} />
       ) : stopped ? (
         <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
           <SidebarToggle />
@@ -875,6 +890,27 @@ export function SessionView() {
         )}
         <SessionStatusLine key={sessionId} sessionId={sessionId} />
       </div>
+      {workspaceOpen && session && (
+        <Suspense fallback={null}>
+          <WorkspacePanel
+            key={sessionId}
+            sessionId={sessionId}
+            cwd={session.cwd}
+            open={workspaceOpen}
+            onOpenChange={setWorkspaceOpen}
+            terminal={
+              <Suspense fallback={<p className="p-4 text-sm">Loading terminal…</p>}>
+                <TerminalPanel sessionId={sessionId} />
+              </Suspense>
+            }
+            jobs={
+              <Suspense fallback={<p className="p-4 text-sm">Loading jobs…</p>}>
+                <ShellJobsPanel sessionId={sessionId} />
+              </Suspense>
+            }
+          />
+        </Suspense>
+      )}
       <AgentsSheet
         sessionId={sessionId}
         agents={agents}

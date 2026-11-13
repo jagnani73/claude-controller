@@ -4,6 +4,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type { HooksService } from "./services/hooks.service.js";
 import { LoggerService } from "./services/logger.service.js";
 import type { SessionManager } from "./services/session-manager.service.js";
+import { TerminalManager } from "./services/terminal-manager.service.js";
 import { handleConnection } from "./services/ws.service.js";
 import type { ServerConfig } from "./types/index.js";
 import { getAllowedOrigins, isOriginAllowed, isProduction } from "./utils/constants.js";
@@ -41,6 +42,7 @@ export function startServer(
   sessionManager: SessionManager,
   hooksService: HooksService,
 ): { close: () => void } {
+  const terminals = new TerminalManager(config.workDir, sessionManager);
   const httpServer = createServer((req, res) => {
     if (handleCors(req, res)) return;
 
@@ -67,14 +69,17 @@ export function startServer(
 
   const wss = new WebSocketServer({
     server: httpServer,
+    // Preserve ws's existing 100 MiB default for chat/card payloads. Terminal
+    // requests have a separate 64 KiB envelope limit after JSON parsing.
     verifyClient: ({ origin }: { origin?: string }) => isOriginAllowed(origin),
   });
 
   const awaitingPong = new WeakMap<WebSocket, boolean>();
   wss.on("connection", (ws) => {
     awaitingPong.set(ws, false);
+    ws.on("error", (error) => log.error("WebSocket transport error", { message: error.message }));
     ws.on("pong", () => awaitingPong.set(ws, false));
-    handleConnection(ws, sessionManager, hooksService, config);
+    handleConnection(ws, sessionManager, hooksService, config, terminals);
   });
   // `terminate()` emits `close`, so ws.service's close handler runs the same
   // ClientState cleanup as for a clean disconnect.
@@ -99,6 +104,9 @@ export function startServer(
   return {
     close: () => {
       log.info("Shutting down HTTP + WS server");
+      clearInterval(heartbeat);
+      terminals.dispose();
+      for (const ws of wss.clients) ws.terminate();
       wss.close();
       httpServer.close();
     },

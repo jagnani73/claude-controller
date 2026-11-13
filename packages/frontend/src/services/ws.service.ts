@@ -1,5 +1,11 @@
 import type { ClientMessage, ServerMessage } from "common/types";
 
+export interface TerminalSubscription {
+  acknowledge(after: number): void;
+  cancelAck(): void;
+  dispose(): void;
+}
+
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
 type AnyHandler = (msg: ServerMessage) => void;
@@ -216,6 +222,94 @@ class WsService {
       this.ws = null;
     }
     this.setState("disconnected");
+  }
+
+  /** Terminal keystrokes must never queue offline or replay after reconnect. */
+  sendImmediate(msg: ClientMessage): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN || this.ws.bufferedAmount > 64 * 1024) return false;
+    const data = JSON.stringify(msg);
+    if (new TextEncoder().encode(data).length + this.ws.bufferedAmount > 64 * 1024) return false;
+    try {
+      this.ws.send(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * A control-plane lease for one successful terminal subscribe. Only ACKs
+   * retry: one latest cursor and one timer, never terminal input. Disposing
+   * synchronously sends unsubscribe or abandons this socket, so a delayed
+   * release can never unsubscribe a remounted viewer of the same terminal.
+   */
+  terminalSubscription(sessionId: string, terminalId: string): TerminalSubscription {
+    const generation = this.generation;
+    let active = true;
+    let latest: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let deadline = 0;
+    const current = () => active && this.generation === generation && this.state === "connected";
+    const cancelAck = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      latest = null;
+      deadline = 0;
+    };
+    const abandon = () => {
+      if (this.generation === generation && this.ws) this.dropSocket(this.ws);
+    };
+    const flush = () => {
+      timer = null;
+      if (!current()) {
+        cancelAck();
+        return;
+      }
+      if (latest === null) return;
+      if (
+        this.sendImmediate({
+          type: "terminal_output_ack",
+          sessionId,
+          terminalId,
+          requestId: crypto.randomUUID(),
+          after: latest,
+        })
+      ) {
+        cancelAck();
+      } else if (Date.now() >= deadline) {
+        cancelAck();
+        // Recover via the rendered resume cursor instead of freezing forever.
+        abandon();
+      } else timer = setTimeout(flush, 50);
+    };
+    return {
+      acknowledge: (after) => {
+        if (!current()) return;
+        latest = Math.max(latest ?? 0, after);
+        if (!deadline) deadline = Date.now() + 5_000;
+        if (!timer) flush();
+      },
+      cancelAck,
+      dispose: () => {
+        if (!active) return;
+        const release = current();
+        active = false;
+        cancelAck();
+        if (
+          release &&
+          !this.sendImmediate({
+            type: "terminal_unsubscribe",
+            sessionId,
+            terminalId,
+            requestId: crypto.randomUUID(),
+          })
+        ) {
+          // Shared chat reconnects through its normal recovery path. No stale
+          // unsubscribe is queued onto a new socket/subscription, even in StrictMode.
+          abandon();
+        }
+      },
+    };
   }
 
   /**

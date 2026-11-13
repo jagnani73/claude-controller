@@ -1,5 +1,14 @@
 import type { ShellJobClientMessage, ShellJobServerMessage } from "../shell-job-types.js";
+import type { TerminalClientMessage, TerminalServerMessage } from "../terminal-types.js";
 import type { CliVersionStatus } from "../version.js";
+import type { WorkspaceRequest, WorkspaceResponse } from "../workspace-types.js";
+
+export type {
+  TerminalClientMessage,
+  TerminalInfo,
+  TerminalServerMessage,
+} from "../terminal-types.js";
+export type * from "../workspace-types.js";
 
 // Re-exported so consumers of `common/types` can name the type of
 // `SessionInfo.cliVersionStatus` without reaching into `common/version`.
@@ -407,6 +416,8 @@ export type ErrorMessage =
 
 /** Server → Client messages */
 export type ServerMessage =
+  | WorkspaceResponse
+  | TerminalServerMessage
   | ShellJobServerMessage
   | { type: "connected"; sessions: SessionInfo[]; workDir: string }
   | { type: "session_created"; session: SessionInfo }
@@ -632,6 +643,8 @@ export function planTextOf(input: unknown): string | null {
 
 /** Client → Server messages */
 export type ClientMessage =
+  | WorkspaceRequest
+  | TerminalClientMessage
   | ShellJobClientMessage
   | { type: "input"; sessionId: string; text: string; settings?: RespawnSettings }
   | { type: "slash_command"; sessionId: string; command: string; settings?: RespawnSettings }

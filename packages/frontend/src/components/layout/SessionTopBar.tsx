@@ -1,5 +1,5 @@
 import type { RateLimitWindow, SessionInfo } from "common/types";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, FolderOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 import { displayedModelLabel } from "@/components/sessions/model-config";
 import { PERMISSION_LABEL, PERMISSION_TONE } from "@/components/sessions/permission-config";
@@ -11,6 +11,7 @@ import { SidebarToggle } from "./SidebarToggle";
 
 interface SessionTopBarProps {
   session: SessionInfo;
+  onOpenWorkspace?: () => void;
 }
 
 function pctTone(pct: number): string {
@@ -73,7 +74,7 @@ function QuotaBadge({ label, window }: { label: string; window: RateLimitWindow 
   );
 }
 
-export function SessionTopBar({ session }: SessionTopBarProps) {
+export function SessionTopBar({ session, onOpenWorkspace }: SessionTopBarProps) {
   const isMobile = useIsMobile();
   const [expanded, setExpanded] = useState(false);
 
@@ -138,6 +139,21 @@ export function SessionTopBar({ session }: SessionTopBarProps) {
         >
           {cwd ?? ""}
         </span>
+        {onOpenWorkspace && (
+          <button
+            type="button"
+            title="Open workspace files and changes"
+            aria-label="Open workspace files and changes"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenWorkspace();
+            }}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent/10 hover:text-foreground"
+          >
+            <FolderOpen className="size-4" />
+            <span className="hidden md:inline">Workspace</span>
+          </button>
+        )}
         {canToggle && (
           <button
             type="button"
