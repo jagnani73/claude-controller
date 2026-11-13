@@ -385,8 +385,9 @@ export async function runStatusLine(
       proc.stdin.write(
         isWindows
           ? JSON.stringify({
+              shell: direct ? "bash" : "cmd",
               exe: direct?.exe ?? "cmd.exe",
-              args: direct?.args ?? ["/c", command],
+              args: direct?.args ?? ["/d", "/s", "/c", `"${command}"`],
               payload: payloadJson,
             })
           : `${payloadJson}\n`,

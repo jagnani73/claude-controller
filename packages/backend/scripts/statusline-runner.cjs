@@ -9,8 +9,13 @@ process.stdin.on("data", (chunk) => {
 });
 process.stdin.on("end", () => {
   try {
-    const { exe, args, payload } = JSON.parse(input);
-    const child = spawn(exe, args, { windowsHide: true });
+    const { shell, exe, args, payload } = JSON.parse(input);
+    // CMD receives /d /s /c plus an outer-quoted command, like Node's shell
+    // mode. CRT escaping would corrupt its quotes; Bash still needs it.
+    const child = spawn(exe, args, {
+      windowsHide: true,
+      windowsVerbatimArguments: shell === "cmd",
+    });
     child.stdout.pipe(process.stdout);
     child.stderr.pipe(process.stderr);
     child.stdin.on("error", () => {}); // Commands need not read stdin.
