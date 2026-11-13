@@ -40,6 +40,10 @@ vi.mock("../src/services/pty.service.js", () => ({
 }));
 
 vi.mock("../src/services/statusline.service.js", () => ({
+  StatusLineScheduler: class {
+    request() {}
+    stop() {}
+  },
   statusLineDumpScriptPath: () => "dump.cjs",
   statusLinePayloadPath: () => "payload.json",
   readDumpedPayload: async () => null,

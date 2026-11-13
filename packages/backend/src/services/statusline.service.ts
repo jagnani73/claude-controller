@@ -102,6 +102,55 @@ export interface StatusLinePayload {
 
 const RUN_TIMEOUT_MS = 5000;
 
+/** Leading + trailing latest-value work, with no overlapping executions. */
+export class StatusLineScheduler {
+  private timer: NodeJS.Timeout | null = null;
+  private running = false;
+  private pending = false;
+  private lastStarted = -Infinity;
+  private readonly controller = new AbortController();
+
+  constructor(
+    private readonly work: (signal: AbortSignal) => Promise<void>,
+    private readonly intervalMs = 1000,
+  ) {}
+
+  request(): void {
+    if (this.controller.signal.aborted) return;
+    this.pending = true;
+    this.schedule();
+  }
+
+  private schedule(): void {
+    if (this.controller.signal.aborted || this.running || this.timer || !this.pending) return;
+    const delay = Math.max(0, this.intervalMs - (Date.now() - this.lastStarted));
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.pending = false;
+      this.running = true;
+      this.lastStarted = Date.now();
+      void this.work(this.controller.signal)
+        .catch((err: unknown) => {
+          if (!this.controller.signal.aborted) {
+            log.warn("status-line tick failed", { error: String(err) });
+          }
+        })
+        .finally(() => {
+          this.running = false;
+          this.schedule();
+        });
+    }, delay);
+    this.timer.unref();
+  }
+
+  stop(): void {
+    this.controller.abort();
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.pending = false;
+  }
+}
+
 /**
  * Absolute path to the committed `statusline-dump.cjs` bridge script that Claude
  * Code runs as its statusLine command (see scripts/statusline-dump.cjs). Resolved
@@ -194,7 +243,12 @@ async function tryReadSettings(path: string): Promise<SettingsJson | null> {
  * returns null on timeout / non-zero exit so a broken script never crashes
  * the session loop.
  */
-export async function runStatusLine(command: string, payloadJson: string): Promise<string | null> {
+export async function runStatusLine(
+  command: string,
+  payloadJson: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  if (signal?.aborted) return null;
   return await new Promise<string | null>((resolve) => {
     const isWindows = platform() === "win32";
     const direct = isWindows ? directBashSpawn(command) : null;
@@ -202,36 +256,95 @@ export async function runStatusLine(command: string, payloadJson: string): Promi
       ? spawn(direct.exe, direct.args, { windowsHide: true })
       : isWindows
         ? spawn("cmd.exe", ["/c", command], { windowsHide: true })
-        : spawn(command, { shell: "/bin/sh" });
+        : spawn(command, { shell: "/bin/sh", detached: true });
 
     let stdout = "";
+    let stderr = "";
     let finished = false;
+    let cancelled = false;
+    let cleanupTimer: NodeJS.Timeout | undefined;
+    let killer: ReturnType<typeof spawn> | undefined;
     const done = (value: string | null) => {
       if (finished) return;
       finished = true;
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      signal?.removeEventListener("abort", abort);
+      proc.stdin.destroy();
+      proc.stdout.destroy();
+      proc.stderr.destroy();
+      killer?.kill();
+      proc.unref();
       resolve(value);
     };
 
+    const killGroup = (signal: NodeJS.Signals) => {
+      if (!proc.pid) return;
+      try {
+        // detached creates a group owned by this invocation, never our server's.
+        process.kill(-proc.pid, signal);
+      } catch {
+        // Already gone, or group termination unavailable.
+        if (proc.exitCode === null) proc.kill(signal);
+      }
+    };
+    const abort = () => {
+      if (cancelled || finished) return;
+      cancelled = true;
+      stdout = "";
+      stderr = "";
+      clearTimeout(timer);
+      // Stop consuming immediately, but keep the scheduler occupied throughout
+      // bounded tree cleanup. `close` is not a deadline: inherited pipes can
+      // survive the shell forever, even after its exit event.
+      proc.stdin.destroy();
+      proc.stdout.destroy();
+      proc.stderr.destroy();
+      if (isWindows) {
+        // Do not kill the shell first: taskkill needs it to discover descendants.
+        // Never target a name or a PID whose exit we have already observed.
+        if (proc.pid && proc.exitCode === null && proc.signalCode === null) {
+          killer = spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+            windowsHide: true,
+            stdio: "ignore",
+          });
+          killer.on("error", () => {});
+        }
+        cleanupTimer = setTimeout(() => {
+          if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+          done(null);
+        }, 1000);
+      } else {
+        killGroup("SIGTERM");
+        cleanupTimer = setTimeout(() => {
+          killGroup("SIGKILL");
+          cleanupTimer = setTimeout(() => done(null), 250);
+        }, 250);
+      }
+    };
     const timer = setTimeout(() => {
-      proc.kill();
       log.warn("status-line command timed out", { command });
-      done(null);
+      abort();
     }, RUN_TIMEOUT_MS);
+    signal?.addEventListener("abort", abort, { once: true });
+    proc.stdin.on("error", () => {
+      // EPIPE when a command exits without consuming its input.
+    });
 
     proc.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      if (!cancelled && !finished) stdout += chunk.toString("utf8");
     });
     proc.on("error", (err) => {
       clearTimeout(timer);
       log.warn("status-line spawn failed", { error: err.message });
-      done(null);
+      if (!cancelled) done(null);
     });
-    let stderr = "";
     proc.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      if (!cancelled && !finished) stderr += chunk.toString("utf8");
     });
     proc.on("close", (code) => {
       clearTimeout(timer);
+      if (cancelled) return;
       if (code !== 0) {
         log.warn("status-line exited non-zero", {
           code,

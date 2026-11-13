@@ -126,6 +126,7 @@ export class TranscriptWatcher {
     // and we don't want them streaming as "live" events to any subscriber.
     // Subscribers connecting after start() see them via the event-log tail.
     await this.drain();
+    if (this.stopped) return;
     this.initialScan = false;
     // Replay what the drain observed. Both are needed on resume: the drain
     // records them but suppresses their callbacks, and `handleAssistant` dedupes
@@ -150,6 +151,8 @@ export class TranscriptWatcher {
     // parent dir until our file shows up, then attach the file-level watcher.
     if (existsSync(this.path)) {
       this.watch();
+      // Catch appends between the initial stat/read and attaching the watcher.
+      this.scheduleDrain();
       return;
     }
     this.watchForFile();
@@ -284,26 +287,27 @@ export class TranscriptWatcher {
     } catch {
       return; // file may not exist yet
     }
-    if (size <= this.offset) return;
+    if (this.stopped || size <= this.offset) return;
 
     const stream = createReadStream(this.path, {
       start: this.offset,
       end: size - 1,
+      highWaterMark: 64 * 1024,
     });
 
-    let chunk = "";
-    try {
-      for await (const piece of stream) {
-        chunk += this.decoder.write(piece as Buffer);
-      }
-    } catch (err) {
-      // The range is re-read from the unchanged offset next time, so drop any
-      // partial character this failed read left in the decoder.
-      this.decoder.end();
-      throw err;
+    for await (const piece of stream) {
+      if (this.stopped) break;
+      const bytes = piece as Buffer;
+      // Commit each consumed byte range, not the stat size: a short/erroring
+      // read must resume after the processed prefix without replaying it or
+      // discarding the decoder's partial UTF-8 character.
+      const chunk = this.decoder.write(bytes);
+      this.offset += bytes.length;
+      this.consumeChunk(chunk);
     }
-    this.offset = size;
+  }
 
+  private consumeChunk(chunk: string): void {
     const combined = this.pendingBuffer + chunk;
     const lines = combined.split("\n");
     // Last element is incomplete (no trailing \n) or empty

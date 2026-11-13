@@ -43,6 +43,7 @@ import {
   readDumpedPayload,
   resolveStatusLineCommand,
   runStatusLine,
+  StatusLineScheduler,
   statusLineDumpScriptPath,
   statusLinePayloadPath,
 } from "../services/statusline.service.js";
@@ -129,8 +130,7 @@ export class Session extends EventEmitter<SessionEvents> {
   private pendingEffort: EffortLevel | null = null;
   private statusLineTimer: NodeJS.Timeout | null = null;
   private statusLineWatcher: FSWatcher | null = null;
-  private statusLineInFlight = false;
-  private statusLinePending = false;
+  private statusLineScheduler: StatusLineScheduler | null = null;
   private lastStatusLine = "";
   /** Last raw payload processed — skip redundant absorb + statusline spawn. */
   private lastDumpedPayload: string | null = null;
@@ -675,7 +675,8 @@ export class Session extends EventEmitter<SessionEvents> {
    * Status line is driven by Claude Code itself: it invokes our injected
    * dump script every time it re-renders its statusline, which writes the
    * authoritative payload JSON to disk. We `fs.watch` the parent dir and
-   * pick up each write reactively — no stale-data window from a poll loop.
+   * coalesce writes into a leading/trailing read at most once per second.
+   * Each read uses the latest file, so a final burst update is never dropped.
    *
    * A 30s safety-net interval covers the case where the OS swallows a watch
    * event (rare on Windows under heavy I/O).
@@ -684,67 +685,43 @@ export class Session extends EventEmitter<SessionEvents> {
     const SAFETY_INTERVAL_MS = 30_000;
     let warnedMissing = false;
 
-    const tick = async () => {
-      if (!this.resolved) return;
-      if (this.statusLineInFlight) {
-        this.statusLinePending = true;
+    const tick = async (signal: AbortSignal) => {
+      if (!this.resolved || signal.aborted) return;
+      const dumped = await readDumpedPayload(this.statusLinePayloadFile);
+      if (signal.aborted || !dumped) return;
+      if (dumped === this.lastDumpedPayload) return;
+      // Metadata is useful even without a user's rendering command. Keep all
+      // snapshot counters; only identical snapshots suppress a broadcast.
+      this.absorbDumpedPayload(dumped);
+      // Settings rarely change mid-session, so resolve once and reuse for the
+      // session's lifetime — a statusLine config edit needs a restart to apply.
+      const command =
+        this.cachedStatusLineCommand ?? (await resolveStatusLineCommand(this.config.cwd));
+      if (signal.aborted) return;
+      if (!command) {
+        if (!warnedMissing) {
+          log.info("No statusLine configured", { token: this.spawnToken });
+          warnedMissing = true;
+        }
         return;
       }
-      this.statusLineInFlight = true;
-      try {
-        // Settings rarely change mid-session, so resolve once and reuse for the
-        // session's lifetime — a statusLine config edit needs a restart to apply.
-        const command =
-          this.cachedStatusLineCommand ?? (await resolveStatusLineCommand(this.config.cwd));
-        if (!command) {
-          if (!warnedMissing) {
-            log.info("No statusLine configured", { token: this.spawnToken });
-            warnedMissing = true;
-          }
-          return;
-        }
-        this.cachedStatusLineCommand = command;
-        const dumped = await readDumpedPayload(this.statusLinePayloadFile);
-        // Refuse to render until Claude Code's first authoritative payload
-        // lands — anything earlier would be synthesized from create-time
-        // defaults (model alias, ctx 0%) and mislead the user.
-        if (!dumped) return;
-        // Claude rewrites the payload on every render; when the content is
-        // byte-identical to the last *successfully rendered* one there's nothing
-        // new, so skip the parse + subprocess spawn entirely.
-        if (dumped === this.lastDumpedPayload) return;
-        this.absorbDumpedPayload(dumped);
-        const output = await runStatusLine(command, dumped);
-        // Mark the payload as seen only after a successful render — a transient
-        // failure (timeout/spawn) must retry on the next identical tick, not be
-        // permanently swallowed.
-        if (output == null) return;
-        this.lastDumpedPayload = dumped;
-        const trimmed = output.replace(/\r?\n$/, "");
-        if (trimmed === this.lastStatusLine) return;
-        this.lastStatusLine = trimmed;
-        this.emit("statusLine", trimmed);
-      } finally {
-        this.statusLineInFlight = false;
-        if (this.statusLinePending) {
-          this.statusLinePending = false;
-          void tick().catch((err) =>
-            log.warn("status-line tick failed", {
-              token: this.spawnToken,
-              error: (err as Error).message,
-            }),
-          );
-        }
-      }
+      this.cachedStatusLineCommand = command;
+
+      const output = await runStatusLine(command, dumped, signal);
+      // Mark the payload as seen only after a successful render — a transient
+      // failure (timeout/spawn) must retry on the next identical tick, not be
+      // permanently swallowed.
+      if (signal.aborted || output == null) return;
+      this.lastDumpedPayload = dumped;
+      const trimmed = output.replace(/\r?\n$/, "");
+      if (trimmed === this.lastStatusLine) return;
+      this.lastStatusLine = trimmed;
+      this.emit("statusLine", trimmed);
     };
 
-    const safeTick = () =>
-      void tick().catch((err) =>
-        log.warn("status-line tick failed", {
-          token: this.spawnToken,
-          error: (err as Error).message,
-        }),
-      );
+    const scheduler = new StatusLineScheduler(tick);
+    this.statusLineScheduler = scheduler;
+    const safeTick = () => scheduler.request();
 
     // Ensure the parent dir exists so watch() doesn't throw before Claude
     // Code's first write creates the file.
@@ -1523,6 +1500,8 @@ export class Session extends EventEmitter<SessionEvents> {
    * Any dev-only `.raw` capture is intentionally left on disk for post-mortem.
    */
   private teardownStatusLineAndCapture(): void {
+    this.statusLineScheduler?.stop();
+    this.statusLineScheduler = null;
     if (this.statusLineTimer) {
       clearInterval(this.statusLineTimer);
       this.statusLineTimer = null;
