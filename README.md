@@ -167,7 +167,8 @@ Priority order:
 1. **Safe commands and state transitions:** map command support and verify
    conversation/directory changes, worktrees and otherwise invisible dialogs.
 2. **Everyday input and setup:** commands/skills discovery, effective configuration,
-   attachments/file context and scoped permission controls.
+   file navigation/context conveniences and scoped permission controls.
+   Attachments are excluded for now.
 3. **Recovery and unattended work:** checkpoints/branches, complete history,
    task/schedule visibility, then attention routing and push notifications.
 4. **Platform-dependent gaps:** Git actions, previews and integrations, prioritized
