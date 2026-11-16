@@ -43,14 +43,21 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  animated = true,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
+  /** Opt out when content must be usable even if the host suspends animation frames. */
+  animated?: boolean;
 }) {
   return (
     <SheetPortal>
-      <SheetOverlay />
+      <SheetOverlay
+        className={
+          !animated ? "data-[state=open]:animate-none data-[state=closed]:animate-none" : undefined
+        }
+      />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
@@ -63,6 +70,8 @@ function SheetContent({
             "inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
           side === "bottom" &&
             "inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
+          !animated &&
+            "transition-none data-[state=open]:animate-none data-[state=closed]:animate-none",
           className,
         )}
         {...props}

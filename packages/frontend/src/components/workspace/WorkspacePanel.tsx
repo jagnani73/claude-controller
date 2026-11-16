@@ -47,7 +47,12 @@ export function WorkspacePanel({
 }: WorkspacePanelProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:w-[96vw] sm:max-w-[1100px]">
+      {/* Embedded/backgrounded browsers can suspend slide-in frames offscreen. */}
+      <SheetContent
+        animated={false}
+        side="right"
+        className="w-full gap-0 p-0 sm:w-[96vw] sm:max-w-[1100px]"
+      >
         {open && (
           <WorkspaceContents
             key={sessionId}
