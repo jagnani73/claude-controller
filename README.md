@@ -153,34 +153,29 @@ SSH-grade reach without exposing anything to the internet. Threat model, hardeni
 
 ## Roadmap
 
-What works today: session control, the hardened Tailscale + Caddy transport, one-tap tool approvals, the AskUserQuestion relay, plan approval (`ExitPlanMode`), slash-command *sending*, model/effort/mode switching, and the installable PWA. What's next:
+**Claude Code feature parity is the priority.** See the maintained
+[feature-parity checklist](docs/feature-parity.md) for current support, gaps,
+evidence and implementation order.
 
-### Interactive features
+Current native workflows include session creation/resume, per-call approvals,
+question/plan cards, model controls, runtime-agent views, read-only files/diffs,
+independent terminals and read-only Claude shell jobs. Coverage limits matter:
+sending a slash command or inheriting a plugin is not full interactive parity.
 
-- **Slash-command discovery** — a `/` autocomplete menu listing built-in + project + plugin commands with their args. (Sending already works; discovery is the missing half.)
-- **Subagents (agents) view** — nested, collapsible rendering of `Task`-spawned subagents so a fanned-out run stays legible on a phone.
-- **File-diff rendering** — mobile-friendly diffs for `Edit`/`Write` in the tool cards (currently raw tool I/O).
-- **Image / attachment send** — snap or paste a screenshot straight into a session.
-- **File browser / viewer** — open and read actual project files from the phone, beyond the diffs shown in tool cards.
-- **Port tunneling** — reach a dev server a session starts (e.g. `localhost:3000`) through the tunnel and open it on your phone.
-- *Internal:* a shared "drive-an-ink-picker + confirm" helper to de-risk the timing-fragile keystroke flows that plan approval and the slash menu inherit.
+Priority order:
 
-### Multi-session
+1. **Safe commands and state transitions:** map command support and verify
+   conversation/directory changes, worktrees and otherwise invisible dialogs.
+2. **Everyday input and setup:** commands/skills discovery, effective configuration,
+   attachments/file context and scoped permission controls.
+3. **Recovery and unattended work:** checkpoints/branches, complete history,
+   task/schedule visibility, then attention routing and push notifications.
+4. **Platform-dependent gaps:** Git actions, previews and integrations, prioritized
+   from the checklist rather than added speculatively.
 
-- **Attention routing** — fast session switching plus a badge when a backgrounded session needs input.
-- **Push notifications** — alert the phone when a session needs input (a pending approval/question) or finishes a turn, so you don't have to keep the app open.
-
-### Reliability
-
-- **Run as a durable service** — wrap `pnpm start` so the backend + Caddy start on boot and survive sleep (Windows service via NSSM, a logon Scheduled Task, or pm2).
-- **Session-registry persistence** — state is in-memory, so a backend restart loses the session list (transcripts persist on disk). A small persisted registry removes the "restarted and my sessions vanished" cliff.
-- **Adaptive history replay** — the reconnect replays only the recent transcript tail; long sessions need a bigger/adaptive window.
-- **Test coverage** — `pnpm test` (Vitest) covers pure logic, and `scripts/verify/` probes the CLI hook contracts and the Shift+Tab permission cycle on a version bump. Still uncovered: the services themselves (no integration tests around `Session`/`SessionBus`), the frontend, and — most importantly — the AskUserQuestion and plan picker relays, which need an interactive PTY and remain a manual check.
-
-### Hardening (optional)
-
-- **Tailnet lock + device approval** in the Tailscale admin (2FA + HTTPS certs already enabled).
-- **PWA idle timeout** — auto-disconnect after inactivity.
+The [verification guide](scripts/verify/README.md) lists the automated relay
+probes and remaining manual picker cases. The roadmap preserves the project's
+CLI-only, Tailscale/Caddy and no-database constraints unless explicitly revisited.
 
 ---
 
