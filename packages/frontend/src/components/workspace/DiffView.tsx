@@ -1,7 +1,7 @@
 import type { DiffLine, WorkspaceResult } from "common/types";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useIsMobile } from "@/hooks/use-mobile";
+
 import { cn } from "@/lib/utils";
 
 type Diff = Extract<WorkspaceResult, { kind: "diff" }>;
@@ -35,7 +35,19 @@ const tone = (line?: DiffLine) =>
   line?.kind === "add" ? "bg-success/10" : line?.kind === "remove" ? "bg-destructive/10" : "";
 
 export function DiffView({ diff }: { diff: Diff }) {
-  const mobile = useIsMobile();
+  const toolbar = useRef<HTMLDivElement>(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const element = toolbar.current;
+    if (!element) return;
+    // The file list shares desktop space: use the viewer's width, not the
+    // whole screen, before trying to fit two columns of source.
+    const measure = () => setWide(element.clientWidth >= 600);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const [unified, setUnified] = useState(false);
   const [context, setContext] = useState(false);
   const [page, setPage] = useState(0);
@@ -54,16 +66,19 @@ export function DiffView({ diff }: { diff: Diff }) {
           row.left?.kind !== "context" ||
           all.slice(Math.max(0, i - 3), i + 4).some((near) => near.left?.kind !== "context"),
       );
-  const split = !mobile && !unified;
+  const split = wide && !unified;
   const total = split ? splitVisible.length : visible.length;
   const start = Math.min(page * 300, Math.max(0, Math.floor((total - 1) / 300) * 300));
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1 text-xs text-muted-foreground">
-        <span className="mr-auto">
+      <div
+        ref={toolbar}
+        className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1 text-xs text-muted-foreground [&_button]:min-h-10 sm:[&_button]:min-h-8"
+      >
+        <span className="mr-auto min-w-0 break-words">
           {diff.oldLabel} → {diff.newLabel} · read-only
         </span>
-        {!mobile && (
+        {wide && (
           <Button
             size="sm"
             variant="ghost"
@@ -89,12 +104,12 @@ export function DiffView({ diff }: { diff: Diff }) {
         </Button>
       </div>
       {diff.notice && (
-        <output className="border-b border-border/60 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+        <output className="shrink-0 break-words border-b border-border/60 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
           {diff.notice}
         </output>
       )}
       <section
-        className="min-h-0 flex-1 overflow-auto"
+        className="min-h-32 min-w-0 flex-1 overflow-auto overscroll-x-contain overscroll-y-auto"
         // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard users need to scroll the diff horizontally
         tabIndex={0}
         aria-label={split ? "Side-by-side diff" : "Unified diff"}
@@ -145,7 +160,7 @@ export function DiffView({ diff }: { diff: Diff }) {
         )}
       </section>
       {total > 300 && (
-        <div className="flex items-center justify-between border-t border-border/60 px-3 py-1 text-xs">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 border-t border-border/60 px-3 py-1 text-xs [&_button]:min-h-10 sm:[&_button]:min-h-8">
           <Button
             size="sm"
             variant="ghost"

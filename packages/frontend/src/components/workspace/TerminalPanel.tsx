@@ -422,7 +422,8 @@ function TerminalSessionPanel({ sessionId }: { sessionId: string }) {
   }, [selected, loaded, sessionId]);
 
   const connected = connection === "connected";
-  const buttonClass = "rounded border px-2 py-1 text-xs disabled:opacity-40";
+  const buttonClass =
+    "min-h-11 min-w-11 rounded border px-2 py-1 text-xs disabled:opacity-40 sm:min-h-9 sm:min-w-9";
   function create(retry = false) {
     if (busy || (uncertainCreations.has(sessionId) && !retry)) return;
     const requestId = retry && retryCreate ? retryCreate.requestId : crypto.randomUUID();
@@ -450,8 +451,11 @@ function TerminalSessionPanel({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <section aria-label="User terminal" className="flex h-full min-h-80 flex-col gap-2 p-3">
-      <p className="text-xs text-amber-600 dark:text-amber-400">
+    <section
+      aria-label="User terminal"
+      className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-auto overscroll-contain p-3 [&>*]:shrink-0"
+    >
+      <p className="break-words text-xs text-amber-600 dark:text-amber-400">
         Machine terminal · Commands run on the host as your user, not through Claude. This is not a
         sandbox.
       </p>
@@ -480,7 +484,7 @@ function TerminalSessionPanel({ sessionId }: { sessionId: string }) {
         )}
         <select
           aria-label="Select terminal"
-          className="max-w-48 rounded border bg-background p-1 text-xs"
+          className="min-h-11 min-w-0 max-w-full rounded border bg-background p-1 text-xs sm:min-h-9 sm:max-w-56"
           value={selected ?? ""}
           disabled={closePending}
           onChange={(event) => setSelected(event.target.value || null)}
@@ -570,7 +574,7 @@ function TerminalSessionPanel({ sessionId }: { sessionId: string }) {
           </div>
         </fieldset>
       )}
-      <output className="text-xs text-muted-foreground">
+      <output className="min-w-0 break-words text-xs text-muted-foreground">
         {!connected
           ? `${connection} · keyboard disabled`
           : current
@@ -583,15 +587,15 @@ function TerminalSessionPanel({ sessionId }: { sessionId: string }) {
         )}
       </output>
       {(error || current?.error) && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="break-all text-xs text-destructive">
           {error || current?.error}
         </p>
       )}
-      {notice && <output className="text-xs text-amber-600">{notice}</output>}
+      {notice && <output className="break-words text-xs text-amber-600">{notice}</output>}
       <section
         ref={host}
         aria-label="Terminal output"
-        className="min-h-60 flex-1 overflow-auto rounded bg-[#101318] p-1"
+        className="min-h-40 min-w-0 flex-1 overflow-auto rounded bg-[#101318] p-1 sm:min-h-60"
       />
       <section className="flex flex-wrap gap-2" aria-label="Terminal keyboard shortcuts">
         <button

@@ -51,7 +51,7 @@ export function WorkspacePanel({
       <SheetContent
         animated={false}
         side="right"
-        className="w-full gap-0 p-0 sm:w-[96vw] sm:max-w-[1100px]"
+        className="h-dvh max-h-dvh min-w-0 w-full gap-0 overflow-hidden p-0 pb-[env(safe-area-inset-bottom)] sm:w-[96vw] sm:max-w-[1100px]"
       >
         {open && (
           <WorkspaceContents
@@ -77,52 +77,55 @@ function WorkspaceContents({
   const [revision, setRevision] = useState(0);
   return (
     <>
-      <SheetHeader className="shrink-0 border-b border-border/60 pr-12">
+      <SheetHeader className="min-w-0 shrink-0 px-3 py-2 pr-12 sm:p-4 sm:pr-12">
         <SheetTitle className="font-serif text-lg">Workspace</SheetTitle>
         <SheetDescription className="truncate font-mono text-xs" title={cwd}>
           {cwd}
         </SheetDescription>
-        <div className="flex flex-wrap items-center gap-1 pt-2">
-          <TabButton active={tab === "files"} onClick={() => setTab("files")}>
-            <Folder className="size-3.5" />
-            Files
-          </TabButton>
-          <TabButton active={tab === "changes"} onClick={() => setTab("changes")}>
-            <GitCompareArrows className="size-3.5" />
-            Changes
-          </TabButton>
-          {terminal !== undefined && (
-            <TabButton active={tab === "terminal"} onClick={() => setTab("terminal")}>
-              <Terminal className="size-3.5" />
-              Terminal
-            </TabButton>
-          )}
-          {jobs !== undefined && (
-            <TabButton active={tab === "jobs"} onClick={() => setTab("jobs")}>
-              <ListChecks className="size-3.5" />
-              Jobs
-            </TabButton>
-          )}
-          {(tab === "files" || tab === "changes") && (
-            <Button
-              className="ml-auto"
-              variant="ghost"
-              size="icon"
-              title="Refresh workspace"
-              aria-label="Refresh workspace"
-              onClick={() => setRevision((value) => value + 1)}
-            >
-              <RefreshCw className="size-4" />
-            </Button>
-          )}
-        </div>
       </SheetHeader>
+      <nav
+        aria-label="Workspace views"
+        className="flex min-w-0 shrink-0 items-center gap-1 border-b border-border/60 p-2"
+      >
+        <TabButton active={tab === "files"} onClick={() => setTab("files")}>
+          <Folder className="size-3.5" />
+          Files
+        </TabButton>
+        <TabButton active={tab === "changes"} onClick={() => setTab("changes")}>
+          <GitCompareArrows className="size-3.5" />
+          Changes
+        </TabButton>
+        {terminal !== undefined && (
+          <TabButton active={tab === "terminal"} onClick={() => setTab("terminal")}>
+            <Terminal className="size-3.5" />
+            Terminal
+          </TabButton>
+        )}
+        {jobs !== undefined && (
+          <TabButton active={tab === "jobs"} onClick={() => setTab("jobs")}>
+            <ListChecks className="size-3.5" />
+            Jobs
+          </TabButton>
+        )}
+        {(tab === "files" || tab === "changes") && (
+          <Button
+            className="size-11 shrink-0 sm:size-9"
+            variant="ghost"
+            size="icon"
+            title="Refresh workspace"
+            aria-label="Refresh workspace"
+            onClick={() => setRevision((value) => value + 1)}
+          >
+            <RefreshCw className="size-4" />
+          </Button>
+        )}
+      </nav>
       {tab === "files" ? (
         <FilesPanel sessionId={sessionId} revision={revision} />
       ) : tab === "changes" ? (
         <ChangesPanel sessionId={sessionId} revision={revision} />
       ) : (
-        <div key={tab} className="min-h-0 flex-1">
+        <div key={tab} className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {tab === "terminal" ? terminal : jobs}
         </div>
       )}
@@ -145,7 +148,7 @@ function TabButton({
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md border border-border/60 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent/10",
+        "inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1 rounded-md border border-border/60 px-1 py-2 text-xs text-muted-foreground hover:bg-accent/10 sm:min-h-9 sm:flex-none sm:px-3 [&_svg]:hidden sm:[&_svg]:block",
         active && "border-accent/50 bg-accent/15 text-foreground",
       )}
     >
@@ -165,7 +168,7 @@ function ReadState({
 }) {
   return (
     <div
-      className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground"
+      className="flex min-h-0 min-w-0 flex-1 flex-col items-center gap-3 overflow-auto break-words p-4 text-center text-sm text-muted-foreground sm:p-6"
       aria-live="polite"
     >
       {error ? (
@@ -192,21 +195,24 @@ function Breadcrumbs({ path, onNavigate }: { path: string; onNavigate: (path: st
   return (
     <nav
       aria-label="Workspace directory"
-      className="flex flex-wrap items-center gap-1 border-b border-border/60 px-3 py-2 text-xs"
+      className="flex max-h-24 min-w-0 shrink-0 flex-wrap items-center gap-1 overflow-auto border-b border-border/60 px-2 py-1 text-xs"
     >
       <button
         type="button"
-        className="rounded px-1 py-1 hover:bg-muted"
+        className="min-h-10 shrink-0 rounded px-2 py-1 hover:bg-muted sm:min-h-8"
         onClick={() => onNavigate("")}
       >
         Workspace
       </button>
       {parts.map((part, index) => (
-        <span key={parts.slice(0, index + 1).join("/")} className="flex min-w-0 items-center gap-1">
+        <span
+          key={parts.slice(0, index + 1).join("/")}
+          className="flex min-w-0 max-w-full items-center gap-1"
+        >
           <span className="text-muted-foreground">/</span>
           <button
             type="button"
-            className="truncate rounded px-1 py-1 hover:bg-muted"
+            className="min-h-10 min-w-0 truncate rounded px-2 py-1 hover:bg-muted sm:min-h-8"
             onClick={() => onNavigate(parts.slice(0, index + 1).join("/"))}
           >
             {part}
@@ -230,7 +236,7 @@ function Pagination({
 }) {
   if (!offset && next === undefined) return null;
   return (
-    <div className="flex shrink-0 items-center justify-between border-t border-border/60 px-2 py-1 text-xs">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 border-t border-border/60 px-2 py-1 text-xs [&_button]:min-h-10 sm:[&_button]:min-h-8">
       <Button
         size="sm"
         variant="ghost"
@@ -263,17 +269,17 @@ function FilesPanel({ sessionId, revision }: PanelProps) {
     setSelected(null);
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <Breadcrumbs path={directory} onNavigate={navigate} />
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
         <section
           aria-label="Workspace files"
           className={cn(
-            "flex min-h-0 w-full flex-col md:w-64 md:shrink-0 md:border-r md:border-border/60",
-            selected && "hidden md:flex",
+            "flex min-h-0 min-w-0 w-full flex-col lg:w-64 lg:shrink-0 lg:border-r lg:border-border/60",
+            selected && "hidden lg:flex",
           )}
         >
-          <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-1 text-xs text-muted-foreground">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 border-b border-border/60 px-3 py-1 text-xs text-muted-foreground">
             <span>Files · read-only</span>
             <CopyPath path={directory} />
           </div>
@@ -286,7 +292,7 @@ function FilesPanel({ sessionId, revision }: PanelProps) {
                   <button
                     type="button"
                     onClick={() => navigate(directory.split("/").slice(0, -1).join("/"))}
-                    className="flex w-full items-center gap-2 rounded p-2 text-left text-sm hover:bg-muted"
+                    className="flex min-h-11 w-full items-center gap-2 rounded p-2 text-left text-sm hover:bg-muted"
                   >
                     <ArrowLeft className="size-4" />
                     Parent directory
@@ -307,7 +313,7 @@ function FilesPanel({ sessionId, revision }: PanelProps) {
                       entry.kind === "directory" ? navigate(entry.path) : setSelected(entry.path)
                     }
                     className={cn(
-                      "flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-muted disabled:opacity-50",
+                      "flex min-h-11 w-full items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-muted disabled:opacity-50",
                       selected === entry.path && "bg-accent/10",
                     )}
                   >
@@ -341,7 +347,7 @@ function FilesPanel({ sessionId, revision }: PanelProps) {
             onBack={() => setSelected(null)}
           />
         ) : (
-          <div className="hidden flex-1 items-center justify-center p-6 text-sm text-muted-foreground md:flex">
+          <div className="hidden min-w-0 flex-1 items-center justify-center p-6 text-sm text-muted-foreground lg:flex">
             Choose a file to view its source.
           </div>
         )}
@@ -359,7 +365,11 @@ function FileDetail({
   const [lineOffset, setLineOffset] = useState(0);
   const read = useWorkspaceRequest(sessionId, { kind: "file", path, lineOffset }, revision);
   return (
-    <section aria-label="Selected file" className="flex min-h-0 min-w-0 flex-1 flex-col">
+    // Let detail chrome scroll on short screens; the source retains a readable minimum.
+    <section
+      aria-label="Selected file"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto overscroll-contain"
+    >
       <DetailHeader path={path} onBack={onBack} />
       {!read.result ? (
         <ReadState error={read.error} retry={read.retry} />
@@ -405,17 +415,17 @@ function ChangesPanel({ sessionId, revision }: PanelProps) {
   const [selected, setSelected] = useState<WorkspaceChange | null>(null);
   const read = useWorkspaceRequest(sessionId, { kind: "changes", offset }, revision);
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <p className="shrink-0 border-b border-border/60 bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
         Workspace-wide changes in this session’s directory — not attributed to Claude. Refresh to
         update.
       </p>
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
         <section
           aria-label="Workspace changes"
           className={cn(
-            "flex min-h-0 w-full flex-col md:w-72 md:shrink-0 md:border-r md:border-border/60",
-            selected && "hidden md:flex",
+            "flex min-h-0 min-w-0 w-full flex-col lg:w-72 lg:shrink-0 lg:border-r lg:border-border/60",
+            selected && "hidden lg:flex",
           )}
         >
           {!read.result ? (
@@ -451,7 +461,7 @@ function ChangesPanel({ sessionId, revision }: PanelProps) {
             onBack={() => setSelected(null)}
           />
         ) : (
-          <div className="hidden flex-1 items-center justify-center p-6 text-sm text-muted-foreground md:flex">
+          <div className="hidden min-w-0 flex-1 items-center justify-center p-6 text-sm text-muted-foreground lg:flex">
             Choose a change to compare.
           </div>
         )}
@@ -483,7 +493,7 @@ function ChangeGroup({
           type="button"
           onClick={() => onSelect(entry)}
           className={cn(
-            "flex w-full items-start gap-2 rounded p-2 text-left text-sm hover:bg-muted",
+            "flex min-h-11 w-full items-start gap-2 rounded p-2 text-left text-sm hover:bg-muted",
             selected?.path === entry.path && selected.area === area && "bg-accent/10",
           )}
         >
@@ -519,7 +529,13 @@ function DetailHeader({
 }) {
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-2 py-1">
-      <Button size="icon" variant="ghost" onClick={onBack} aria-label="Back to list">
+      <Button
+        className="size-11 shrink-0 sm:size-9"
+        size="icon"
+        variant="ghost"
+        onClick={onBack}
+        aria-label="Back to list"
+      >
         <ArrowLeft className="size-4" />
       </Button>
       <div className="min-w-0 flex-1">
@@ -544,7 +560,10 @@ function DiffDetail({
     revision,
   );
   return (
-    <section aria-label="Selected diff" className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section
+      aria-label="Selected diff"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto overscroll-contain"
+    >
       <DetailHeader
         path={change.path}
         onBack={onBack}

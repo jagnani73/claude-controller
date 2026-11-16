@@ -217,19 +217,23 @@ export function ShellJobsPanel({ sessionId }: { sessionId: string }) {
   const job = jobs.find((item) => item.id === selected);
   return (
     <section
-      className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4"
+      className="flex h-full min-h-0 min-w-0 flex-col gap-3 overflow-auto overscroll-contain p-3 sm:p-4 [&>*]:shrink-0"
       aria-label="Claude shell jobs"
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-semibold">Claude shell jobs</h2>
-        <button type="button" className="rounded border px-3 py-1 text-sm" onClick={refresh}>
+        <button
+          type="button"
+          className="min-h-11 rounded border px-3 py-1 text-sm sm:min-h-9"
+          onClick={refresh}
+        >
           Refresh / retry
         </button>
       </div>
       <p className="text-xs text-muted-foreground">
         Read-only background Bash output. Not a native terminal; input and stopping are unavailable.
       </p>
-      {error && <output className="text-sm text-destructive">{error}</output>}
+      {error && <output className="break-all text-sm text-destructive">{error}</output>}
       {loading ? (
         <p>Loading jobs…</p>
       ) : (
@@ -250,7 +254,7 @@ export function ShellJobsPanel({ sessionId }: { sessionId: string }) {
             type="button"
             aria-pressed={selected === item.id}
             onClick={() => setSelected(item.id)}
-            className="rounded border p-2 text-left text-sm aria-pressed:bg-muted"
+            className="min-h-11 min-w-0 break-all rounded border p-2 text-left text-sm aria-pressed:bg-muted"
           >
             <span className="font-medium">{item.description || item.command || item.id}</span>
             <span className="ml-2 text-xs text-muted-foreground">
@@ -275,10 +279,11 @@ export function ShellJobsPanel({ sessionId }: { sessionId: string }) {
             <dt>Exit code</dt>
             <dd>Unavailable</dd>
           </dl>
-          <div className="flex items-center gap-4 text-sm">
-            <label className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <label className="flex min-h-11 items-center gap-2 sm:min-h-9">
               <input
                 type="checkbox"
+                className="size-5"
                 checked={follow}
                 onChange={(e) => setFollow(e.target.checked)}
               />
@@ -287,6 +292,7 @@ export function ShellJobsPanel({ sessionId }: { sessionId: string }) {
             <button
               type="button"
               disabled={!output?.text}
+              className="min-h-11 rounded px-2 sm:min-h-9"
               onClick={() => {
                 void navigator.clipboard.writeText(output?.text ?? "").then(
                   () => setCopied("Copied"),
@@ -298,7 +304,9 @@ export function ShellJobsPanel({ sessionId }: { sessionId: string }) {
             </button>
             <output>{copied}</output>
           </div>
-          {outputError && <output className="text-sm text-destructive">{outputError}</output>}
+          {outputError && (
+            <output className="break-all text-sm text-destructive">{outputError}</output>
+          )}
           {outputLoading && <p className="text-xs">Loading output…</p>}
           {output?.truncated && (
             <p className="text-xs text-muted-foreground">
@@ -307,7 +315,7 @@ export function ShellJobsPanel({ sessionId }: { sessionId: string }) {
           )}
           <pre
             ref={pane}
-            className="min-h-32 max-h-96 overflow-auto rounded border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap break-all"
+            className="min-h-32 min-w-0 max-h-96 overflow-auto overscroll-contain rounded border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap break-all"
           >
             {output?.text ||
               (outputError

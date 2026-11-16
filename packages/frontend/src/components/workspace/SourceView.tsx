@@ -40,6 +40,7 @@ export function CopyPath({ path }: { path: string }) {
   return (
     <Button
       size="sm"
+      className="min-h-10 shrink-0 sm:min-h-8"
       variant="ghost"
       onClick={() => {
         if (!navigator.clipboard) {
@@ -72,17 +73,29 @@ export function SourceView({
     .map((line, index) => ({ text: line, number: lineOffset + index + 1 }));
   return (
     <>
-      <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-1 text-xs text-muted-foreground">
+      <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-1 text-xs text-muted-foreground">
         <span>
           {CODE_EXT.test(path) ? "Source · basic syntax highlighting" : "Plain text"} · read-only
         </span>
-        <Button size="sm" variant="ghost" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>
+        <Button
+          className="min-h-10 shrink-0 sm:min-h-8"
+          size="sm"
+          variant="ghost"
+          aria-pressed={wrap}
+          onClick={() => setWrap(!wrap)}
+        >
           Wrap {wrap ? "on" : "off"}
         </Button>
       </div>
-      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard users need to scroll source horizontally */}
-      <section className="min-h-0 flex-1 overflow-auto" tabIndex={0} aria-label="File source">
-        <table className="w-full border-collapse font-mono text-xs leading-5">
+      <section
+        className="min-h-32 min-w-0 flex-1 overflow-auto overscroll-x-contain overscroll-y-auto"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard users need to scroll source horizontally
+        tabIndex={0}
+        aria-label="File source"
+      >
+        <table
+          className={`w-full border-collapse font-mono text-xs leading-5 ${wrap ? "table-fixed" : ""}`}
+        >
           <tbody>
             {lines.map((line) => (
               <tr key={line.number}>
