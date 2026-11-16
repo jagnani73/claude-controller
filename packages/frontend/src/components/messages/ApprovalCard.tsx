@@ -122,9 +122,9 @@ export function ApprovalCard({
 
   return (
     <div className="px-4 py-2">
-      <div className="overflow-hidden rounded-xl border border-accent/40 bg-accent/[0.04]">
-        <div className="flex items-center gap-2 border-b border-accent/30 px-3 py-2">
-          <ShieldCheck className="size-3.5 text-accent" strokeWidth={2} />
+      <div className="min-w-0 overflow-hidden rounded-xl border border-accent/40 bg-accent/[0.04] [overflow-wrap:anywhere]">
+        <div className="flex flex-wrap items-center gap-2 border-b border-accent/30 px-3 py-2">
+          <ShieldCheck className="size-3.5 shrink-0 text-accent" strokeWidth={2} />
           <span className="font-mono text-xs uppercase tracking-wider text-accent">
             {outcome
               ? "Approval rejected"
@@ -141,14 +141,14 @@ export function ApprovalCard({
           <span className="text-xs text-muted-foreground">·</span>
           <span className="font-mono text-xs text-foreground/80">{toolName}</span>
           {agentLabel && (
-            <span className="ml-auto truncate rounded-md border border-accent/30 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent">
+            <span className="ml-auto max-w-full truncate rounded-md border border-accent/30 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent">
               from {agentLabel}
             </span>
           )}
         </div>
 
         {mode !== "edit" && (
-          <pre className="overflow-x-auto border-b border-accent/20 bg-muted/20 px-3 py-2 font-mono text-[12px] text-foreground/85">
+          <pre className="max-h-[min(24rem,50dvh)] max-w-full overflow-auto border-b border-accent/20 bg-muted/20 px-3 py-2 font-mono text-[12px] text-foreground/85">
             {formatValue(toolInput)}
           </pre>
         )}
@@ -182,6 +182,7 @@ export function ApprovalCard({
               autoFocus
               type="text"
               placeholder="Reason (optional)"
+              className="pointer-coarse:min-h-10"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               onKeyDown={(e) => {
@@ -189,7 +190,7 @@ export function ApprovalCard({
                 if (e.key === "Escape") setMode("idle");
               }}
             />
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 [&>button]:h-auto [&>button]:min-h-10 [&>button]:whitespace-normal">
               <Button variant="ghost" className="flex-1" onClick={() => setMode("idle")}>
                 Back
               </Button>
@@ -203,7 +204,7 @@ export function ApprovalCard({
             <Textarea
               // Focus the editor: entering this mode means intent to edit.
               autoFocus
-              className="min-h-40 font-mono text-[12px]"
+              className="max-h-[min(24rem,50dvh)] min-h-[min(10rem,40dvh)] resize-y overflow-auto font-mono text-base md:text-[12px]"
               spellCheck={false}
               value={draft}
               onChange={(e) => {
@@ -215,7 +216,7 @@ export function ApprovalCard({
               }}
             />
             {draftError && <div className="px-1 text-xs text-destructive">{draftError}</div>}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 [&>button]:h-auto [&>button]:min-h-10 [&>button]:whitespace-normal">
               <Button variant="ghost" className="flex-1" onClick={() => setMode("idle")}>
                 Back
               </Button>
@@ -225,7 +226,7 @@ export function ApprovalCard({
             </div>
           </div>
         ) : (
-          <div className="flex gap-2 p-2">
+          <div className="flex flex-wrap gap-2 p-2 [&>button]:h-auto [&>button]:min-h-10 [&>button]:whitespace-normal">
             <Button onClick={() => approve()} className="flex-1">
               Approve
             </Button>

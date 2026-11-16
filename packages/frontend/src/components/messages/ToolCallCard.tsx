@@ -43,8 +43,8 @@ export function ToolCallCard({ sessionId, toolUseId, toolName, input, result }: 
   };
   return (
     <div className="px-4 py-2">
-      <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60 transition-colors hover:bg-card/80">
-        <div className="flex items-center gap-2 px-3 py-2">
+      <div className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-card/60 transition-colors hover:bg-card/80 [overflow-wrap:anywhere]">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
           <span className={cn("inline-block size-1.5 shrink-0 rounded-full", dotClass)} />
           <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
             {toolName}
@@ -71,7 +71,11 @@ export function ToolCallCard({ sessionId, toolUseId, toolName, input, result }: 
                 {failure && (
                   <>
                     <p role="alert">{failure}</p>
-                    <button type="button" className="underline" onClick={load}>
+                    <button
+                      type="button"
+                      className="underline pointer-coarse:min-h-10 pointer-coarse:min-w-10"
+                      onClick={load}
+                    >
                       Retry
                     </button>
                   </>
@@ -108,7 +112,7 @@ function DetailsRow({
         if (next) onOpen?.();
       }}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground pointer-coarse:min-h-10">
         <ChevronRight className="size-3 transition-transform group-open/details:rotate-90" />
         <span>{label}</span>
       </summary>
@@ -127,7 +131,7 @@ function FormattedValue({ value, error }: { value: unknown; error?: boolean }) {
   return (
     <pre
       className={cn(
-        "overflow-x-auto border-t border-border/40 bg-muted/30 px-3 py-2 font-mono text-[12px] leading-relaxed",
+        "max-h-[min(24rem,50dvh)] max-w-full overflow-auto border-t border-border/40 bg-muted/30 px-3 py-2 font-mono text-[12px] leading-relaxed",
         error ? "text-destructive" : "text-foreground/85",
       )}
     >

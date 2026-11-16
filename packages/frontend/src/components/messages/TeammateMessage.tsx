@@ -39,13 +39,18 @@ export function TeammateMessage({ message, timestamp }: TeammateMessageProps) {
     <div className="px-4 py-2">
       <div
         className={cn(
-          "max-w-[92%] rounded-2xl rounded-tl-md border px-4 py-2.5",
+          "min-w-0 max-w-full rounded-2xl rounded-tl-md border px-3 py-2.5 [overflow-wrap:anywhere] sm:max-w-[92%] sm:px-4",
           body.kind === "notice" ? NOTICE_TONE[body.tone] : "border-border/60 bg-card/50",
         )}
       >
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-          <span className={cn("inline-flex items-center gap-1 font-mono font-medium", nameColor)}>
-            <AtSign className="size-3" strokeWidth={2} />
+          <span
+            className={cn(
+              "inline-flex min-w-0 max-w-full items-center gap-1 font-mono font-medium",
+              nameColor,
+            )}
+          >
+            <AtSign className="size-3 shrink-0" strokeWidth={2} />
             {from}
           </span>
           {summary && (body.kind !== "text" || summaryAddsInfo(summary, body.text)) && (
@@ -54,7 +59,7 @@ export function TeammateMessage({ message, timestamp }: TeammateMessageProps) {
         </div>
 
         {body.kind === "text" && (
-          <div className="mt-1.5 text-base text-foreground/95">
+          <div className="mt-1.5 min-w-0 text-base text-foreground/95 [&_pre]:max-h-[min(24rem,50dvh)] [&_pre]:overflow-auto">
             <Markdown text={body.text} />
           </div>
         )}
@@ -71,7 +76,7 @@ export function TeammateMessage({ message, timestamp }: TeammateMessageProps) {
             <div className="mb-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
               {body.label}
             </div>
-            <pre className="overflow-x-auto rounded-md bg-muted/30 px-2 py-1.5 font-mono text-[12px] text-foreground/85">
+            <pre className="max-h-[min(24rem,50dvh)] max-w-full overflow-auto rounded-md bg-muted/30 px-2 py-1.5 font-mono text-[12px] text-foreground/85">
               {body.json}
             </pre>
           </div>

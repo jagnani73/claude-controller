@@ -25,7 +25,7 @@ export function OptionPills<T extends string>({
   note,
 }: OptionPillsProps<T>) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-w-0 flex-col gap-2 [overflow-wrap:anywhere]">
       <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-1.5">
         {options.map((opt) => (
@@ -34,6 +34,7 @@ export function OptionPills<T extends string>({
             selected={opt.value === value}
             disabled={opt.disabled}
             meta={opt.hint}
+            className="min-w-0 max-w-full flex-wrap text-left pointer-coarse:min-h-10 [&>span]:min-w-0 [&>span]:max-w-full"
             onClick={() => onChange(opt.value)}
           >
             {opt.label}

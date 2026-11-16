@@ -88,8 +88,8 @@ export function AgentsSheet({ sessionId, agents, messages, open, onOpenChange }:
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full gap-0 p-0 sm:max-w-xl" side="right">
-        <SheetHeader className="shrink-0 border-b border-border/60 pr-12">
+      <SheetContent className="min-h-0 w-full gap-0 overflow-hidden p-0 sm:max-w-xl" side="right">
+        <SheetHeader className="max-h-[50dvh] shrink-0 overflow-y-auto border-b border-border/60 pr-14 [overflow-wrap:anywhere]">
           <SheetTitle className="font-serif text-lg">
             {selected ? agentLabel(selected) : "Agents"}
           </SheetTitle>
@@ -99,7 +99,7 @@ export function AgentsSheet({ sessionId, agents, messages, open, onOpenChange }:
           {selected ? (
             <AgentSummary node={selected} onBack={() => setSelectedId(null)} />
           ) : (
-            <div className="flex gap-1 pt-1">
+            <div className="flex flex-wrap gap-1 pt-1">
               <TabButton active={tab === "tree"} onClick={() => setTab("tree")}>
                 <Network className="size-3.5" strokeWidth={1.75} />
                 Tree
@@ -117,11 +117,15 @@ export function AgentsSheet({ sessionId, agents, messages, open, onOpenChange }:
           )}
         </SheetHeader>
 
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           {selected && unavailable ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <div className="flex h-full flex-col items-center justify-center-safe gap-3 overflow-y-auto px-6 py-4 text-center [overflow-wrap:anywhere]">
               <p className="font-serif text-base italic text-muted-foreground/80">{unavailable}</p>
-              <Button variant="secondary" onClick={() => setAttempt((n) => n + 1)}>
+              <Button
+                variant="secondary"
+                className="pointer-coarse:min-h-10"
+                onClick={() => setAttempt((n) => n + 1)}
+              >
                 Retry
               </Button>
             </div>
@@ -163,7 +167,7 @@ function TabButton({
       onClick={onClick}
       data-active={active || undefined}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+        "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-10",
         "border-border/60 text-muted-foreground hover:bg-accent/10 hover:text-foreground",
         active && "border-accent/50 bg-accent/15 text-foreground",
       )}
@@ -179,7 +183,7 @@ function AgentSummary({ node, onBack }: { node: AgentNode; onBack: () => void })
       <button
         type="button"
         onClick={onBack}
-        className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground pointer-coarse:min-h-10"
       >
         <ChevronLeft className="size-3.5" strokeWidth={1.75} />
         All agents
@@ -222,9 +226,9 @@ function TreeView({
             <button
               type="button"
               onClick={() => onSelect(node.agentId)}
-              style={{ paddingLeft: `${0.5 + depth * 1.1}rem` }}
+              style={{ paddingLeft: `min(${0.5 + depth * 1.1}rem, 25%)` }}
               className={cn(
-                "flex w-full items-start gap-2 rounded-lg py-2 pr-2 text-left transition-colors hover:bg-card/70",
+                "flex min-h-10 w-full items-start gap-2 rounded-lg py-2 pr-2 text-left transition-colors hover:bg-card/70",
                 // Finished agents stay readable but recede behind the live ones.
                 node.status === "done" && "opacity-60",
               )}
@@ -253,7 +257,7 @@ function TreeView({
                   {` \u00b7 ${formatAgo(node.lastActivityAt)}`}
                 </span>
                 {node.status !== "running" && node.lastMessage && (
-                  <span className="mt-0.5 line-clamp-2 text-xs text-muted-foreground/80">
+                  <span className="mt-0.5 line-clamp-2 text-xs text-muted-foreground/80 [overflow-wrap:anywhere]">
                     {node.lastMessage}
                   </span>
                 )}
@@ -289,7 +293,10 @@ function MessagesView({
         {[...messages]
           .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))
           .map((m) => (
-            <li key={m.id} className="rounded-xl border border-border/60 bg-card/50 px-3 py-2">
+            <li
+              key={m.id}
+              className="min-w-0 rounded-xl border border-border/60 bg-card/50 px-3 py-2 [overflow-wrap:anywhere]"
+            >
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 <Party
                   label={labelForId(agents, m.fromAgentId)}
@@ -315,7 +322,7 @@ function MessagesView({
                 <div className="mt-1 text-xs text-muted-foreground">{m.summary}</div>
               )}
               {/* Agents write markdown (code fences, lists) like any assistant turn. */}
-              <div className="mt-1 text-sm text-foreground/90">
+              <div className="mt-1 min-w-0 text-sm text-foreground/90 [&_pre]:max-h-[min(24rem,50dvh)] [&_pre]:overflow-auto">
                 <Markdown text={m.text} />
               </div>
             </li>
@@ -334,14 +341,18 @@ function Party({
   agentId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const className = "font-mono font-medium text-foreground";
+  const className =
+    "min-w-0 max-w-full font-mono font-medium text-foreground [overflow-wrap:anywhere]";
   // The lead has no transcript of its own to open; it is the main stream.
   if (!agentId) return <span className={className}>{label}</span>;
   return (
     <button
       type="button"
       onClick={() => onSelect(agentId)}
-      className={cn(className, "underline decoration-dotted underline-offset-2 hover:text-accent")}
+      className={cn(
+        className,
+        "text-left underline decoration-dotted underline-offset-2 hover:text-accent pointer-coarse:min-h-10 pointer-coarse:min-w-10",
+      )}
     >
       {label}
     </button>

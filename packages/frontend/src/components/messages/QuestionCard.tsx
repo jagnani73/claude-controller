@@ -160,7 +160,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
     return (
       <div className="px-4 py-2">
         <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60 p-3">
-          <pre className="overflow-x-auto font-mono text-[12px] text-foreground/85">
+          <pre className="max-h-[min(24rem,50dvh)] max-w-full overflow-auto font-mono text-[12px] text-foreground/85">
             {formatValue(input)}
           </pre>
         </div>
@@ -201,7 +201,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
 
   return (
     <div className="px-4 py-2">
-      <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60">
+      <div className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-card/60 [overflow-wrap:anywhere] pointer-coarse:[&_output_button]:min-h-10 pointer-coarse:[&_output_button]:min-w-10">
         <div className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
           <HelpCircle className="size-3.5 text-accent" strokeWidth={2} />
           <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
@@ -233,7 +233,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
                   key={qq.question}
                   onClick={() => setActiveIdx(qi)}
                   className={cn(
-                    "shrink-0 rounded-md px-2 py-1 font-mono text-xs",
+                    "max-w-full shrink-0 rounded-md px-2 py-1 font-mono text-xs pointer-coarse:min-h-10",
                     qi === activeIdx
                       ? "bg-accent/20 text-accent"
                       : "text-muted-foreground hover:text-foreground",
@@ -301,17 +301,17 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
                   onClick={() => toggleLabel(activeIdx, opt.label, q.multiSelect)}
                   disabled={optionsDisabled}
                   className={cn(
-                    "flex items-start gap-2 rounded-md border px-2.5 py-2 text-left transition-colors",
+                    "flex min-h-10 min-w-0 items-start gap-2 rounded-md border px-2.5 py-2 text-left transition-colors",
                     selected
                       ? "border-accent/60 bg-accent/[0.08]"
                       : "border-border/40 bg-card/30 hover:bg-card/60",
                     optionsDisabled && "opacity-50",
                   )}
                 >
-                  <span className="mt-0.5 font-mono text-xs text-muted-foreground">
+                  <span className="mt-0.5 shrink-0 font-mono text-xs text-muted-foreground">
                     {q.multiSelect ? (selected ? "[✓]" : "[ ]") : selected ? "●" : "○"}
                   </span>
-                  <span className="flex flex-col gap-0.5">
+                  <span className="flex min-w-0 flex-col gap-0.5">
                     <span className="text-sm text-foreground">{opt.label}</span>
                     {opt.description && (
                       <span className="text-xs text-muted-foreground/85">{opt.description}</span>
@@ -328,7 +328,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
           {hasPreview &&
             focusedOption?.preview &&
             (!isLocked || effectiveSelectedLabels.length > 0) && (
-              <pre className="overflow-x-auto rounded-md border border-border/30 bg-muted/30 px-3 py-2 font-mono text-[11px] leading-snug text-foreground/85">
+              <pre className="max-h-[min(24rem,50dvh)] max-w-full overflow-auto rounded-md border border-border/30 bg-muted/30 px-3 py-2 font-mono text-[11px] leading-snug text-foreground/85">
                 {focusedOption.preview}
               </pre>
             )}
@@ -347,7 +347,10 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
                     ? setNotes(activeIdx, e.target.value)
                     : setCustomText(activeIdx, e.target.value)
                 }
-                className={(hasPreview ? s.notes : s.customText) ? "pr-9" : undefined}
+                className={cn(
+                  "pointer-coarse:min-h-10",
+                  (hasPreview ? s.notes : s.customText) && "pr-11",
+                )}
               />
               {(hasPreview ? s.notes : s.customText) && (
                 <button
@@ -355,7 +358,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
                   onClick={() =>
                     hasPreview ? setNotes(activeIdx, "") : setCustomText(activeIdx, "")
                   }
-                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
+                  className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground pointer-coarse:size-10"
                   aria-label={hasPreview ? "Clear note" : "Clear typed answer"}
                 >
                   <X className="size-3.5" />
@@ -365,7 +368,7 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
           )}
 
           {!isLocked && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 [&>button]:min-h-10 [&>button]:min-w-10">
               {/* Batched calls: advance through tabs with "Next" and only show
                   "Submit" on the last question — a single disabled "Submit"
                   while early questions are unanswered reads as a dead end. */}
@@ -405,12 +408,12 @@ export function QuestionCard({ sessionId, toolUseId, input, result: preview }: Q
           {control}
           {result && (
             <details>
-              <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
+              <summary className="flex cursor-pointer list-none items-center text-xs text-muted-foreground hover:text-foreground pointer-coarse:min-h-10">
                 Show result
               </summary>
               <pre
                 className={cn(
-                  "mt-2 overflow-x-auto rounded-md bg-muted/30 px-3 py-2 font-mono text-[12px]",
+                  "mt-2 max-h-[min(24rem,50dvh)] max-w-full overflow-auto rounded-md bg-muted/30 px-3 py-2 font-mono text-[12px]",
                   result.isError ? "text-destructive" : "text-foreground/85",
                 )}
               >

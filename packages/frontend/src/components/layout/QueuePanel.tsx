@@ -35,14 +35,14 @@ export function QueuePanel({ queue, onEdit, onRemove, onSendNow }: QueuePanelPro
           <span className="size-1 rounded-full bg-warning/70" />
           <span>{queue.length} queued</span>
         </div>
-        <ul className="flex max-h-40 flex-col overflow-y-auto">
+        <ul className="flex max-h-[min(10rem,25dvh)] flex-col overflow-y-auto">
           {queue.map((q) => (
             <li key={q.id} className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => onEdit?.(q.id)}
                 aria-label="Edit queued message"
-                className="group flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/10"
+                className="group flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/10 pointer-coarse:min-h-10"
               >
                 {q.sendingNow && (
                   <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-accent">
@@ -64,7 +64,7 @@ export function QueuePanel({ queue, onEdit, onRemove, onSendNow }: QueuePanelPro
                     ? "Interrupting the current turn…"
                     : "Send now: interrupt the current turn and send this next"
                 }
-                className="shrink-0 rounded p-1 text-muted-foreground/50 transition-colors hover:text-accent disabled:text-accent"
+                className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground/50 transition-colors hover:text-accent disabled:text-accent pointer-coarse:size-10"
               >
                 {q.sendingNow ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -76,7 +76,7 @@ export function QueuePanel({ queue, onEdit, onRemove, onSendNow }: QueuePanelPro
                 type="button"
                 onClick={() => onRemove?.(q.id)}
                 aria-label="Remove from queue"
-                className="shrink-0 rounded p-1 text-muted-foreground/50 transition-colors hover:text-foreground"
+                className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground/50 transition-colors hover:text-foreground pointer-coarse:size-10"
               >
                 <X className="size-3.5" />
               </button>

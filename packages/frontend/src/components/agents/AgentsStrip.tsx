@@ -37,11 +37,11 @@ export function AgentsStrip({ agents, onOpen }: AgentsStripProps) {
     <button
       type="button"
       onClick={onOpen}
-      className="flex w-full items-center gap-2 border-t border-border/40 bg-background/60 px-3 py-1.5 text-left text-xs text-muted-foreground backdrop-blur transition-colors hover:bg-card/60 hover:text-foreground"
+      className="flex min-w-0 w-full items-center gap-2 border-t border-border/40 bg-background/60 px-3 py-1.5 text-left text-xs text-muted-foreground backdrop-blur transition-colors hover:bg-card/60 hover:text-foreground pointer-coarse:min-h-10"
     >
       <StatusDot tone={running.length > 0 ? "accent" : "muted"} pulse={running.length > 0} />
       <Bot className="size-3.5 shrink-0 text-accent" strokeWidth={1.75} />
-      <span className="font-medium text-foreground/80">
+      <span className="shrink-0 font-medium text-foreground/80">
         {agents.length} {agents.length === 1 ? "agent" : "agents"}
       </span>
       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground/70">

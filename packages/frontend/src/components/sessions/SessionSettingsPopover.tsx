@@ -18,7 +18,7 @@ export function SessionSettingsPopover({ session, onChange }: SessionSettingsPop
           variant="ghost"
           size="icon-sm"
           aria-label="Session settings"
-          className="shrink-0 text-muted-foreground hover:text-foreground"
+          className="shrink-0 text-muted-foreground hover:text-foreground pointer-coarse:size-10"
         >
           <Settings2 className="size-4" />
         </Button>
@@ -31,7 +31,7 @@ export function SessionSettingsPopover({ session, onChange }: SessionSettingsPop
         // 8px). Pull the popover back out so its left edge lines up with the
         // input box edge instead of the button.
         alignOffset={-9}
-        className="w-[min(28rem,calc(100vw-1.5rem))] border-border/60 bg-popover p-0"
+        className="max-h-[min(32rem,var(--radix-popover-content-available-height))] w-[min(28rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain border-border/60 bg-popover p-0"
       >
         <div className="p-4">
           <SessionSettingsPanel

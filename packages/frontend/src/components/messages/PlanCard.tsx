@@ -97,7 +97,7 @@ export function PlanCard({ sessionId, toolUseId, input, result: preview, model }
 
   return (
     <div className="px-4 py-2">
-      <div className="overflow-hidden rounded-xl border border-accent/40 bg-accent/[0.04]">
+      <div className="min-w-0 overflow-hidden rounded-xl border border-accent/40 bg-accent/[0.04] [overflow-wrap:anywhere] pointer-coarse:[&_output_button]:min-h-10 pointer-coarse:[&_output_button]:min-w-10">
         <div className="flex items-center gap-2 border-b border-accent/30 px-3 py-2">
           <ClipboardCheck className="size-3.5 text-accent" strokeWidth={2} />
           <span className="font-mono text-xs uppercase tracking-wider text-accent">
@@ -111,7 +111,7 @@ export function PlanCard({ sessionId, toolUseId, input, result: preview, model }
         </div>
 
         {plan ? (
-          <div className="max-h-[40vh] overflow-y-auto border-b border-accent/20 px-3 py-2">
+          <div className="max-h-[40dvh] min-w-0 overflow-auto border-b border-accent/20 px-3 py-2">
             <Markdown text={plan} />
           </div>
         ) : (
@@ -126,12 +126,12 @@ export function PlanCard({ sessionId, toolUseId, input, result: preview, model }
             {control}
             {result && (
               <details className="mt-2">
-                <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
+                <summary className="flex cursor-pointer list-none items-center text-xs text-muted-foreground hover:text-foreground pointer-coarse:min-h-10">
                   Show result
                 </summary>
                 <pre
                   className={cn(
-                    "mt-2 overflow-x-auto rounded-md bg-muted/30 px-3 py-2 font-mono text-[12px]",
+                    "mt-2 max-h-[min(24rem,50dvh)] max-w-full overflow-auto rounded-md bg-muted/30 px-3 py-2 font-mono text-[12px]",
                     result.isError ? "text-destructive" : "text-foreground/85",
                   )}
                 >
@@ -141,7 +141,7 @@ export function PlanCard({ sessionId, toolUseId, input, result: preview, model }
             )}
           </div>
         ) : planless ? (
-          <div className="flex gap-2 p-2">
+          <div className="flex flex-wrap gap-2 p-2 [&>button]:h-auto [&>button]:min-h-10 [&>button]:basis-40 [&>button]:whitespace-normal">
             <Button
               className="flex-1"
               onClick={() => respond("approve-primary")}
@@ -161,7 +161,7 @@ export function PlanCard({ sessionId, toolUseId, input, result: preview, model }
           </div>
         ) : (
           <div className="flex flex-col gap-2 p-2">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 [&>button]:h-auto [&>button]:min-h-10 [&>button]:basis-40 [&>button]:whitespace-normal">
               <Button
                 className="flex-1"
                 onClick={() => respond("approve-primary")}
@@ -182,7 +182,7 @@ export function PlanCard({ sessionId, toolUseId, input, result: preview, model }
             </div>
             <Button
               variant="ghost"
-              className="text-muted-foreground"
+              className="min-h-10 text-muted-foreground"
               onClick={keepPlanning}
               disabled={!connected}
             >

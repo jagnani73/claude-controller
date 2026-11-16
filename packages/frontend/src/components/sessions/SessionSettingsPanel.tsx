@@ -69,7 +69,7 @@ export function SessionSettingsPanel(props: SessionSettingsPanelProps) {
     onChange({ ...value, permissionMode });
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-5">
       <OptionPills
         label="Model"
         value={value.model}
