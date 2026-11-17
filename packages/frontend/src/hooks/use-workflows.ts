@@ -190,8 +190,16 @@ export function useWorkflows(sessionId: string, active: boolean): UseWorkflows {
         attachedGeneration.current = null;
         clearPending();
         clearDeferred();
+        setState((prev) =>
+          prev.sessionId === sessionId
+            ? {
+                ...prev,
+                error: "Disconnected. Workflow data will refresh after the session reconnects.",
+              }
+            : prev,
+        );
       }),
-    [clearPending, clearDeferred],
+    [clearPending, clearDeferred, sessionId],
   );
 
   // One poller serves both panel and strip; changing cadence leaves an in-flight
@@ -224,8 +232,20 @@ export function useWorkflows(sessionId: string, active: boolean): UseWorkflows {
     // a request inside its gap, so an early retry is deferred, not discarded.
     clearPending();
     clearDeferred();
-    setState((prev) => (prev.sessionId === sessionId ? { ...prev, error: null } : prev));
-    request();
+    const unavailable =
+      wsService.state !== "connected"
+        ? "Disconnected. Workflow data will refresh after the session reconnects."
+        : attachedGeneration.current !== wsService.socketGeneration
+          ? "Waiting for the session subscription. Resume the session if it is stopped."
+          : document.visibilityState !== "visible"
+            ? "Workflow data will refresh when this page is visible."
+            : null;
+    setState((prev) =>
+      prev.sessionId === sessionId ? { ...prev, error: unavailable ?? prev.error } : prev,
+    );
+    // Keep an existing error until a successful reply, including while a retry
+    // is deferred by the request spacing guard.
+    if (!unavailable) request();
   }, [clearPending, clearDeferred, request, sessionId]);
 
   return {
