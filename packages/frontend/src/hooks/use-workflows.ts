@@ -140,7 +140,16 @@ export function useWorkflows(sessionId: string, active: boolean): UseWorkflows {
     clearDeferred();
     lastSentAt.current = 0;
     attachedGeneration.current = null;
-    setState({ sessionId, runs: [], truncated: false, loaded: false, error: null });
+    setState({
+      sessionId,
+      runs: [],
+      truncated: false,
+      loaded: false,
+      error:
+        wsService.state === "connected"
+          ? null
+          : "Disconnected. Workflow data will refresh after the session reconnects.",
+    });
   }, [sessionId]);
 
   /**
