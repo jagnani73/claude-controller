@@ -33,6 +33,10 @@
     "./version": {
       "import": "./dist/version.js",
       "types": "./dist/version.d.ts"
+    },
+    "./workflow-types": {
+      "import": "./dist/workflow-types.js",
+      "types": "./dist/workflow-types.d.ts"
     }
   },
   "scripts": {

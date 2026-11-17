@@ -36,6 +36,14 @@ const log = LoggerService.scoped("ws");
 const clients = new Map<WebSocket, ClientState>();
 // Request-only job reads: no filesystem watchers or output buffers per socket.
 const shellRequests = new WeakMap<WebSocket, { snapshot: number; output: number; busy: boolean }>();
+/**
+ * One in-flight workflow snapshot per socket. The panel polls, so a second
+ * request while the first is still walking a large run's directory is dropped
+ * rather than queued: the poll that follows will pick up whatever changed.
+ */
+const workflowRequests = new WeakMap<WebSocket, { lastAt: number; busy: boolean }>();
+/** Minimum gap between workflow snapshots on one socket. */
+const WORKFLOW_REQUEST_MIN_MS = 750;
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === ws.OPEN) {
@@ -621,6 +629,69 @@ function handleMessage(
     case "workspace_request":
       void handleWorkspaceRequest(ws, msg, sessionManager, (response) => send(ws, response));
       return;
+
+    case "workflows_request": {
+      // A snapshot is correlated to the request that asked for it, so the panel
+      // can drop a reply to a question it no longer has. An unusable id is not
+      // answerable at all.
+      if (typeof msg.requestId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(msg.requestId)) return;
+      const requestId = msg.requestId;
+      const state = clients.get(ws);
+      const session = sessionManager.get(msg.sessionId);
+      // Only the session the client is actually watching: the panel is an
+      // afterthought to the chat, never a way to browse another session's runs.
+      if (!state || state.subscribedSessionId !== msg.sessionId || !session) {
+        send(ws, {
+          type: "workflows_snapshot",
+          sessionId: msg.sessionId,
+          requestId,
+          runs: [],
+          truncated: false,
+          error: "Subscribe to a live session first.",
+        });
+        return;
+      }
+      const rate = workflowRequests.get(ws) ?? { lastAt: 0, busy: false };
+      workflowRequests.set(ws, rate);
+      if (rate.busy || Date.now() - rate.lastAt < WORKFLOW_REQUEST_MIN_MS) return;
+      if (ws.bufferedAmount > 256 * 1024) return;
+      rate.busy = true;
+      rate.lastAt = Date.now();
+      void session.workflows
+        .snapshot()
+        .then((snapshot) => {
+          // The client may have left, or the socket been replaced, while the
+          // snapshot was being built. Answer only the subscription it asked on.
+          if (clients.get(ws) !== state || state.subscribedSessionId !== session.id) return;
+          if (ws.bufferedAmount > 256 * 1024) return;
+          send(ws, {
+            type: "workflows_snapshot",
+            sessionId: session.id,
+            requestId,
+            runs: snapshot.runs,
+            truncated: snapshot.truncated,
+          });
+        })
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.error("Workflow snapshot failed", { sessionId: msg.sessionId, error: message });
+          if (clients.get(ws) !== state || state.subscribedSessionId !== session.id) return;
+          // Correlated, so the panel shows the error on the run list it is
+          // displaying and can retry, instead of waiting forever.
+          send(ws, {
+            type: "workflows_snapshot",
+            sessionId: session.id,
+            requestId,
+            runs: [],
+            truncated: false,
+            error: "Couldn't read this session's workflow runs. Retry from the panel.",
+          });
+        })
+        .finally(() => {
+          rate.busy = false;
+        });
+      return;
+    }
 
     case "shell_jobs_request":
     case "shell_job_output_request": {

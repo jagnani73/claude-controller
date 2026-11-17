@@ -127,7 +127,12 @@ export class SessionManager extends EventEmitter<ManagerEvents> {
   getHookTarget(spawnToken: string): HookTarget | null {
     const session = this.byToken.get(spawnToken);
     return session?.resolved
-      ? { bus: session.bus, agents: session.agents, shellJobs: session.shellJobs }
+      ? {
+          bus: session.bus,
+          agents: session.agents,
+          shellJobs: session.shellJobs,
+          workflows: session.workflows,
+        }
       : null;
   }
 

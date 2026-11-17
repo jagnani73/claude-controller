@@ -1,6 +1,7 @@
 import type { ShellJobClientMessage, ShellJobServerMessage } from "../shell-job-types.js";
 import type { TerminalClientMessage, TerminalServerMessage } from "../terminal-types.js";
 import type { CliVersionStatus } from "../version.js";
+import type { WorkflowClientMessage, WorkflowServerMessage } from "../workflow-types.js";
 import type { WorkspaceRequest, WorkspaceResponse } from "../workspace-types.js";
 
 export type {
@@ -419,6 +420,7 @@ export type ServerMessage =
   | WorkspaceResponse
   | TerminalServerMessage
   | ShellJobServerMessage
+  | WorkflowServerMessage
   | { type: "connected"; sessions: SessionInfo[]; workDir: string }
   | { type: "session_created"; session: SessionInfo }
   | { type: "session_stopped"; sessionId: string; exitCode: number | null }
@@ -646,6 +648,7 @@ export type ClientMessage =
   | WorkspaceRequest
   | TerminalClientMessage
   | ShellJobClientMessage
+  | WorkflowClientMessage
   | { type: "input"; sessionId: string; text: string; settings?: RespawnSettings }
   | { type: "slash_command"; sessionId: string; command: string; settings?: RespawnSettings }
   | { type: "interrupt"; sessionId: string }

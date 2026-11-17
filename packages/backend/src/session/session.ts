@@ -24,7 +24,13 @@ import type {
   SessionStatus,
   SessionStatusSnapshot,
 } from "common/types";
-import { isClaudeModel, isEffortLevel, isPermissionMode, planTextOf } from "common/types";
+import {
+  agentStreamId,
+  isClaudeModel,
+  isEffortLevel,
+  isPermissionMode,
+  planTextOf,
+} from "common/types";
 import {
   CLAUDE_CODE_MINIMUM_VERSION,
   CLAUDE_CODE_TARGET_VERSION,
@@ -48,6 +54,7 @@ import {
   statusLinePayloadPath,
 } from "../services/statusline.service.js";
 import { TranscriptWatcher } from "../services/transcript.service.js";
+import { WorkflowRegistry } from "../services/workflow-registry.service.js";
 import type { SessionDeps, SessionEvents, SpawnIdentity } from "../types/index.js";
 import { resolveTranscriptPath } from "../utils/claude-paths.js";
 import { buildHooksConfig } from "../utils/hooks-config.js";
@@ -96,6 +103,11 @@ export class Session extends EventEmitter<SessionEvents> {
   readonly config: SessionConfig;
   readonly createdAt: number;
   readonly shellJobs: ShellJobs;
+  /**
+   * Workflow runs this session launched, read from disk on demand. Read-only:
+   * it never executes a script and never writes. Available once the id resolves.
+   */
+  readonly workflows: WorkflowRegistry;
   /** Resolves once the initial transcript drain completed (a resume's history
    * is on the bus). The id itself is known from the constructor on. */
   readonly ready: Promise<void>;
@@ -253,6 +265,18 @@ export class Session extends EventEmitter<SessionEvents> {
     // all claimed the first file and their output crossed.
     const sessionId = config.resumeSessionId ?? randomUUID();
     this.shellJobs = new ShellJobs(sessionId, config.cwd);
+    this.workflows = new WorkflowRegistry({
+      sessionId,
+      // The run directory hangs off the project dir the transcript lives in,
+      // derived from our own path rather than from any payload.
+      projectDir: () => {
+        const transcriptPath =
+          this.transcript?.path ?? resolveTranscriptPath(config.cwd, sessionId);
+        return dirname(transcriptPath);
+      },
+      agentStreamId: (agentId) =>
+        this._agents?.hasAgent(agentId) ? agentStreamId(sessionId, agentId) : undefined,
+    });
     this.resolveId(sessionId);
     // For a fresh session the transcript does not exist yet; the watcher waits
     // for it (and for its project directory) and drains nothing until then.
@@ -262,7 +286,10 @@ export class Session extends EventEmitter<SessionEvents> {
       this.handleModelChange,
       this.handleCliVersion,
       this.handleEffortChange,
-      (entry, replay) => this.shellJobs.transcript(entry, replay),
+      (entry, replay) => {
+        this.shellJobs.transcript(entry, replay);
+        this.workflows.transcript(entry, replay);
+      },
     );
     const drainDone = this.transcript.start().catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -626,6 +653,7 @@ export class Session extends EventEmitter<SessionEvents> {
   private handlePtyGone(info: { exitCode: number; signal?: number }): void {
     this.teardownStatusLineAndCapture();
     this.shellJobs.close();
+    this.workflows.settle();
     this.setStatus("stopped");
     this.transcript?.stop();
     this.openToolCalls.clear();
@@ -1271,6 +1299,10 @@ export class Session extends EventEmitter<SessionEvents> {
       // resumed session reports its own model and effort on its first turn.
       this.reconciler.invalidate();
       this.shellJobs.settle();
+      // The process that ran any workflow agent is gone, and the resumed one
+      // never re-reports those agents: drop the hook evidence with it, or the
+      // new process's snapshot would label an old agent as working now.
+      this.workflows.settle();
       // Their host process is gone; none of the agents it was running still is,
       // and none of its tool calls will ever report a result.
       this._agents?.settleRunning();
@@ -1537,6 +1569,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.disposed = true;
     this.shellJobs.close();
     log.info("Stopping", { token: this.spawnToken });
+    this.workflows.dispose();
     this.teardownStatusLineAndCapture();
     this.openToolCalls.clear();
 

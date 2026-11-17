@@ -16,6 +16,7 @@ import { buildApprovalResponse } from "./approval-response.js";
 import { LoggerService } from "./logger.service.js";
 import type { SessionBus } from "./session-bus.service.js";
 import type { ShellJobs } from "./shell-jobs.service.js";
+import type { WorkflowRegistry } from "./workflow-registry.service.js";
 
 const log = LoggerService.scoped("hooks");
 
@@ -26,6 +27,12 @@ export interface HookTarget {
   bus: SessionBus;
   agents: AgentRegistry;
   shellJobs?: ShellJobs;
+  /**
+   * The session's workflow registry, told about agent start/stop so a run's
+   * per-agent liveness comes from the process that is running now. Optional so
+   * an existing test construction stays valid.
+   */
+  workflows?: WorkflowRegistry;
 }
 
 type TargetLookup = (spawnToken: string) => HookTarget | null;
@@ -224,9 +231,11 @@ export class HooksService {
       case "PermissionRequest":
         return this.handlePermissionRequest(bus, agents, payload as PermissionRequestPayload, res);
       case "SubagentStart":
+        target.workflows?.agentStarted((payload as SubagentStartPayload).agent_id);
         agents.handleStart(payload as SubagentStartPayload);
         return {};
       case "SubagentStop":
+        target.workflows?.agentStopped((payload as SubagentStopPayload).agent_id);
         agents.handleStop(payload as SubagentStopPayload);
         return {};
       case "PreCompact":
