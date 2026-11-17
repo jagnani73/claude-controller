@@ -14,8 +14,11 @@ import { parseTeammateText } from "@/components/messages/teammate-message";
 import { SessionSettingsPopover } from "@/components/sessions/SessionSettingsPopover";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { WorkflowsPanel } from "@/components/workflows/WorkflowsPanel";
+import { WorkflowsStrip } from "@/components/workflows/WorkflowsStrip";
 import { useAgents } from "@/hooks/use-agents";
 import { useSessions } from "@/hooks/use-sessions";
+import { useWorkflows } from "@/hooks/use-workflows";
 import { useWsMessage } from "@/hooks/use-ws";
 import { useWorkspace } from "@/lib/workspace-context";
 import { wsService } from "@/services/ws.service";
@@ -201,6 +204,14 @@ export function SessionView() {
   // first and the snapshot that subscribing triggers is not wiped.
   const { agents, messages: agentMessages } = useAgents(sessionId);
   const [agentsOpen, setAgentsOpen] = useState(false);
+  /**
+   * The workflows view's **one** data owner. Snapshots are pull-only and the
+   * backend serves one per socket, so the panel must not run a second copy of
+   * this hook: it takes these values as props. Polling is confined to the open
+   * panel, and the strip below renders from the last snapshot without asking.
+   */
+  const [workflowsOpen, setWorkflowsOpen] = useState(false);
+  const workflows = useWorkflows(sessionId, workflowsOpen);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
   /**
@@ -354,6 +365,7 @@ export function SessionView() {
     interruptArmedRef.current = true;
     setAgentsOpen(false);
     setWorkspaceOpen(false);
+    setWorkflowsOpen(false);
     beginReplay(false);
     subscribe(sessionId);
     return () => {
@@ -830,6 +842,7 @@ export function SessionView() {
       </div>
       <div className="relative" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <AgentsStrip agents={agents} onOpen={() => setAgentsOpen(true)} />
+        <WorkflowsStrip runs={workflows.runs} onOpen={() => setWorkflowsOpen(true)} />
         {(stopped || subscribeError) && (
           <div className="flex items-center gap-3 border-t border-border/60 bg-muted/30 px-4 py-2 text-sm">
             <span className="min-w-0 flex-1 text-muted-foreground">
@@ -918,6 +931,23 @@ export function SessionView() {
         open={agentsOpen}
         onOpenChange={setAgentsOpen}
       />
+      {/*
+        Mounted only while open, so closing it stops the agent transcript
+        subscription it owns. The runs come from the view's single hook — the
+        panel never polls on its own.
+      */}
+      {workflowsOpen && (
+        <WorkflowsPanel
+          sessionId={sessionId}
+          open={workflowsOpen}
+          onOpenChange={setWorkflowsOpen}
+          runs={workflows.runs}
+          truncated={workflows.truncated}
+          loading={workflows.loading}
+          error={workflows.error}
+          onRetry={workflows.refresh}
+        />
+      )}
     </div>
   );
 }

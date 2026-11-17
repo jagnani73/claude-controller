@@ -6,6 +6,7 @@ import { PERMISSION_LABEL, PERMISSION_TONE } from "@/components/sessions/permiss
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { formatTokens } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SidebarToggle } from "./SidebarToggle";
 
@@ -40,12 +41,6 @@ const RESET_FORMATTER = new Intl.DateTimeFormat(undefined, {
 
 function formatResetAbsolute(epoch: number): string {
   return RESET_FORMATTER.format(new Date(epoch * 1000));
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return String(n);
 }
 
 function QuotaBadge({ label, window }: { label: string; window: RateLimitWindow }) {
