@@ -7,7 +7,7 @@ export interface CommandEntry {
   description: string;
   argumentHint?: string;
   support: CommandSupport;
-  source: "docs" | "skill" | "legacy-command";
+  source: "docs" | "skill" | "legacy-command" | "plugin-skill" | "plugin-command";
   scope: "builtin" | "user" | "project";
 }
 export type CommandCatalogRequest = {

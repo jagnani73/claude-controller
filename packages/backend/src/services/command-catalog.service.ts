@@ -3,6 +3,7 @@ import { open, opendir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { BUILTIN_COMMANDS, type CommandEntry } from "common/commands";
+import { discoverPluginCommands } from "./plugin-command-catalog.js";
 
 const MAX_ENTRIES = 150;
 const MAX_BYTES = 16384;
@@ -28,7 +29,7 @@ function field(front: string, key: string): string {
 export async function commandCatalog(cwd: string) {
   const entries = [...BUILTIN_COMMANDS];
   const warnings = new Set([
-    "Docs suggestions are not installed-availability checks. Discovered files may not be loaded. Plugins and MCP commands are not catalogued.",
+    "Docs suggestions are not installed-availability checks. Discovered files may not be loaded.",
   ]);
   let truncated = false;
   const deadline = Date.now() + SCAN_BUDGET_MS;
@@ -135,5 +136,6 @@ export async function commandCatalog(cwd: string) {
       }
     }
   }
+  truncated = (await discoverPluginCommands(cwd, config, entries, warnings, deadline)) || truncated;
   return { entries, warnings: [...warnings], truncated };
 }
