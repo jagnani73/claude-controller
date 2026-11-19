@@ -8,6 +8,10 @@ Inventory date: **2026-11-16**. Application baseline: **91ce970**. Installed CLI
 
 Official documentation is rolling and can describe features gated by version, account, provider or platform. Sources below establish upstream capabilities, not proof that every capability is enabled on this machine. Some long pages were read only in the relevant opening sections; this is a feature-family inventory, not a claim to have exhaustively tested every slash command.
 
+For the command-by-command assessment, aliases, argument forms and rollout order,
+see [Slash-command coverage plan](slash-command-plan.md). That plan separates
+current dispatch from feasible future support; it does not enable commands.
+
 ## Status rules
 
 - **Native:** A dedicated Controller flow exists. Its stated limits still apply; this is not a claim that every edge case has been tested.
