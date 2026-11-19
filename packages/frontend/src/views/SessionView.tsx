@@ -557,6 +557,7 @@ export function SessionView() {
       case "session_startup_error":
         setStartupError(msg.message);
         return;
+      case "command_rejected":
       case "approval_expired":
       case "permission_mode_unverified":
         return;
@@ -883,6 +884,7 @@ export function SessionView() {
             />
             {!hasPendingQuestion && (
               <InputBar
+                sessionId={sessionId}
                 ref={inputBarRef}
                 onSubmit={handleSubmit}
                 isProcessing={isProcessing}

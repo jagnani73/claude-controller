@@ -33,7 +33,7 @@ Each item has a stable ID for follow-up work. Checked items mean the narrow nati
 
 ### Input, commands and configuration discovery
 
-- [ ] **I01 — Missing: command and skill discovery.** The composer accepts `/text`, but has no built-in/project/plugin/MCP command catalog, argument completion or visible support classification. Explicit model/effort forms have controller-side handling; other commands are generally passed through. Evidence: `InputBar.tsx`, `hooks/use-sessions.ts`, backend `ws.service.ts`.
+- [ ] **I01 — Partial: command and skill discovery.** The composer offers docs-based suggestions and bounded user/project file discovery with support guidance. Loaded status, plugins, MCP, effective precedence and full argument completion remain unknown. See [Commands](commands.md).
 - [ ] **I02 — Excluded for now by user decision: attachments.** Do not implement image/camera/paste uploads, file attachments or attachment transport in the current roadmap. File-path navigation and optional text/path completion remain separate candidates; they must not silently become uploads. The composer currently carries text only. Evidence: `ClientMessage.input`, `InputBar.tsx`, `TranscriptWatcher.handleUser`. Upstream: [Interactive mode](https://code.claude.com/docs/en/interactive-mode).
 - [ ] **I03 — Partial: local-command results and interactive dialogs.** Text recorded as local-command output can render in chat. Dedicated relays exist for questions and plan approval, not arbitrary `/config`, `/mcp`, `/permissions`, `/copy`, `/rewind` or other terminal dialogs. Availability and argument-based alternatives must be catalogued per installed version, not assumed. Evidence: `TranscriptWatcher.flushPendingSlashCommand`, `QuestionCard`, `PlanCard`, shared response types.
 - [ ] **I04 — Inherited: instructions, rules and memory.** The real CLI loads applicable configuration; project files can be inspected through Files. There is no effective-config view showing user/project/managed scope, precedence, what actually loaded, or an app memory editor. Reading a local config file alone cannot prove effective runtime state. Upstream: [Extension overview](https://code.claude.com/docs/en/features-overview), [Memory](https://code.claude.com/docs/en/memory).
@@ -84,13 +84,13 @@ No percentage score: a working command with an invisible confirmation is not hal
 
 ### P0 — Safe command coverage and runtime identity
 
-- [ ] **PAR-01 — Command/capability matrix.** Inventory built-ins and actual discovered project/user/plugin skills for the installed environment. For each command record: direct/text result, app-native equivalent, interactive dialog needing a relay, identity/cwd-changing action, or explicitly unsupported. Prefer supported CLI metadata/structured sources; label unverified discovery sources. Do not scrape PTY stdout in product code or pretend a static docs list is account-specific availability.
+- [ ] **PAR-01 — Partial: command/capability matrix.** A docs-based classified seed, user/project skill discovery and a composer picker now exist ([Commands](commands.md)). Known session/cwd transitions and unrepresented dialogs are guarded rather than silently forwarded. Runtime availability, plugin/MCP inventory and argument-sensitive completeness remain unverified. Do not treat the static seed as account-specific capability or product PTY-output parsing as an acceptable discovery source.
 - [ ] **PAR-02 — Probe identity/cwd transitions.** Exercise `/clear`, explicit `/resume`, `/branch`, worktree enter/exit and `/cd` in disposable sessions. Record session/transcript IDs, hooks, cwd and required launch configuration. Acceptance: either the Controller safely follows the transition or gives an explicit unsupported path before input can be misrouted. No silent global directory broadening.
 - [ ] **PAR-03 — Surface unrepresented interactive states.** Inventory trust/setup, permissions, MCP auth, resume usage warnings and command dialogs. Address the documented high-context plan-option mapping risk before claiming plan parity; distinguish variants reliably or refuse ambiguous actions rather than guessing. Implement safe native equivalents or clear guidance only after observing the relevant contract. A permanently waiting session with no actionable phone state is a parity blocker.
 
 ### P1 — Everyday input and setup
 
-- [ ] **PAR-04 — Commands/skills picker plus effective setup inspection.** Show command source, arguments, scope and availability; show installed/loaded skills, agents, plugins, MCPs and instruction sources as distinct facts. Start inspection-only; editing configuration and OAuth/secret handling require an additional security design.
+- [ ] **PAR-04 — Partial: commands/skills picker plus effective setup inspection.** Picker source/scope/support labels and scalar argument hints are implemented. Installed versus loaded/effective state, plugin/MCP catalogs and instruction-source inspection remain. Editing configuration and OAuth/secret handling require an additional security design.
 - [ ] **PAR-05 — File navigation/context conveniences only.** Tool-path links and optional text/path completion remain candidates. **Attachments are excluded for now by user decision:** no image/camera/file upload or automatic content attachment. Keep host paths confined; never interpret a typed local path as permission to upload arbitrary files.
 - [ ] **PAR-06 — Permission completeness.** Scoped persistent rules and additional directories, plus model-capability verification. Preserve managed-policy precedence and show exactly what a stored rule authorizes.
 
@@ -104,7 +104,7 @@ No percentage score: a working command with an invisible confirmation is not hal
 
 - [ ] **PAR-10 — Worktree/Git action UI, artifact/dev previews and broader platform support.** Plan each independently, after command/cwd foundations. Publish/account integrations and durable automation are discussions, not assumed implementation authorization.
 
-**Recommended next implementation:** PAR-01 and PAR-02 together. Produce the command matrix and probe the dangerous state transitions first; then build PAR-04's picker from that evidence. Push notifications remain useful, but do not replace this foundation.
+**Recommended next implementation:** PAR-02 transition probes and argument-specific command verification, followed by plugin/MCP and effective-config inspection. The initial PAR-01/PAR-04 picker has landed, but its explicit discovery limits remain; do not lift transition guards without evidence. Push notifications remain useful, but do not replace this foundation.
 
 ## Definition of done for a parity item
 

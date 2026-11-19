@@ -11,6 +11,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useWsMessage } from "@/hooks/use-ws";
 import { SidebarShellContext } from "@/lib/sidebar-shell-context";
 import { WorkspaceProvider } from "@/lib/workspace-context";
+import { wsService } from "@/services/ws.service";
 import { Sidebar } from "./Sidebar";
 
 // Pixel-based bounds give predictable behavior across viewport widths.
@@ -25,6 +26,7 @@ const LAYOUT_KEY = "cc-shell-layout-v2";
 const SHOWN_IN_PLACE: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   "session_not_found",
   "input_failed",
+  "command_rejected",
   "session_startup_error",
 ]);
 
@@ -65,6 +67,12 @@ function ShellInner({ children }: { children: ReactNode }) {
   // Codes SessionView already renders in place (the not-found empty state, the
   // Retry banner for an undelivered prompt) are not toasted as well.
   useWsMessage("error", (msg) => {
+    if (msg.code === "command_rejected") {
+      toast.error("Command not sent", {
+        description: `Return to its session to restore or copy the rejected command. ${wsService.getRejectedCommandsNotice()}`,
+      });
+      return;
+    }
     if (msg.code !== undefined && SHOWN_IN_PLACE.has(msg.code)) return;
     toast.error(
       msg.message,

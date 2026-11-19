@@ -10,6 +10,14 @@ export type ConnectionState = "connecting" | "connected" | "disconnected";
 
 type AnyHandler = (msg: ServerMessage) => void;
 
+export interface RejectedCommand {
+  id: number;
+  command: string;
+  message: string;
+  truncated: boolean;
+}
+
+const EMPTY_REJECTIONS: readonly RejectedCommand[] = [];
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 /**
@@ -54,6 +62,32 @@ const RESPONSE_PRUNE_INTERVAL_MS = 60_000;
 class WsService {
   private ws: WebSocket | null = null;
   private listeners = new Map<string, Set<AnyHandler>>();
+  private rejectedCommands = new Map<string, readonly RejectedCommand[]>();
+  private rejectionListeners = new Set<() => void>();
+  private rejectionId = 0;
+  private rejectionHistoryLimited = false;
+
+  getRejectedCommandsNotice(): string {
+    return this.rejectionHistoryLimited
+      ? "Recovery history limit reached: older rejected commands were removed. Restore or copy the remaining entries to keep them."
+      : "Recovery is temporary: up to 5 rejected commands per session and 20 sessions; oldest entries are removed when full. Copy anything you need to keep.";
+  }
+
+  getRejectedCommands(sessionId: string): readonly RejectedCommand[] {
+    return this.rejectedCommands.get(sessionId) ?? EMPTY_REJECTIONS;
+  }
+
+  onRejectedCommands(handler: () => void): () => void {
+    this.rejectionListeners.add(handler);
+    return () => this.rejectionListeners.delete(handler);
+  }
+
+  dismissRejectedCommand(sessionId: string, id: number): void {
+    const next = this.getRejectedCommands(sessionId).filter((item) => item.id !== id);
+    if (next.length) this.rejectedCommands.set(sessionId, next);
+    else this.rejectedCommands.delete(sessionId);
+    for (const handler of this.rejectionListeners) handler();
+  }
   private stateListeners = new Set<(state: ConnectionState) => void>();
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -533,6 +567,32 @@ class WsService {
 
   private emit(msg: ServerMessage): void {
     if (this.isStaleApprovalExpiry(msg)) return;
+    if (msg.type === "error" && msg.code === "command_rejected" && msg.sessionId) {
+      const command = msg.command.slice(0, 32768);
+      const previous = this.getRejectedCommands(msg.sessionId);
+      if (
+        previous.length >= 5 ||
+        (!this.rejectedCommands.has(msg.sessionId) && this.rejectedCommands.size >= 20)
+      ) {
+        this.rejectionHistoryLimited = true;
+      }
+      this.rejectedCommands.delete(msg.sessionId);
+      this.rejectedCommands.set(msg.sessionId, [
+        ...previous.slice(-4),
+        {
+          id: ++this.rejectionId,
+          command,
+          message: msg.message.slice(0, 2048),
+          truncated: command.length < msg.command.length,
+        },
+      ]);
+      while (this.rejectedCommands.size > 20) {
+        const oldest = this.rejectedCommands.keys().next().value;
+        if (oldest === undefined) break;
+        this.rejectedCommands.delete(oldest);
+      }
+      for (const handler of this.rejectionListeners) handler();
+    }
     if (WsService.STICKY_TYPES.has(msg.type)) {
       this.stickyMessages.set(msg.type, msg);
     }
