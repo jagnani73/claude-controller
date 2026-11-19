@@ -1,5 +1,11 @@
 # Workflow observation
 
+## Verification scope
+
+The registry was compared read-only against an existing workflow journal (four phases, 108 observed agents at that snapshot). Temporary checks exercised journal chunk/UTF-8 boundaries, large-tail offsets, duplicates, caps, provenance, concurrent reads and usage-budget handling; the existing 117-test suite also passed. Temporary pure/render assertions covered formatting and basic panel states. Browser instrumentation confirmed a zero-run opener, phase rendering and open-panel polling in a synthetic mounted fixture.
+
+A complete live CLI-to-phone run, agent-history interaction, hidden/disconnected recovery, and the full responsive viewport matrix have **not** all been exercised in a browser. Those remain verification gaps, not claimed passes. No new workflow was executed or API credit spent for this feature's verification. The last fully verified CLI relay version remains unchanged.
+
 The Workflows strip and panel are **read-only**. They do not launch, stop, pause, restart, or otherwise control a workflow or its agents. They show only what this session has observed; absence of a run or agent is not proof that none exists. A zero-run session still has an opener.
 
 ## Structured evidence

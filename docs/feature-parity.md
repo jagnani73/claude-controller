@@ -57,11 +57,13 @@ Each item has a stable ID for follow-up work. Checked items mean the narrow nati
 ### Agents, tasks and automation
 
 - [x] **A01 — Native read-only: runtime agents.** Tree, status, per-agent history and agent-message feed exist, with backfill. Generic Agent tool output alone would not qualify. Evidence: `agent-registry.service.ts`, `AgentsSheet.tsx`, `use-agents.ts`.
-- [ ] **A02 — Partial: agent lifecycle/control.** No native start-by-definition, pause/stop/foreground controls or worktree/role configuration. Historical liveness cannot always be proven; team teardown need not supply the same signal as explicit shutdown. Native cross-session messaging and dynamic-workflow dashboards are not implemented. Upstream: [Agents](https://code.claude.com/docs/en/agents).
+- [ ] **A02 — Partial: agent lifecycle/control.** No native start-by-definition, pause/stop/foreground controls or worktree/role configuration. Historical liveness cannot always be proven; team teardown need not supply the same signal as explicit shutdown. Native cross-session messaging remains missing. Read-only workflow observation is covered separately by A07. Upstream: [Agents](https://code.claude.com/docs/en/agents).
 - [ ] **A03 — Excluded by user decision: direct phone chat with an individual agent.** Do not reopen this implementation merely to increase coverage. Observing agent-to-agent messages remains supported.
 - [ ] **A04 — Partial: Claude background shell jobs.** Read-only Bash job identity, status and bounded output exist. Direct stop/input/foreground controls are not verified; PowerShell, monitor tasks and subagent-owned jobs are not claimed supported. A job absent from the view is not proof no job is running. Evidence: `shell-jobs.service.ts`, [Shell jobs](shell-jobs.md).
 - [ ] **A05 — Missing: unified task checklist, schedules and goals.** TaskCreate/TaskUpdate-style calls may appear as ordinary tool cards, but there is no task-state dashboard, `/loop`/cron manager or `/goal` lifecycle UI. Scheduled work and active goals need an idle-reaper policy before promising reliable unattended execution. Upstream: [Scheduled tasks](https://code.claude.com/docs/en/scheduled-tasks), [Goal](https://code.claude.com/docs/en/goal).
 - [ ] **A06 — Inherited / unverified: channels and extension automation.** User hooks or configured external integrations may execute inside the CLI. No app setup/status/consent surface for channels, browser/computer tools or mod-rendered panes. Platform/account capability must be discovered rather than inferred from docs alone.
+
+- [x] **A07 — Native read-only: workflow observation.** The Workflows entry shows runs, declared/observed phases, completed/observed agent counts, per-agent model/context and available transcript links. Current-process hooks establish live agent status; replay does not. No launch, pause, stop or restart controls. Structured-data and browser-verification limits are recorded in [Workflow observation](workflows.md). Evidence: `workflow-registry.service.ts`, `use-workflows.ts`, `WorkflowsPanel.tsx`.
 
 ### Workspace and shell workflows
 
@@ -95,7 +97,7 @@ No percentage score: a working command with an invisible confirmation is not hal
 ### P2 — Recovery and unattended work
 
 - [ ] **PAR-07 — Checkpoints, branches and complete history.** Native rewind with code/conversation scope, fork/branch ownership, search and export. Preserve original history and make destructive restore explicit. Do not replace checkpoint semantics with Git reset.
-- [ ] **PAR-08 — Unified task/workflow state.** Task checklist, scheduled tasks/goals and expanded shell/agent monitoring. Prove liveness and cleanup across resume; never idle-stop work merely because it is awaiting a scheduled wakeup.
+- [ ] **PAR-08 — Unified task/workflow state.** Read-only workflow phases/agents are implemented (A07); task checklists, scheduled tasks/goals and workflow controls remain. Prove liveness and cleanup across resume; never idle-stop work merely because it is awaiting a scheduled wakeup.
 - [ ] **PAR-09 — Attention routing and push.** A cross-session needs-input/error/done inbox first, then opt-in push of those same verified events. Notifications should deep-link to the correct session and be private by default. Persistent push state must be reconciled with the current in-memory/no-database architecture; do not silently add storage or a new transport/auth system.
 
 ### P3 — Remaining platform-dependent gaps
