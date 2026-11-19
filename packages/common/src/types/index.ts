@@ -1,3 +1,4 @@
+import type { CommandCatalogRequest, CommandCatalogResponse } from "../commands.js";
 import type { ShellJobClientMessage, ShellJobServerMessage } from "../shell-job-types.js";
 import type { TerminalClientMessage, TerminalServerMessage } from "../terminal-types.js";
 import type { CliVersionStatus } from "../version.js";
@@ -386,6 +387,7 @@ export interface AgentMessage {
  * session, not only the socket that sent the input, so handle them idempotently.
  */
 export type ErrorCode =
+  | "command_rejected"
   | "session_not_found"
   | "permission_mode_unverified"
   | "session_stopped"
@@ -408,15 +410,17 @@ export type ErrorMessage =
       /** The approval this refers to. */
       toolUseId: string;
     }
+  | { type: "error"; message: string; code: "command_rejected"; sessionId: string; command: string }
   | {
       type: "error";
       message: string;
-      code: Exclude<ErrorCode, "approval_expired">;
+      code: Exclude<ErrorCode, "approval_expired" | "command_rejected">;
       sessionId: string;
     };
 
 /** Server → Client messages */
 export type ServerMessage =
+  | CommandCatalogResponse
   | WorkspaceResponse
   | TerminalServerMessage
   | ShellJobServerMessage
@@ -645,6 +649,7 @@ export function planTextOf(input: unknown): string | null {
 
 /** Client → Server messages */
 export type ClientMessage =
+  | CommandCatalogRequest
   | WorkspaceRequest
   | TerminalClientMessage
   | ShellJobClientMessage

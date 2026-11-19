@@ -12,6 +12,7 @@ import {
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { commandDecision, slashText } from "common/commands";
 import { autoCycleSupport, cycleDistance } from "common/permission-cycle";
 import type {
   ClaudeModel,
@@ -787,6 +788,9 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   async sendInput(text: string): Promise<void> {
+    const decision = commandDecision(text);
+    if (decision.kind === "blocked" || decision.kind === "native")
+      throw new Error(decision.reason ?? "Use app settings.");
     log.debug("Input", { token: this.spawnToken, text: text.slice(0, 500) });
     this.touch();
     // Post-interrupt redirect: when the prior turn was Esc'd before completion,
@@ -1162,7 +1166,10 @@ export class Session extends EventEmitter<SessionEvents> {
   }
 
   async sendSlashCommand(command: string): Promise<void> {
-    const cmd = command.startsWith("/") ? command : `/${command}`;
+    const cmd = slashText(command);
+    const decision = commandDecision(cmd);
+    if (decision.kind === "blocked" || decision.kind === "native")
+      throw new Error(decision.reason ?? "Use app settings.");
     log.debug("Slash command", { token: this.spawnToken, command: cmd });
     this.touch();
     // Same post-interrupt textarea problem as sendInput — without a respawn,

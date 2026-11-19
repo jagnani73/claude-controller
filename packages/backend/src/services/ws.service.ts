@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, normalize, relative, resolve, sep } from "node:path";
+import { commandDecision, slashText } from "common/commands";
 import { autoCycleSupport } from "common/permission-cycle";
 import type {
   AgentMessage,
@@ -20,6 +21,7 @@ import type { Session } from "../session/session.js";
 import type { ClientState, ServerConfig } from "../types/index.js";
 import { findSessionByTranscript } from "../utils/find-session.js";
 import { listProjectSessions } from "../utils/project-sessions.js";
+import { commandCatalog } from "./command-catalog.service.js";
 import type { HooksService } from "./hooks.service.js";
 import { LoggerService } from "./logger.service.js";
 import { modelCatalog } from "./model-catalog.service.js";
@@ -44,6 +46,7 @@ const shellRequests = new WeakMap<WebSocket, { snapshot: number; output: number;
 const workflowRequests = new WeakMap<WebSocket, { lastAt: number; busy: boolean }>();
 /** Minimum gap between workflow snapshots on one socket. */
 const WORKFLOW_REQUEST_MIN_MS = 750;
+const commandRequests = new WeakMap<WebSocket, { lastAt: number; busy: boolean }>();
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === ws.OPEN) {
@@ -764,9 +767,83 @@ function handleMessage(
       }
       return;
     }
+    case "command_catalog_request": {
+      if (typeof msg.requestId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(msg.requestId)) return;
+      const state = clients.get(ws);
+      const session = sessionManager.get(msg.sessionId);
+      if (!session || state?.subscribedSessionId !== msg.sessionId) {
+        send(ws, {
+          type: "command_catalog",
+          sessionId: msg.sessionId,
+          requestId: msg.requestId,
+          entries: [],
+          warnings: [],
+          truncated: false,
+          error: "Subscribe to a live session first.",
+        });
+        return;
+      }
+      const rate = commandRequests.get(ws) ?? { lastAt: 0, busy: false };
+      commandRequests.set(ws, rate);
+      if (ws.bufferedAmount > 256 * 1024) return;
+      if (rate.busy || Date.now() - rate.lastAt < 500) {
+        send(ws, {
+          type: "command_catalog",
+          sessionId: msg.sessionId,
+          requestId: msg.requestId,
+          entries: [],
+          warnings: [],
+          truncated: false,
+          error: "Catalog is busy; retry shortly.",
+        });
+        return;
+      }
+      rate.busy = true;
+      rate.lastAt = Date.now();
+      void commandCatalog(session.config.cwd)
+        .then((catalog) => {
+          if (
+            clients.get(ws) === state &&
+            state.subscribedSessionId === session.id &&
+            ws.bufferedAmount < 256 * 1024
+          )
+            send(ws, {
+              type: "command_catalog",
+              sessionId: session.id,
+              requestId: msg.requestId,
+              ...catalog,
+            });
+        })
+        .catch(() => {
+          if (clients.get(ws) !== state || state.subscribedSessionId !== session.id) return;
+          send(ws, {
+            type: "command_catalog",
+            sessionId: msg.sessionId,
+            requestId: msg.requestId,
+            entries: [],
+            warnings: [],
+            truncated: false,
+            error: "Catalog unavailable; retry.",
+          });
+        })
+        .finally(() => {
+          rate.busy = false;
+        });
+      return;
+    }
     case "input": {
       const session = sessionManager.get(msg.sessionId);
       if (rejectIfNotRunning(ws, msg.sessionId, session)) return;
+      const decision = commandDecision(msg.text);
+      if (decision.kind === "blocked" || decision.kind === "native") {
+        sendSessionInputError(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          code: "input_failed",
+          message: decision.reason ?? "Use the app model or effort control.",
+        });
+        return;
+      }
       log.debug("Forwarding input", {
         sessionId: msg.sessionId,
         text: msg.text.slice(0, 500),
@@ -796,6 +873,17 @@ function handleMessage(
     case "slash_command": {
       const session = sessionManager.get(msg.sessionId);
       if (rejectIfNotRunning(ws, msg.sessionId, session)) return;
+      const decision = commandDecision(slashText(msg.command));
+      if (decision.kind === "blocked" || decision.kind === "native") {
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          code: "command_rejected",
+          message: decision.reason ?? "Use the app model or effort control.",
+          command: msg.command,
+        });
+        return;
+      }
       log.debug("Slash command", {
         sessionId: msg.sessionId,
         command: msg.command,
@@ -807,6 +895,13 @@ function handleMessage(
         log.error("Slash command dispatch failed", {
           sessionId: msg.sessionId,
           error: (err as Error).message,
+        });
+        send(ws, {
+          type: "error",
+          sessionId: msg.sessionId,
+          code: "command_rejected",
+          message: "Command delivery failed. Review it before retrying.",
+          command: msg.command,
         });
       });
       return;
