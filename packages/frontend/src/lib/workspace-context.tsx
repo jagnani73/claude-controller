@@ -1,5 +1,12 @@
 import type { DirEntry } from "common/types";
-import { createContext, type ReactNode, useCallback, useContext, useState } from "react";
+import {
+  type Context,
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useState,
+} from "react";
 import { useWsMessage } from "@/hooks/use-ws";
 import { wsService } from "@/services/ws.service";
 
@@ -27,7 +34,12 @@ interface WorkspaceState {
   setSearchQuery: (query: string) => void;
 }
 
-const WorkspaceContext = createContext<WorkspaceState | null>(null);
+// Vite can retain consumers of an older timestamped module while refreshing
+// the provider (or vice versa). Share the context through this module's HMR
+// data so both versions use the same identity. Production creates it normally.
+const WorkspaceContext: Context<WorkspaceState | null> =
+  import.meta.hot?.data.workspaceContext ?? createContext<WorkspaceState | null>(null);
+if (import.meta.hot) import.meta.hot.data.workspaceContext = WorkspaceContext;
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [currentPath, setCurrentPath] = useState("");
