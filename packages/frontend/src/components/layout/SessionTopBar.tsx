@@ -1,5 +1,5 @@
 import type { RateLimitWindow, SessionInfo } from "common/types";
-import { ChevronDown, FolderOpen } from "lucide-react";
+import { ChevronDown, FolderOpen, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { displayedModelLabel } from "@/components/sessions/model-config";
 import { PERMISSION_LABEL, PERMISSION_TONE } from "@/components/sessions/permission-config";
@@ -13,6 +13,7 @@ import { SidebarToggle } from "./SidebarToggle";
 interface SessionTopBarProps {
   session: SessionInfo;
   onOpenWorkspace?: () => void;
+  onOpenSetup?: () => void;
 }
 
 function pctTone(pct: number): string {
@@ -69,7 +70,7 @@ function QuotaBadge({ label, window }: { label: string; window: RateLimitWindow 
   );
 }
 
-export function SessionTopBar({ session, onOpenWorkspace }: SessionTopBarProps) {
+export function SessionTopBar({ session, onOpenWorkspace, onOpenSetup }: SessionTopBarProps) {
   const isMobile = useIsMobile();
   const [expanded, setExpanded] = useState(false);
 
@@ -134,6 +135,21 @@ export function SessionTopBar({ session, onOpenWorkspace }: SessionTopBarProps) 
         >
           {cwd ?? ""}
         </span>
+        {onOpenSetup && (
+          <button
+            type="button"
+            aria-label="Inspect setup"
+            title="Inspect setup"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenSetup();
+            }}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent/10 hover:text-foreground"
+          >
+            <Settings2 className="size-4" />
+            <span className="hidden md:inline">Setup</span>
+          </button>
+        )}
         {onOpenWorkspace && (
           <button
             type="button"

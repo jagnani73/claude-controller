@@ -23,6 +23,7 @@ import { findSessionByTranscript } from "../utils/find-session.js";
 import { listProjectSessions } from "../utils/project-sessions.js";
 import { commandCatalog } from "./command-catalog.service.js";
 import type { HooksService } from "./hooks.service.js";
+import { integrationCatalog } from "./integration-catalog.service.js";
 import { LoggerService } from "./logger.service.js";
 import { modelCatalog } from "./model-catalog.service.js";
 import { buildPlanKeystrokes } from "./plan.input.js";
@@ -47,6 +48,8 @@ const workflowRequests = new WeakMap<WebSocket, { lastAt: number; busy: boolean 
 /** Minimum gap between workflow snapshots on one socket. */
 const WORKFLOW_REQUEST_MIN_MS = 750;
 const commandRequests = new WeakMap<WebSocket, { lastAt: number; busy: boolean }>();
+const integrationRequests = new WeakMap<WebSocket, { lastAt: number; busy: boolean }>();
+let activeIntegrationReads = 0;
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === ws.OPEN) {
@@ -765,6 +768,64 @@ function handleMessage(
             send(ws, { ...result, requestId });
         });
       }
+      return;
+    }
+    case "integration_catalog_request": {
+      if (typeof msg.requestId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(msg.requestId)) return;
+      const state = clients.get(ws);
+      const session = sessionManager.get(msg.sessionId);
+      const rate = integrationRequests.get(ws) ?? { lastAt: 0, busy: false };
+      integrationRequests.set(ws, rate);
+      const replyError = (error: string) =>
+        send(ws, {
+          type: "integration_catalog",
+          sessionId: msg.sessionId,
+          requestId: msg.requestId,
+          entries: [],
+          sources: [],
+          truncated: false,
+          error,
+        });
+      if (!session || state?.subscribedSessionId !== msg.sessionId) {
+        replyError("Subscribe to a live session first.");
+        return;
+      }
+      if (ws.bufferedAmount > 256 * 1024) return;
+      if (rate.busy || activeIntegrationReads >= 8 || Date.now() - rate.lastAt < 500) {
+        replyError("Setup inventory is busy; retry shortly.");
+        return;
+      }
+      rate.busy = true;
+      rate.lastAt = Date.now();
+      activeIntegrationReads++;
+      const generation = state.subscribeGen;
+      void integrationCatalog(session.config.cwd)
+        .then((catalog) => {
+          if (
+            clients.get(ws) === state &&
+            state.subscribeGen === generation &&
+            state.subscribedSessionId === session.id &&
+            ws.bufferedAmount < 256 * 1024
+          )
+            send(ws, {
+              type: "integration_catalog",
+              sessionId: session.id,
+              requestId: msg.requestId,
+              ...catalog,
+            });
+        })
+        .catch(() => {
+          if (
+            clients.get(ws) === state &&
+            state.subscribeGen === generation &&
+            state.subscribedSessionId === session.id
+          )
+            replyError("Setup inventory unavailable; retry.");
+        })
+        .finally(() => {
+          rate.busy = false;
+          activeIntegrationReads--;
+        });
       return;
     }
     case "command_catalog_request": {

@@ -1,4 +1,8 @@
 import type { CommandCatalogRequest, CommandCatalogResponse } from "../commands.js";
+import type {
+  IntegrationCatalogRequest,
+  IntegrationCatalogResponse,
+} from "../integration-types.js";
 import type { ShellJobClientMessage, ShellJobServerMessage } from "../shell-job-types.js";
 import type { TerminalClientMessage, TerminalServerMessage } from "../terminal-types.js";
 import type { CliVersionStatus } from "../version.js";
@@ -422,6 +426,7 @@ export type ErrorMessage =
 export type ServerMessage =
   | CommandCatalogResponse
   | WorkspaceResponse
+  | IntegrationCatalogResponse
   | TerminalServerMessage
   | ShellJobServerMessage
   | WorkflowServerMessage
@@ -651,6 +656,7 @@ export function planTextOf(input: unknown): string | null {
 export type ClientMessage =
   | CommandCatalogRequest
   | WorkspaceRequest
+  | IntegrationCatalogRequest
   | TerminalClientMessage
   | ShellJobClientMessage
   | WorkflowClientMessage

@@ -23,6 +23,11 @@ import { useWsMessage } from "@/hooks/use-ws";
 import { useWorkspace } from "@/lib/workspace-context";
 import { wsService } from "@/services/ws.service";
 
+const IntegrationsPanel = lazy(() =>
+  import("@/components/integrations/IntegrationsPanel").then((module) => ({
+    default: module.IntegrationsPanel,
+  })),
+);
 const TerminalPanel = lazy(() => import("@/components/workspace/TerminalPanel"));
 const ShellJobsPanel = lazy(() =>
   import("@/components/workspace/ShellJobsPanel").then((module) => ({
@@ -213,6 +218,7 @@ export function SessionView() {
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const workflows = useWorkflows(sessionId, workflowsOpen);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
 
   /**
    * Synchronous mirror of the queue state. All mutations go through here
@@ -816,7 +822,11 @@ export function SessionView() {
   return (
     <div className="flex h-dvh flex-col">
       {session ? (
-        <SessionTopBar session={session} onOpenWorkspace={() => setWorkspaceOpen(true)} />
+        <SessionTopBar
+          session={session}
+          onOpenWorkspace={() => setWorkspaceOpen(true)}
+          onOpenSetup={() => setSetupOpen(true)}
+        />
       ) : stopped ? (
         <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/60 px-3 py-2 backdrop-blur">
           <SidebarToggle />
@@ -905,6 +915,11 @@ export function SessionView() {
         )}
         <SessionStatusLine key={sessionId} sessionId={sessionId} />
       </div>
+      {setupOpen && session && (
+        <Suspense fallback={null}>
+          <IntegrationsPanel key={sessionId} sessionId={sessionId} onOpenChange={setSetupOpen} />
+        </Suspense>
+      )}
       {workspaceOpen && session && (
         <Suspense fallback={null}>
           <WorkspacePanel
