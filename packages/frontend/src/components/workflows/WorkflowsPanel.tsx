@@ -247,7 +247,7 @@ function WorkflowsView({ sessionId, runs, truncated, loading, error, onRetry }: 
             </Button>
           </div>
         ) : (
-          <div className="flex h-full min-h-0 min-w-0 flex-col">
+          <div className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto overscroll-contain">
             {error && (
               <div className="flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                 <output className="min-w-0 flex-1 [overflow-wrap:anywhere]">{error}</output>
@@ -282,7 +282,8 @@ function WorkflowsView({ sessionId, runs, truncated, loading, error, onRetry }: 
                     This session has more runs than are listed.
                   </div>
                 )}
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
+                {/* Keep an agent viewport even when notices wrap on short screens. */}
+                <div className="flex min-h-40 min-w-0 flex-1 flex-col md:flex-row">
                   <PhasePicker
                     phases={selectedRun.phases}
                     selected={phase}
@@ -291,7 +292,7 @@ function WorkflowsView({ sessionId, runs, truncated, loading, error, onRetry }: 
                       setAgentId(null);
                     }}
                   />
-                  <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                  <div className="min-h-24 min-w-0 flex-1 overflow-y-auto overscroll-y-auto">
                     {selectedRun.phases.length === 0 ? (
                       <div className="px-4 py-6 text-center font-serif text-base italic text-muted-foreground/60">
                         This run has not recorded any agents yet.
@@ -386,7 +387,9 @@ function RunHeading({ run }: { run: WorkflowRun }) {
         </span>
       </div>
       {run.description && (
-        <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{run.description}</p>
+        <p className="max-h-20 overflow-y-auto text-xs text-muted-foreground [overflow-wrap:anywhere]">
+          {run.description}
+        </p>
       )}
     </div>
   );
